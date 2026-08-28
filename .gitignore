@@ -1,0 +1,17 @@
+.tools/
+node_modules/
+contracts/out/
+contracts/cache/
+web/public/app.js
+web/public/app.css
+web/public/site.js
+web/public/site.css
+.env
+deploy/out/*/services.env
+deploy/base.env
+deploy/settings.json
+deploy/testnet/
+deploy/*.env
+**/.claude/
+*.pdf
+deploy/mainnet/
