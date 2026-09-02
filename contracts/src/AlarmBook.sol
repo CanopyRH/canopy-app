@@ -37,4 +37,41 @@ contract AlarmBook is IAlarmBook {
         bytes32 a;
         bytes32 b;
     }
+
+    struct State {
+        bool exists;
+        uint64 firedAt;
+        uint64 snapAt;
+        uint256 baseline; // SHARE_DROP: high-water share price; ADDRESS_CHANGE: registered address; DRAIN: lowest sample since snapAt
+        uint256 snap; // DRAIN: the lowest sample of the previous period, which alarms measure against
+    }
+
+    bytes32 public constant ATTEST_TYPEHASH = keccak256("Attest(bytes32 key,bytes32 evidence,uint64 deadline)");
+    uint256 public constant REFIRE_AFTER = 1 days;
+    uint256 public constant MAX_QUORUM = 32;
+    uint256 public constant MAX_ATTEST_LIFE = 1 hours; // shorter than REFIRE_AFTER, so signatures can't fire twice
+
+    address public immutable ADMIN; // the Timelock
+    bytes32 public immutable DOMAIN_SEPARATOR;
+
+    mapping(address => bool) public isWatcher;
+    mapping(bytes32 => Detector) internal _detectors;
+    mapping(bytes32 => State) public state;
+    mapping(bytes32 => address[]) internal _signers;
+
+    event Registered(bytes32 indexed key, Kind kind, address indexed target, uint256 threshold, uint32 window, bytes32 a, bytes32 b);
+    event Fired(bytes32 indexed key, Kind kind, address indexed target, address by, bytes32 evidence);
+    event Checkpoint(bytes32 indexed key, uint256 value);
+    event WatcherSet(address indexed watcher, bool allowed);
+
+    error NotAdmin();
+    error Unknown();
+    error BadDetector();
+    error NotQuorumKind();
+    error Expired();
+    error DeadlineTooFar();
+    error AlreadyLive();
+    error BadSigners();
+    error NotWatcher(address who);
+    error BadSignature(address who);
 }
