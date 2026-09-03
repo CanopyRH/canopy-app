@@ -74,4 +74,54 @@ contract AlarmBook is IAlarmBook {
     error BadSigners();
     error NotWatcher(address who);
     error BadSignature(address who);
+
+    constructor(address admin) {
+        ADMIN = admin;
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("Canopy AlarmBook"),
+                keccak256("1"),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    /// @notice Watcher list. Stays with the Timelock so a bad watcher can always be removed.
+    function setWatcher(address w, bool allowed) external {
+        if (msg.sender != ADMIN) revert NotAdmin();
+        isWatcher[w] = allowed;
+        emit WatcherSet(w, allowed);
+    }
+
+    // ------------------------------------------------------------------ registry
+
+    function keyOf(Detector memory d) public pure returns (bytes32) {
+        return keccak256(abi.encode(d.kind, d.target, d.threshold, d.window, d.a, d.b));
+    }
+
+    function register(Detector calldata d) external returns (bytes32 key) {
+        key = keyOf(d);
+        State storage s = state[key];
+        if (s.exists) return key;
+        _validate(d);
+        s.exists = true;
+        _detectors[key] = d;
+        if (d.kind == Kind.SHARE_DROP) {
+            (bool ok, uint256 px) = _sharePrice(d.target);
+            if (!ok || px == 0) revert BadDetector();
+            s.baseline = px;
+        } else if (d.kind == Kind.ADDRESS_CHANGE) {
+            (bool ok, address v) = _readAddress(d.target, _sel(d.a, bytes4(0)));
+            if (!ok) revert BadDetector();
+            s.baseline = uint256(uint160(v));
+        } else if (d.kind == Kind.DRAIN) {
+            (bool ok, uint256 ta) = _totalAssets(d.target);
+            if (!ok || ta == 0) revert BadDetector();
+            s.baseline = ta; // A candidate only. Nothing can fire until a later period has confirmed it.
+            s.snapAt = uint64(block.timestamp);
+        }
+        emit Registered(key, d.kind, d.target, d.threshold, d.window, d.a, d.b);
+    }
 }
