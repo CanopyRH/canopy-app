@@ -124,4 +124,30 @@ contract AlarmBook is IAlarmBook {
         }
         emit Registered(key, d.kind, d.target, d.threshold, d.window, d.a, d.b);
     }
+
+    function detector(bytes32 key) external view returns (Detector memory) {
+        return _detectors[key];
+    }
+
+    function signersOf(bytes32 key) external view returns (address[] memory) {
+        return _signers[key];
+    }
+
+    // ------------------------------------------------------------------ firing
+
+    /// @notice View used by keepers: would `poke(key)` fire right now?
+    function check(bytes32 key) public view returns (bool) {
+        State storage s = state[key];
+        if (!s.exists) return false;
+        if (_liveNow(s)) return false;
+        return _tripped(key, s);
+    }
+
+    function poke(bytes32 key) external returns (bool fired) {
+        State storage s = state[key];
+        if (!s.exists) revert Unknown();
+        if (_liveNow(s) || !_tripped(key, s)) return false;
+        _fire(key, s, bytes32(0));
+        return true;
+    }
 }
