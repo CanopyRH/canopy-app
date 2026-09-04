@@ -87,4 +87,48 @@ contract MockVault is MockERC20 {
     function setPaused(bool p) external {
         paused = p;
     }
+
+    function setTotalAssetsBacking(uint256 extra) external {
+        assetToken.mint(address(this), extra);
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return (totalSupply * assetsPerShare) / 1e18;
+    }
+
+    function convertToAssets(uint256 s) public view returns (uint256) {
+        return (s * assetsPerShare) / 1e18;
+    }
+
+    function maxRedeem(address o) external view returns (uint256) {
+        if (zeroMax) return 0;
+        uint256 byLiquid = (liquid * 1e18) / assetsPerShare;
+        return byLiquid < balanceOf[o] ? byLiquid : balanceOf[o];
+    }
+
+    function deposit(address to, uint256 shares) external {
+        uint256 a = convertToAssets(shares);
+        assetToken.mint(address(this), a);
+        liquid += a;
+        mint(to, shares);
+    }
+
+    function redeem(uint256 s, address receiver, address owner) external returns (uint256 a) {
+        require(msg.sender == owner, "owner");
+        a = convertToAssets(s);
+        require(a <= liquid, "insufficient liquidity");
+        liquid -= a;
+        _burn(owner, s);
+        assetToken.transfer(receiver, a);
+    }
+}
+
+contract MockFeed {
+    int256 public answer;
+    uint256 public updatedAt;
+
+    constructor(int256 a) {
+        answer = a;
+        updatedAt = block.timestamp;
+    }
 }
