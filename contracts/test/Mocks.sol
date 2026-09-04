@@ -41,4 +41,50 @@ contract MockERC20 {
         _move(f, t, a);
         return true;
     }
+
+    function _move(address f, address t, uint256 a) internal {
+        require(!blocked[t], "blocked");
+        require(balanceOf[f] >= a, "balance");
+        balanceOf[f] -= a;
+        balanceOf[t] += a;
+    }
+
+    function _burn(address f, uint256 a) internal {
+        balanceOf[f] -= a;
+        totalSupply -= a;
+    }
+}
+
+/// @dev ERC-4626-shaped vault with a liquidity cap. Shares use 18 decimals.
+contract MockVault is MockERC20 {
+    MockERC20 public immutable assetToken;
+    uint256 public assetsPerShare; // asset units per 1e18 shares
+    uint256 public liquid;
+    bool public zeroMax = true;
+    bool public paused;
+
+    constructor(MockERC20 a, uint256 pps) MockERC20(18) {
+        assetToken = a;
+        assetsPerShare = pps;
+    }
+
+    function asset() external view returns (address) {
+        return address(assetToken);
+    }
+
+    function setPrice(uint256 pps) external {
+        assetsPerShare = pps;
+    }
+
+    function setLiquid(uint256 l) external {
+        liquid = l;
+    }
+
+    function setZeroMax(bool z) external {
+        zeroMax = z;
+    }
+
+    function setPaused(bool p) external {
+        paused = p;
+    }
 }
