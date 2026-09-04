@@ -131,4 +131,52 @@ contract MockFeed {
         answer = a;
         updatedAt = block.timestamp;
     }
+
+    function set(int256 a, uint256 u) external {
+        answer = a;
+        updatedAt = u;
+    }
+
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
+        return (1, answer, updatedAt, updatedAt, 1);
+    }
+}
+
+/// @dev Pays a fixed rate: `outPer1e18` stable units per 1e18 input tokens.
+contract MockSwapRouter {
+    MockERC20 public immutable stable;
+    uint256 public outPer1e18;
+    bool public broken;
+
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    constructor(MockERC20 s) {
+        stable = s;
+    }
+
+    function setRate(uint256 r) external {
+        outPer1e18 = r;
+    }
+
+    function setBroken(bool b) external {
+        broken = b;
+    }
+
+    function exactInput(ExactInputParams calldata p) external payable returns (uint256 out) {
+        require(!broken, "broken");
+        address token = address(bytes20(p.path[0:20]));
+        out = (p.amountIn * outPer1e18) / 1e18;
+        require(out >= p.amountOutMinimum, "too little received");
+        MockERC20(token).transferFrom(msg.sender, address(this), p.amountIn);
+        stable.mint(p.recipient, out);
+    }
 }
