@@ -43,4 +43,43 @@ abstract contract Base {
     MockVault internal vault;
     MockPausable internal pausable;
     bytes32 internal pauseKey;
+
+    function setUp() public virtual {
+        vm.warp(1_800_000_000);
+        stable = new MockERC20(6);
+        weth = new MockERC20(18);
+        stableFeed = new MockFeed(1e8);
+        swap = new MockSwapRouter(stable);
+        book = new AlarmBook(ADMIN);
+        router = new ExitRouter(
+            address(stable),
+            address(weth),
+            address(swap),
+            address(book),
+            ADMIN,
+            GUARD,
+            address(stableFeed),
+            90_000,
+            block.timestamp + EXPIRY_FROM_START
+        );
+        adapter = new ERC4626Adapter(address(router));
+        vm.prank(ADMIN);
+        router.setAdapter(address(adapter), true);
+        vault = new MockVault(stable, 1e6); // 1 share = 1 USD
+        pausable = new MockPausable();
+        pauseKey = book.register(_detector(AlarmBook.Kind.PAUSED, address(pausable), 0, 0, 0, 0));
+    }
+
+    function _detector(AlarmBook.Kind k, address t, uint256 th, uint32 w, bytes32 a, bytes32 b)
+        internal
+        pure
+        returns (AlarmBook.Detector memory)
+    {
+        return AlarmBook.Detector({kind: k, target: t, threshold: th, window: w, a: a, b: b});
+    }
+
+    function _keys(bytes32 k) internal pure returns (bytes32[] memory a) {
+        a = new bytes32[](1);
+        a[0] = k;
+    }
 }
