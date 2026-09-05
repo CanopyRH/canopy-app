@@ -39,4 +39,48 @@ contract AlarmBookTest is Base {
         f.set(0.96e8, block.timestamp);
         assertTrue(book.poke(k), "fired");
     }
+
+    function test_priceBelow_ignoresStaleAnswer() public {
+        MockFeed f = new MockFeed(1e8);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.PRICE_BELOW, address(f), 0.97e8, 3600, 0, 0));
+        f.set(0.96e8, block.timestamp - 3601);
+        assertTrue(!book.check(k), "stale does not fire");
+    }
+
+    function test_shareDrop_andHighWaterMark() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 50, 0, 0, 0));
+        vault.setPrice(1.1e6);
+        book.checkpoint(k);
+        vault.setPrice(1.0950e6); // 0.45% below the new mark
+        assertTrue(!book.check(k), "inside threshold");
+        vault.setPrice(1.09e6);
+        assertTrue(book.poke(k), "fired against the raised mark");
+    }
+
+    function test_shareDrop_markNeverFalls() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 50, 0, 0, 0));
+        vault.setPrice(0.9e6);
+        book.checkpoint(k);
+        assertTrue(book.check(k), "cannot be reset away");
+    }
+
+    function test_shareDrop_smallDipDoesNotLowerMark() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 50, 0, 0, 0));
+        vault.setPrice(0.999e6); // 0.1% down: not tripped, so checkpoint runs
+        book.checkpoint(k);
+        vault.setPrice(0.9945e6); // 0.55% below the original mark, only 0.45% below a lowered one
+        assertTrue(book.check(k), "measured against the original mark");
+    }
+
+    function test_drain_snapshotCannotResetAfterWindowWhileTripped() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        vm.warp(block.timestamp + 1800); // past window/2, so only the tripped check protects it
+        vault.setPrice(0.74e6);
+        book.checkpoint(k);
+        assertTrue(book.check(k), "a drain cannot be reset away");
+    }
 }
