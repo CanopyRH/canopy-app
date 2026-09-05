@@ -83,4 +83,46 @@ contract AlarmBookTest is Base {
         book.checkpoint(k);
         assertTrue(book.check(k), "a drain cannot be reset away");
     }
+
+    function test_paused() public {
+        assertTrue(!book.check(pauseKey), "not paused");
+        pausable.setPaused(true);
+        assertTrue(book.poke(pauseKey), "fired");
+    }
+
+    function test_addressChange() public {
+        MockOwned o = new MockOwned(OWNER);
+        bytes32 k = book.register(
+            _detector(AlarmBook.Kind.ADDRESS_CHANGE, address(o), 0, 0, bytes32(bytes4(keccak256("curator()"))), 0)
+        );
+        assertTrue(!book.check(k), "unchanged");
+        o.setCurator(KEEPER);
+        assertTrue(book.poke(k), "fired");
+    }
+
+    function test_drain_andCheckpointRules() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        vault.setPrice(0.74e6); // totalAssets down 26%
+        assertTrue(!book.check(k), "a new detector has no confirmed baseline yet");
+        vault.setPrice(1e6);
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k); // the first period's low becomes the baseline
+        vault.setPrice(0.74e6);
+        assertTrue(book.check(k), "tripped");
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k);
+        assertTrue(book.check(k), "snapshot does not refresh while tripped");
+        assertTrue(book.poke(k), "fired");
+    }
+
+    function test_drain_snapshotExpires() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 k = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k);
+        vm.warp(block.timestamp + 3601);
+        vault.setPrice(0.5e6);
+        assertTrue(!book.check(k), "old snapshot does not count");
+    }
 }
