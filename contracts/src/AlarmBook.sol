@@ -150,4 +150,66 @@ contract AlarmBook is IAlarmBook {
         _fire(key, s, bytes32(0));
         return true;
     }
+
+    /// @notice Rolls baselines forward. The SHARE_DROP high-water mark only rises.
+    /// DRAIN never trusts one reading, because anyone can call this inside a flash deposit. Calls sample totalAssets, and
+    /// every window/2 the lowest sample of the period becomes the baseline. So an inflated reading only counts if it
+    /// survives a whole period of samples, and a keeper sampling once a period is enough. Nothing rolls while the
+    /// detector is tripped, so a drain cannot be "reset" away.
+    function checkpoint(bytes32 key) external {
+        State storage s = state[key];
+        if (!s.exists) revert Unknown();
+        Detector memory d = _detectors[key];
+        if (_tripped(key, s)) return;
+        if (d.kind == Kind.SHARE_DROP) {
+            (bool ok, uint256 px) = _sharePrice(d.target);
+            if (ok && px > s.baseline) {
+                s.baseline = px;
+                emit Checkpoint(key, px);
+            }
+        } else if (d.kind == Kind.DRAIN) {
+            (bool ok, uint256 ta) = _totalAssets(d.target);
+            if (!ok || ta == 0) return;
+            if (block.timestamp < uint256(s.snapAt) + d.window / 2) {
+                if (ta < s.baseline) s.baseline = ta;
+                return;
+            }
+            s.snap = s.baseline;
+            s.baseline = ta;
+            s.snapAt = uint64(block.timestamp);
+            emit Checkpoint(key, s.snap);
+        }
+    }
+
+    function attestDigest(bytes32 key, bytes32 evidence, uint64 deadline) public view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, keccak256(abi.encode(ATTEST_TYPEHASH, key, evidence, deadline)))
+        );
+    }
+
+    /// @notice Fire a QUORUM alarm with k distinct approved watcher signatures (signers sorted ascending).
+    function fireByQuorum(bytes32 key, bytes32 evidence, uint64 deadline, address[] calldata signers, bytes[] calldata sigs)
+        external
+    {
+        State storage s = state[key];
+        if (!s.exists) revert Unknown();
+        Detector memory d = _detectors[key];
+        if (d.kind != Kind.QUORUM) revert NotQuorumKind();
+        if (block.timestamp > deadline) revert Expired();
+        if (deadline > block.timestamp + MAX_ATTEST_LIFE) revert DeadlineTooFar();
+        if (_liveNow(s)) revert AlreadyLive();
+        if (signers.length < d.threshold || signers.length != sigs.length) revert BadSigners();
+
+        bytes32 digest = attestDigest(key, evidence, deadline);
+        address prev;
+        for (uint256 i; i < signers.length; ++i) {
+            address w = signers[i];
+            if (w <= prev) revert BadSigners();
+            prev = w;
+            if (!isWatcher[w]) revert NotWatcher(w);
+            if (!SignatureChecker.isValidSignatureNow(w, digest, sigs[i])) revert BadSignature(w);
+        }
+        _signers[key] = signers;
+        _fire(key, s, evidence);
+    }
 }
