@@ -125,4 +125,42 @@ contract AlarmBookTest is Base {
         vault.setPrice(0.5e6);
         assertTrue(!book.check(k), "old snapshot does not count");
     }
+
+    function test_both_needsBothInsideWindow() public {
+        MockPausable p2 = new MockPausable();
+        bytes32 k2 = book.register(_detector(AlarmBook.Kind.PAUSED, address(p2), 0, 0, 0, 0));
+        bytes32 both = book.register(_detector(AlarmBook.Kind.BOTH, address(0), 0, 1 days, pauseKey, k2));
+        pausable.setPaused(true);
+        book.poke(pauseKey);
+        assertTrue(!book.check(both), "one is not enough");
+        vm.warp(block.timestamp + 1 days + 1);
+        p2.setPaused(true);
+        book.poke(k2);
+        assertTrue(!book.check(both), "too far apart");
+        assertTrue(book.poke(pauseKey), "the first part can refire");
+        assertTrue(book.poke(both), "fired");
+    }
+
+    function test_both_windowCantBeShorterThanTheRefireDelay() public {
+        MockPausable p2 = new MockPausable();
+        bytes32 k2 = book.register(_detector(AlarmBook.Kind.PAUSED, address(p2), 0, 0, 0, 0));
+        vm.expectRevert(AlarmBook.BadDetector.selector);
+        book.register(_detector(AlarmBook.Kind.BOTH, address(0), 0, 1 days - 1, pauseKey, k2));
+    }
+
+    function test_refireAfter24h() public {
+        pausable.setPaused(true);
+        assertTrue(book.poke(pauseKey), "first");
+        assertTrue(!book.poke(pauseKey), "no double fire");
+        vm.warp(block.timestamp + 1 days);
+        assertTrue(book.poke(pauseKey), "refire");
+    }
+
+    function test_register_isIdempotentAndValidates() public {
+        assertTrue(book.register(_detector(AlarmBook.Kind.PAUSED, address(pausable), 0, 0, 0, 0)) == pauseKey, "same key");
+        vm.expectRevert(AlarmBook.BadDetector.selector);
+        book.register(_detector(AlarmBook.Kind.QUORUM, address(1), 1, 0, 0, 0));
+    }
+
+    // ---------------------------------------------------------------- quorum
 }
