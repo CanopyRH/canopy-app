@@ -212,4 +212,38 @@ contract AlarmBook is IAlarmBook {
         _signers[key] = signers;
         _fire(key, s, evidence);
     }
+
+    function isLive(bytes32 key, uint256 ttl) external view returns (bool) {
+        State storage s = state[key];
+        return s.firedAt != 0 && block.timestamp <= uint256(s.firedAt) + ttl;
+    }
+
+    // ------------------------------------------------------------------ internals
+
+    function _fire(bytes32 key, State storage s, bytes32 evidence) internal {
+        s.firedAt = uint64(block.timestamp);
+        Detector memory d = _detectors[key];
+        emit Fired(key, d.kind, d.target, msg.sender, evidence);
+    }
+
+    function _liveNow(State storage s) internal view returns (bool) {
+        return s.firedAt != 0 && block.timestamp < uint256(s.firedAt) + REFIRE_AFTER;
+    }
+
+    function _validate(Detector calldata d) internal view {
+        Kind k = d.kind;
+        if (k == Kind.PRICE_BELOW) {
+            if (d.threshold == 0 || d.window == 0 || d.target.code.length == 0) revert BadDetector();
+        } else if (k == Kind.SHARE_DROP || k == Kind.DRAIN) {
+            if (d.threshold == 0 || d.threshold >= 10_000 || d.target.code.length == 0) revert BadDetector();
+            if (k == Kind.DRAIN && d.window == 0) revert BadDetector();
+        } else if (k == Kind.PAUSED || k == Kind.ADDRESS_CHANGE) {
+            if (d.target.code.length == 0) revert BadDetector();
+        } else if (k == Kind.QUORUM) {
+            if (d.threshold < 2 || d.threshold > MAX_QUORUM) revert BadDetector();
+        } else if (k == Kind.BOTH) {
+            // A part can't refire for REFIRE_AFTER, so any shorter window could close on a part that can't refresh.
+            if (!state[d.a].exists || !state[d.b].exists || d.a == d.b || d.window < REFIRE_AFTER) revert BadDetector();
+        }
+    }
 }
