@@ -163,4 +163,41 @@ contract AlarmBookTest is Base {
     }
 
     // ---------------------------------------------------------------- quorum
+
+    function _sig(uint256 pk, bytes32 digest) internal returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _sorted2(uint256 p1, uint256 p2, bytes32 digest)
+        internal
+        returns (address[] memory s, bytes[] memory g)
+    {
+        (address a1, address a2) = (vm.addr(p1), vm.addr(p2));
+        s = new address[](2);
+        g = new bytes[](2);
+        (uint256 lo, uint256 hi) = a1 < a2 ? (p1, p2) : (p2, p1);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        g[0] = _sig(lo, digest);
+        g[1] = _sig(hi, digest);
+    }
+
+    function test_quorum_twoOfThreeFires() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        assertTrue(book.isLive(quorumKey, 1 days), "live");
+        assertTrue(book.signersOf(quorumKey).length == 2, "signers recorded");
+    }
+
+    function test_quorum_oneSignerFails() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        address[] memory s = new address[](1);
+        bytes[] memory g = new bytes[](1);
+        s[0] = wA;
+        g[0] = _sig(PK_A, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
 }
