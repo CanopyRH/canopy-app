@@ -245,4 +245,44 @@ contract AlarmBookTest is Base {
         vm.expectRevert(AlarmBook.Expired.selector);
         book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
     }
+
+    function test_quorum_badSignatureFails() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, keccak256("wrong digest"));
+        vm.expectRevert();
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_quorum_cannotFireAnotherKey() public {
+        bytes32 other = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xCAFE), 2, 0, 0, 0));
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert();
+        book.fireByQuorum(other, EVIDENCE, dl, s, g);
+    }
+
+    function test_quorum_pokeNeverFires() public {
+        assertTrue(!book.poke(quorumKey), "only signatures fire it");
+    }
+
+    function test_setWatcher_onlyAdmin() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(AlarmBook.NotAdmin.selector);
+        book.setWatcher(ATTACKER, true);
+    }
+
+    function test_quorumAlarm_endToEndExit() public {
+        bytes32 id;
+        vault.deposit(OWNER, 100e18);
+        vm.prank(OWNER);
+        vault.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        id = router.arm(_params(address(vault), 0, 0, _keys(quorumKey)));
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_B, PK_C, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        vm.prank(KEEPER);
+        router.exit(id, quorumKey, 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "owner paid");
+    }
 }
