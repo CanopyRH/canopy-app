@@ -281,4 +281,45 @@ contract AlarmBook is IAlarmBook {
         }
         return false; // QUORUM fires only through fireByQuorum
     }
+
+    function _firedWithin(State storage s, uint256 window) internal view returns (bool) {
+        return s.firedAt != 0 && block.timestamp <= uint256(s.firedAt) + window;
+    }
+
+    function _sel(bytes32 a, bytes4 dflt) internal pure returns (bytes4) {
+        bytes4 s = bytes4(a);
+        return s == bytes4(0) ? dflt : s;
+    }
+
+    function _sharePrice(address vault) internal view returns (bool ok, uint256 px) {
+        uint8 dec;
+        try IERC4626(vault).decimals() returns (uint8 d) {
+            dec = d;
+        } catch {
+            return (false, 0);
+        }
+        if (dec > 36) return (false, 0);
+        try IERC4626(vault).convertToAssets(10 ** dec) returns (uint256 p) {
+            return (true, p);
+        } catch {
+            return (false, 0);
+        }
+    }
+
+    function _totalAssets(address vault) internal view returns (bool ok, uint256 ta) {
+        try IERC4626(vault).totalAssets() returns (uint256 t) {
+            return (true, t);
+        } catch {
+            return (false, 0);
+        }
+    }
+
+    function _readAddress(address target, bytes4 sel) internal view returns (bool ok, address v) {
+        if (sel == bytes4(0)) return (false, address(0));
+        (bool s, bytes memory ret) = target.staticcall(abi.encodeWithSelector(sel));
+        if (!s || ret.length < 32) return (false, address(0));
+        uint256 raw = abi.decode(ret, (uint256));
+        if (raw > type(uint160).max) return (false, address(0));
+        return (true, address(uint160(raw)));
+    }
 }
