@@ -246,4 +246,39 @@ contract AlarmBook is IAlarmBook {
             if (!state[d.a].exists || !state[d.b].exists || d.a == d.b || d.window < REFIRE_AFTER) revert BadDetector();
         }
     }
+
+    function _tripped(bytes32 key, State storage s) internal view returns (bool) {
+        Detector memory d = _detectors[key];
+        Kind k = d.kind;
+        if (k == Kind.PRICE_BELOW) {
+            try IAggregatorV3(d.target).latestRoundData() returns (uint80, int256 ans, uint256, uint256 upd, uint80) {
+                if (ans <= 0 || upd == 0 || upd > block.timestamp || block.timestamp - upd > d.window) return false;
+                return uint256(ans) < d.threshold;
+            } catch {
+                return false;
+            }
+        }
+        if (k == Kind.SHARE_DROP) {
+            (bool ok, uint256 px) = _sharePrice(d.target);
+            return ok && px * 10_000 < s.baseline * (10_000 - d.threshold);
+        }
+        if (k == Kind.PAUSED) {
+            (bool ok, bytes memory ret) =
+                d.target.staticcall(abi.encodeWithSelector(_sel(d.a, bytes4(keccak256("paused()")))));
+            return ok && ret.length >= 32 && abi.decode(ret, (uint256)) == 1;
+        }
+        if (k == Kind.ADDRESS_CHANGE) {
+            (bool ok, address v) = _readAddress(d.target, _sel(d.a, bytes4(0)));
+            return ok && uint256(uint160(v)) != s.baseline;
+        }
+        if (k == Kind.DRAIN) {
+            if (s.snap == 0 || block.timestamp - s.snapAt > d.window) return false;
+            (bool ok, uint256 ta) = _totalAssets(d.target);
+            return ok && ta * 10_000 < s.snap * (10_000 - d.threshold);
+        }
+        if (k == Kind.BOTH) {
+            return _firedWithin(state[d.a], d.window) && _firedWithin(state[d.b], d.window);
+        }
+        return false; // QUORUM fires only through fireByQuorum
+    }
 }
