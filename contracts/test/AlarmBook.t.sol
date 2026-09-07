@@ -200,4 +200,49 @@ contract AlarmBookTest is Base {
         vm.expectRevert(AlarmBook.BadSigners.selector);
         book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
     }
+
+    function test_quorum_duplicateAndUnsortedFail() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 d = book.attestDigest(quorumKey, EVIDENCE, dl);
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        s[0] = wA;
+        s[1] = wA;
+        g[0] = _sig(PK_A, d);
+        g[1] = _sig(PK_A, d);
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        (address[] memory s2, bytes[] memory g2) = _sorted2(PK_A, PK_B, d);
+        (s2[0], s2[1]) = (s2[1], s2[0]);
+        (g2[0], g2[1]) = (g2[1], g2[0]);
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s2, g2);
+    }
+
+    function test_quorum_nonWatcherFails() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        uint256 pkOutsider = 0xD4;
+        bytes32 d = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, pkOutsider, d);
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.NotWatcher.selector, vm.addr(pkOutsider)));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_quorum_removedWatcherFails() public {
+        vm.prank(ADMIN);
+        book.setWatcher(wB, false);
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 d = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, d);
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.NotWatcher.selector, wB));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_quorum_expiredFails() public {
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.warp(block.timestamp + 601);
+        vm.expectRevert(AlarmBook.Expired.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
 }
