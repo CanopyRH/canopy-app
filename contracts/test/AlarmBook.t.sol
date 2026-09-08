@@ -286,3 +286,43 @@ contract AlarmBookTest is Base {
         assertEq(stable.balanceOf(OWNER), 100e6, "owner paid");
     }
 }
+
+contract TimelockTest is Base {
+    Timelock internal lock;
+    ExitRouter internal locked;
+
+    function setUp() public override {
+        super.setUp();
+        lock = new Timelock(ADMIN, 48 hours);
+        locked = new ExitRouter(
+            address(stable), address(weth), address(swap), address(book), address(lock), GUARD,
+            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START
+        );
+    }
+
+    function _data() internal pure returns (bytes memory) {
+        return abi.encodeCall(ExitRouter.setAdapter, (address(0x1234), true));
+    }
+
+    function test_delayCeiling() public {
+        vm.expectRevert(Timelock.DelayTooLong.selector);
+        new Timelock(ADMIN, 30 days + 1);
+    }
+
+    /// @dev With no delay, one multisig batch schedules and executes in the same transaction.
+    function test_zeroDelayAppliesInOneBatch() public {
+        Timelock now0 = new Timelock(ADMIN, 0);
+        ExitRouter r = new ExitRouter(
+            address(stable), address(weth), address(swap), address(book), address(now0), GUARD,
+            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START
+        );
+        vm.prank(ADMIN);
+        now0.schedule(address(r), 0, _data(), 0);
+        vm.prank(ADMIN);
+        now0.execute(address(r), 0, _data(), 0);
+        assertTrue(r.adapterAllowed(address(0x1234)), "applied at once");
+        vm.prank(ATTACKER);
+        vm.expectRevert(Timelock.NotProposer.selector);
+        now0.schedule(address(r), 0, _data(), bytes32(uint256(1)));
+    }
+}
