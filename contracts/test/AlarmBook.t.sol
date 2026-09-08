@@ -325,4 +325,48 @@ contract TimelockTest is Base {
         vm.expectRevert(Timelock.NotProposer.selector);
         now0.schedule(address(r), 0, _data(), bytes32(uint256(1)));
     }
+
+    function test_noChangeBefore48h() public {
+        vm.prank(ADMIN);
+        lock.schedule(address(locked), 0, _data(), 0);
+        vm.warp(block.timestamp + 48 hours - 1);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_changeAfter48h() public {
+        vm.prank(ADMIN);
+        lock.schedule(address(locked), 0, _data(), 0);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ADMIN);
+        lock.execute(address(locked), 0, _data(), 0);
+        assertTrue(locked.adapterAllowed(address(0x1234)), "applied");
+    }
+
+    function test_aScheduledChangeLapses() public {
+        vm.prank(ADMIN);
+        lock.schedule(address(locked), 0, _data(), 0);
+        vm.warp(block.timestamp + 48 hours + 14 days + 1);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.Lapsed.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_onlyProposer() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(Timelock.NotProposer.selector);
+        lock.schedule(address(locked), 0, _data(), 0);
+    }
+
+    function test_cancel() public {
+        vm.prank(ADMIN);
+        bytes32 id = lock.schedule(address(locked), 0, _data(), 0);
+        vm.prank(ADMIN);
+        lock.cancel(id);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
 }
