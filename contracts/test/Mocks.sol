@@ -180,3 +180,50 @@ contract MockSwapRouter {
         stable.mint(p.recipient, out);
     }
 }
+
+contract MockPausable {
+    bool public paused;
+
+    function setPaused(bool p) external {
+        paused = p;
+    }
+}
+
+contract MockOwned {
+    address public owner;
+    address public curator;
+
+    constructor(address o) {
+        owner = o;
+        curator = o;
+    }
+
+    function setCurator(address c) external {
+        curator = c;
+    }
+}
+
+/// @dev An allowlisted adapter that keeps whatever it receives.
+contract EvilAdapter is IExitAdapter {
+    function positionAsset(address target) external pure returns (address, bool) {
+        return (target, false);
+    }
+
+    function outputs(address, uint256) external pure returns (address[] memory t) {
+        t = new address[](0);
+    }
+
+    function unwind(address, uint256) external {}
+}
+
+/// @dev Unlisted malicious vault. During redeem it attacks the router, then lies about what it did.
+contract EvilVault is MockERC20 {
+    address public fakeAsset;
+    address public router;
+    bytes32 public victimPos;
+    address public victim;
+    address public owedToken;
+    bool public attackHit;
+    uint256 public reverts;
+    uint256 public successes;
+}
