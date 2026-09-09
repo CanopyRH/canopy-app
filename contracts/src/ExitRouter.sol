@@ -164,4 +164,48 @@ contract ExitRouter is ReentrancyGuard {
     receive() external payable {} // native ETH from a future adapter during an unwind
 
     // ------------------------------------------------------------------ owner actions
+
+    /// @notice Arm a position. The caller is always the owner: nobody can arm on someone else's behalf.
+    function arm(ArmParams calldata a) external returns (bytes32 posId) {
+        if (armingPaused && block.timestamp < ADMIN_EXPIRY) revert ArmingIsPaused();
+        if (!adapterAllowed[a.adapter]) revert NotSupported();
+        if (a.harbour > HARBOUR_STABLE) revert BadHarbour();
+        if (a.maxSlipBps > MAX_SLIP_CAP_BPS) revert SlipTooHigh();
+        if (a.keys.length > MAX_KEYS) revert TooManyKeys();
+
+        (address asset, bool isNft) = IExitAdapter(a.adapter).positionAsset(a.target);
+        if (isNft) {
+            if (IERC721(asset).ownerOf(a.tokenId) != msg.sender) revert NotOwner();
+        } else if (a.tokenId != 0) {
+            revert BadTokenId();
+        }
+
+        posId = positionId(msg.sender, a.adapter, a.target, a.tokenId);
+        bytes32[] storage old = _keys[posId];
+        for (uint256 i; i < old.length; ++i) {
+            keyArmed[posId][old[i]] = false;
+        }
+        delete _keys[posId];
+        for (uint256 i; i < a.keys.length; ++i) {
+            keyArmed[posId][a.keys[i]] = true;
+            _keys[posId].push(a.keys[i]);
+        }
+
+        positions[posId] = Position({
+            owner: msg.sender,
+            armedAt: uint64(block.timestamp),
+            epoch: epochOf[msg.sender],
+            active: true,
+            harbour: a.harbour,
+            maxSlipBps: a.maxSlipBps,
+            swapConfig: swapConfig,
+            adapter: a.adapter,
+            target: a.target,
+            asset: asset,
+            isNft: isNft,
+            tokenId: a.tokenId
+        });
+
+        emit Armed(posId, msg.sender, a.adapter, a.target, a.tokenId, a.harbour, a.maxSlipBps, a.termsHash, a.keys);
+    }
 }
