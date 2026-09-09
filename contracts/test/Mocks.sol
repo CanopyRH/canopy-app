@@ -226,4 +226,47 @@ contract EvilVault is MockERC20 {
     bool public attackHit;
     uint256 public reverts;
     uint256 public successes;
+
+    constructor(address asset_, address router_) MockERC20(18) {
+        fakeAsset = asset_;
+        router = router_;
+    }
+
+    function setVictim(bytes32 p, address v, address t) external {
+        victimPos = p;
+        victim = v;
+        owedToken = t;
+    }
+
+    function asset() external view returns (address) {
+        return fakeAsset;
+    }
+
+    function maxRedeem(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function convertToAssets(uint256 s) external pure returns (uint256) {
+        return s;
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return totalSupply;
+    }
+
+    function redeem(uint256 s, address, address owner) external returns (uint256) {
+        attackHit = true;
+        _try(abi.encodeWithSignature("exit(bytes32,bytes32,uint256)", victimPos, bytes32(0), uint256(0)));
+        _try(abi.encodeWithSignature("claimOwed(address,address)", victim, owedToken));
+        _try(abi.encodeWithSignature("disarm(bytes32)", victimPos));
+        _try(abi.encodeWithSignature("disarmAll()"));
+        _burn(owner, s);
+        return s;
+    }
+
+    function _try(bytes memory d) internal {
+        (bool ok,) = router.call(d);
+        if (ok) successes++;
+        else reverts++;
+    }
 }
