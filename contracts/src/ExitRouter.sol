@@ -35,4 +35,48 @@ contract ExitRouter is ReentrancyGuard {
     uint256 public constant MAX_KEYS = 8;
     uint256 public constant STABLE_FLOOR_BPS = 9850; // never swap INTO the stablecoin below $0.985
     uint8 internal constant STABLE_DECIMALS = 6;
+
+    address public immutable STABLE;
+    address public immutable WETH;
+    address public immutable SWAP_ROUTER;
+    IAlarmBook public immutable ALARMS;
+    address public immutable ADMIN; // Timelock (48h)
+    uint256 public immutable ADMIN_EXPIRY;
+    address public immutable STABLE_FEED;
+    uint32 public immutable STABLE_FEED_HEARTBEAT;
+
+    struct Feed {
+        address feed;
+        uint32 heartbeat;
+        uint8 tokenDecimals;
+    }
+
+    struct Position {
+        address owner;
+        uint64 armedAt;
+        uint64 epoch;
+        bool active;
+        uint8 harbour;
+        uint16 maxSlipBps;
+        uint64 swapConfig; // swap settings the owner armed under
+        address adapter;
+        address target;
+        address asset;
+        bool isNft;
+        uint256 tokenId;
+    }
+
+    struct ArmParams {
+        address adapter;
+        address target;
+        uint256 tokenId;
+        uint8 harbour;
+        uint16 maxSlipBps;
+        bytes32 termsHash;
+        bytes32[] keys;
+    }
+
+    address public guardian;
+    bool public armingPaused;
+    uint64 public swapConfig; // rises with every feed or route change
 }
