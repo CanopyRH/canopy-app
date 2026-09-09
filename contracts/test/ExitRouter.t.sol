@@ -40,4 +40,45 @@ contract ExitRouterTest is Base {
         vm.expectRevert(ExitRouter.SlipTooHigh.selector);
         router.arm(_params(address(vault), RAW, 1001, _keys(pauseKey)));
     }
+
+    function test_arm_rejectsTooManyKeys() public {
+        vm.expectRevert(ExitRouter.TooManyKeys.selector);
+        router.arm(_params(address(vault), RAW, 0, new bytes32[](9)));
+    }
+
+    function test_arm_rejectsBadHarbour() public {
+        vm.expectRevert(ExitRouter.BadHarbour.selector);
+        router.arm(_params(address(vault), 2, 0, _keys(pauseKey)));
+    }
+
+    function test_arm_rejectsWhilePaused() public {
+        vm.prank(GUARD);
+        router.setArmingPaused(true);
+        vm.expectRevert(ExitRouter.ArmingIsPaused.selector);
+        router.arm(_params(address(vault), RAW, 0, _keys(pauseKey)));
+    }
+
+    function test_arm_unlistedVaultIsAccepted() public {
+        MockVault other = new MockVault(stable, 1e6);
+        bytes32 id = _setup(OWNER, other, 10e18, RAW, 0);
+        assertTrue(router.isArmed(id), "armed");
+    }
+
+    function test_arm_isBoundToCaller() public {
+        vm.prank(ATTACKER);
+        bytes32 id = router.arm(_params(address(vault), RAW, 0, _keys(pauseKey)));
+        (address owner,,,,,,,,,,,) = router.positions(id);
+        assertTrue(owner == ATTACKER, "owner is the caller");
+        assertTrue(!router.isArmed(router.positionId(OWNER, address(adapter), address(vault), 0)), "victim unarmed");
+    }
+
+    // ---------------------------------------------------------------- exits
+
+    function test_ownerExit_raw() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "owner paid");
+        assertEq(vault.balanceOf(OWNER), 0, "shares gone");
+    }
 }
