@@ -119,4 +119,49 @@ contract ExitRouter is ReentrancyGuard {
     event RouteSet(address indexed token, bytes path);
     event GuardianSet(address guardian);
     event ArmingPaused(bool paused);
+
+    error NotAdmin();
+    error NotGuardian();
+    error ArmingIsPaused();
+    error NotSupported();
+    error BadHarbour();
+    error SlipTooHigh();
+    error TooManyKeys();
+    error NotOwner();
+    error BadTokenId();
+    error NotArmed();
+    error NotAuthorized();
+    error AlarmNotLive();
+    error NothingToExit();
+    error NothingWithdrawn();
+    error NftNotReturned();
+    error BadRoute();
+    error BadFeed();
+    error NothingOwed();
+
+    constructor(
+        address stable,
+        address weth,
+        address swapRouter,
+        address alarms,
+        address admin,
+        address guardian_,
+        address stableFeed,
+        uint32 stableFeedHeartbeat,
+        uint256 adminExpiry
+    ) {
+        STABLE = stable;
+        WETH = weth;
+        SWAP_ROUTER = swapRouter;
+        ALARMS = IAlarmBook(alarms);
+        ADMIN = admin;
+        guardian = guardian_;
+        STABLE_FEED = stableFeed;
+        STABLE_FEED_HEARTBEAT = stableFeedHeartbeat;
+        ADMIN_EXPIRY = adminExpiry;
+    }
+
+    receive() external payable {} // native ETH from a future adapter during an unwind
+
+    // ------------------------------------------------------------------ owner actions
 }
