@@ -82,4 +82,51 @@ abstract contract Base {
         a = new bytes32[](1);
         a[0] = k;
     }
+
+    function _params(address target, uint8 harbour, uint16 slip, bytes32[] memory keys)
+        internal
+        view
+        returns (ExitRouter.ArmParams memory)
+    {
+        return ExitRouter.ArmParams({
+            adapter: address(adapter),
+            target: target,
+            tokenId: 0,
+            harbour: harbour,
+            maxSlipBps: slip,
+            termsHash: TERMS,
+            keys: keys
+        });
+    }
+
+    /// @dev Deposits `shares`, approves the router and arms with pauseKey.
+    function _setup(address who, MockVault v, uint256 shares, uint8 harbour, uint16 slip) internal returns (bytes32 posId) {
+        v.deposit(who, shares);
+        vm.prank(who);
+        v.approve(address(router), type(uint256).max);
+        vm.prank(who);
+        posId = router.arm(_params(address(v), harbour, slip, _keys(pauseKey)));
+    }
+
+    function _fireAlarm() internal {
+        pausable.setPaused(true);
+        assertTrue(book.poke(pauseKey), "poke");
+    }
+
+    function assertTrue(bool c, string memory m) internal pure {
+        require(c, m);
+    }
+
+    function assertEq(uint256 a, uint256 b, string memory m) internal pure {
+        if (a != b) revert(string.concat(m, ": ", _u(a), " != ", _u(b)));
+    }
+
+    function _u(uint256 v) internal pure returns (string memory) {
+        if (v == 0) return "0";
+        uint256 d;
+        for (uint256 x = v; x > 0; x /= 10) d++;
+        bytes memory b = new bytes(d);
+        for (; v > 0; v /= 10) b[--d] = bytes1(uint8(48 + (v % 10)));
+        return string(b);
+    }
 }
