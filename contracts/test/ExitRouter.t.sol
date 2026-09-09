@@ -124,4 +124,39 @@ contract ExitRouterTest is Base {
         assertEq(stable.balanceOf(OWNER), 40e6, "owner paid");
         assertEq(vault.balanceOf(OWNER), 60e18, "rest stays with owner");
     }
+
+    function test_illiquidVault_revertsWithSharesUntouched() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vault.setLiquid(0);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NothingWithdrawn.selector);
+        router.exit(id, pauseKey, 0);
+        assertEq(vault.balanceOf(OWNER), 100e18, "shares untouched");
+    }
+
+    function test_vaultReportingMaxRedeem_usesFallback() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vault.setZeroMax(false);
+        vault.setLiquid(30e6);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(stable.balanceOf(OWNER), 30e6, "partial via fallback");
+        assertEq(vault.balanceOf(OWNER), 70e18, "leftover returned");
+    }
+
+    function test_blockedOwner_booksOwedThenClaims() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(router.owed(OWNER, address(stable)), 100e6, "owed");
+        assertEq(router.totalOwed(address(stable)), 100e6, "total owed");
+        stable.setBlocked(OWNER, false);
+        vm.prank(KEEPER);
+        router.claimOwed(OWNER, address(stable));
+        assertEq(stable.balanceOf(OWNER), 100e6, "claimed");
+        assertEq(stable.balanceOf(KEEPER), 0, "claimer gets nothing");
+    }
 }
