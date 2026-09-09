@@ -81,4 +81,47 @@ contract ExitRouterTest is Base {
         assertEq(stable.balanceOf(OWNER), 100e6, "owner paid");
         assertEq(vault.balanceOf(OWNER), 0, "shares gone");
     }
+
+    function test_keeperExit_onLiveKey() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "owner paid");
+        assertEq(stable.balanceOf(KEEPER), 0, "keeper paid nothing");
+    }
+
+    function test_keeperExit_rejectedWithNoAlarm() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_keeperExit_rejectedWithUnarmedKey() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotAuthorized.selector);
+        router.exit(id, keccak256("other"), 0);
+    }
+
+    function test_keeperExit_rejectedAfterTtl() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_partialExit_leavesRemainingShares() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vault.setLiquid(40e6);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 40e18);
+        assertEq(stable.balanceOf(OWNER), 40e6, "owner paid");
+        assertEq(vault.balanceOf(OWNER), 60e18, "rest stays with owner");
+    }
 }
