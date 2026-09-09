@@ -79,4 +79,44 @@ contract ExitRouter is ReentrancyGuard {
     address public guardian;
     bool public armingPaused;
     uint64 public swapConfig; // rises with every feed or route change
+
+    mapping(address => bool) public adapterAllowed;
+    mapping(address => Feed) public feeds;
+    mapping(address => bytes) public routes;
+    mapping(bytes32 => Position) public positions;
+    mapping(bytes32 => bytes32[]) internal _keys;
+    mapping(bytes32 => mapping(bytes32 => bool)) public keyArmed;
+    mapping(address => uint64) public epochOf;
+
+    /// @notice Tokens the owner could not receive at exit time. Claimable by or for the owner only.
+    mapping(address => mapping(address => uint256)) public owed;
+    mapping(address => uint256) public totalOwed;
+
+    uint256 public exitCount;
+
+    event Armed(
+        bytes32 indexed posId,
+        address indexed owner,
+        address adapter,
+        address target,
+        uint256 tokenId,
+        uint8 harbour,
+        uint16 maxSlipBps,
+        bytes32 termsHash,
+        bytes32[] keys
+    );
+    event Disarmed(bytes32 indexed posId, address indexed owner);
+    event DisarmedAll(address indexed owner, uint64 newEpoch);
+    event Exited(
+        uint256 indexed exitId, bytes32 indexed posId, address indexed owner, address caller, bytes32 alarmKey, bool viaAlarm
+    );
+    event Paid(uint256 indexed exitId, address indexed owner, address token, uint256 amount, bool swapped);
+    event SwapSkipped(address indexed token, uint256 amount);
+    event Owed(address indexed owner, address indexed token, uint256 amount);
+    event OwedClaimed(address indexed owner, address indexed token, uint256 amount);
+    event AdapterSet(address indexed adapter, bool allowed);
+    event FeedSet(address indexed token, address feed, uint32 heartbeat, uint8 tokenDecimals);
+    event RouteSet(address indexed token, bytes path);
+    event GuardianSet(address guardian);
+    event ArmingPaused(bool paused);
 }
