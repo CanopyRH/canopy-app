@@ -159,4 +159,49 @@ contract ExitRouterTest is Base {
         assertEq(stable.balanceOf(OWNER), 100e6, "claimed");
         assertEq(stable.balanceOf(KEEPER), 0, "claimer gets nothing");
     }
+
+    function test_exitPreservesOwedOfOthers() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        bytes32 other = _setup(KEEPER, vault, 50e18, RAW, 0);
+        vm.prank(KEEPER);
+        router.exit(other, bytes32(0), 0);
+        assertEq(stable.balanceOf(KEEPER), 50e6, "second owner paid only their own");
+        assertEq(stable.balanceOf(address(router)), 100e6, "owed funds still held");
+    }
+
+    // ---------------------------------------------------------------- swap leg
+
+    function _tPosition(uint16 slip) internal returns (bytes32) {
+        return _setup(OWNER, tVault, 1e18, STABLE, slip);
+    }
+
+    function test_swap_ownerWithinUserLimit() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(92e6); // 8% under the oracle
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 92e6, "swapped");
+        assertEq(t.balanceOf(OWNER), 0, "no raw");
+    }
+
+    function test_swap_ownerBelowTenPercentCeilingDeliversRaw() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(89e6); // 11% under the oracle
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+    }
+
+    function test_swap_thirdPartyCappedAtOnePercent() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(95e6); // inside the owner's 10% limit, outside the 1% cap
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "third party cannot use the wider limit");
+        assertEq(stable.balanceOf(OWNER), 0, "no swap");
+    }
 }
