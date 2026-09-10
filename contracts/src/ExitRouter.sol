@@ -208,4 +208,53 @@ contract ExitRouter is ReentrancyGuard {
 
         emit Armed(posId, msg.sender, a.adapter, a.target, a.tokenId, a.harbour, a.maxSlipBps, a.termsHash, a.keys);
     }
+
+    function disarm(bytes32 posId) external {
+        if (positions[posId].owner != msg.sender) revert NotOwner();
+        positions[posId].active = false;
+        emit Disarmed(posId, msg.sender);
+    }
+
+    /// @notice One-tap revoke: every position of the caller stops working immediately.
+    function disarmAll() external {
+        uint64 e = ++epochOf[msg.sender];
+        emit DisarmedAll(msg.sender, e);
+    }
+
+    // ------------------------------------------------------------------ exit
+
+    /// @notice Exit a position to its owner. There is deliberately no recipient parameter.
+    /// @param amount ERC-20 shares to exit (0 = everything the owner holds and has approved). Ignored for NFTs.
+    function exit(bytes32 posId, bytes32 alarmKey, uint256 amount) external nonReentrant returns (uint256 exitId) {
+        Position memory p = positions[posId];
+        bool viaAlarm = _authorize(p, posId, alarmKey);
+
+        exitId = ++exitCount;
+        uint256 amountOrId = _pull(p, amount);
+
+        address[] memory outs = _outputList(p, amountOrId);
+        uint256[] memory before = new uint256[](outs.length);
+        for (uint256 i; i < outs.length; ++i) {
+            before[i] = _free(outs[i]);
+        }
+        uint256 stableBefore = _free(STABLE);
+
+        IExitAdapter(p.adapter).unwind(p.target, amountOrId);
+
+        if (p.isNft) {
+            if (IERC721(p.asset).ownerOf(p.tokenId) != address(this)) revert NftNotReturned();
+            IERC721(p.asset).transferFrom(address(this), p.owner, p.tokenId);
+        }
+
+        bool delivered = _settle(exitId, p, outs, before, viaAlarm);
+
+        uint256 stableOut = _free(STABLE) - stableBefore;
+        if (stableOut > 0) {
+            _pay(exitId, p.owner, STABLE, stableOut, p.harbour == HARBOUR_STABLE);
+            delivered = true;
+        }
+        if (!delivered) revert NothingWithdrawn();
+
+        emit Exited(exitId, posId, p.owner, msg.sender, alarmKey, viaAlarm);
+    }
 }
