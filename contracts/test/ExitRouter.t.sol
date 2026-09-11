@@ -204,4 +204,41 @@ contract ExitRouterTest is Base {
         assertEq(t.balanceOf(OWNER), 1e18, "third party cannot use the wider limit");
         assertEq(stable.balanceOf(OWNER), 0, "no swap");
     }
+
+    function test_swap_thirdPartyInsideOnePercent() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(99e6);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(stable.balanceOf(OWNER), 99e6, "swapped at the cap");
+    }
+
+    function test_swap_userLimitBelowCapStillApplies() public {
+        bytes32 id = _tPosition(50);
+        swap.setRate(99e6); // 1% under the oracle, user allows 0.5%
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+    }
+
+    function test_swap_noRouteDeliversRaw() public {
+        vm.prank(ADMIN);
+        router.setRoute(address(t), "");
+        bytes32 id = _tPosition(1000);
+        swap.setRate(100e6);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+    }
+
+    function test_swap_staleFeedDeliversRaw() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(100e6);
+        tFeed.set(100e8, block.timestamp - 3601);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+    }
 }
