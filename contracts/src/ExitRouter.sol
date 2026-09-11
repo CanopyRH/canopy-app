@@ -334,4 +334,44 @@ contract ExitRouter is ReentrancyGuard {
         routes[token] = path;
         emit RouteSet(token, path);
     }
+
+    function setGuardian(address g) external onlyAdmin {
+        guardian = g;
+        emit GuardianSet(g);
+    }
+
+    /// @notice Guardian can pause NEW arming only, until ADMIN_EXPIRY. Exits, disarming and claims are unaffected.
+    function setArmingPaused(bool paused) external {
+        if (block.timestamp >= ADMIN_EXPIRY) revert NotGuardian();
+        if (msg.sender != guardian && msg.sender != ADMIN) revert NotGuardian();
+        armingPaused = paused;
+        emit ArmingPaused(paused);
+    }
+
+    // ------------------------------------------------------------------ internals
+
+    /// @dev The owner can always exit, armed or not. A third party needs an armed key that fired after this arming.
+    function _authorize(Position memory p, bytes32 posId, bytes32 alarmKey) internal view returns (bool viaAlarm) {
+        if (msg.sender == p.owner) return false;
+        if (!p.active || p.epoch != epochOf[p.owner]) revert NotArmed();
+        if (!keyArmed[posId][alarmKey]) revert NotAuthorized();
+        uint256 sinceArmed = block.timestamp - p.armedAt;
+        if (!ALARMS.isLive(alarmKey, sinceArmed < ALARM_TTL ? sinceArmed : ALARM_TTL)) revert AlarmNotLive();
+        return true;
+    }
+
+    /// @dev The only `from` ever used is the position owner; the only `to` is the owner's chosen adapter.
+    function _pull(Position memory p, uint256 amount) internal returns (uint256) {
+        if (p.isNft) {
+            IERC721(p.asset).transferFrom(p.owner, p.adapter, p.tokenId);
+            return p.tokenId;
+        }
+        uint256 bal = p.asset.balanceOf(p.owner);
+        uint256 al = SafeTransferLib.allowance(p.asset, p.owner, address(this));
+        uint256 amt = bal < al ? bal : al;
+        if (amount != 0 && amount < amt) amt = amount;
+        if (amt == 0) revert NothingToExit();
+        p.asset.safeTransferFrom(p.owner, p.adapter, amt);
+        return amt;
+    }
 }
