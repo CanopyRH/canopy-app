@@ -241,4 +241,49 @@ contract ExitRouterTest is Base {
         router.exit(id, bytes32(0), 0);
         assertEq(t.balanceOf(OWNER), 1e18, "raw");
     }
+
+    function test_swap_stableBelowFloorDeliversRaw() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(100e6);
+        stableFeed.set(0.98e8, block.timestamp);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+    }
+
+    function test_swap_brokenPoolDeliversRaw() public {
+        bytes32 id = _tPosition(1000);
+        swap.setRate(100e6);
+        swap.setBroken(true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+        assertEq(t.allowance(address(router), address(swap)), 0, "approval cleared");
+    }
+
+    function test_setRoute_mustEndInStable() public {
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.BadRoute.selector);
+        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(weth)));
+    }
+
+    // ---------------------------------------------------------------- revocation
+
+    function test_disarm_stopsThirdParties() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(OWNER);
+        router.disarm(id);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_disarmAll_stopsEveryPosition() public {
+        bytes32 a = _setup(OWNER, vault, 100e18, RAW, 0);
+        bytes32 b = _setup(OWNER, tVault, 1e18, RAW, 0);
+        vm.prank(OWNER);
+        router.disarmAll();
+        assertTrue(!router.isArmed(a) && !router.isArmed(b), "both disarmed");
+    }
 }
