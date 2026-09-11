@@ -287,4 +287,51 @@ contract ExitRouter is ReentrancyGuard {
         Position storage p = positions[posId];
         return p.active && p.epoch == epochOf[p.owner];
     }
+
+    /// @notice Oracle-bounded minimum stablecoin out for `amount` of `token`. ok=false means "do not swap".
+    function quoteMinOut(address token, uint256 amount, uint16 slipBps) public view returns (bool ok, uint256 minOut) {
+        Feed memory f = feeds[token];
+        if (f.feed == address(0) || slipBps > MAX_SLIP_CAP_BPS) return (false, 0);
+        (bool okT, uint256 pT, uint8 dT) = _price(f.feed, f.heartbeat);
+        (bool okU, uint256 pU, uint8 dU) = _price(STABLE_FEED, STABLE_FEED_HEARTBEAT);
+        if (!okT || !okU) return (false, 0);
+        if (pU * 10_000 < STABLE_FLOOR_BPS * 10 ** dU) return (false, 0);
+        uint256 usdScaled = FullMath.mulDiv(amount, pT, 10 ** dT); // USD x 10^tokenDecimals
+        uint256 fair = FullMath.mulDiv(usdScaled, 10 ** (uint256(dU) + STABLE_DECIMALS), pU * 10 ** f.tokenDecimals);
+        minOut = (fair * (10_000 - slipBps)) / 10_000;
+        ok = minOut > 0;
+    }
+
+    // ------------------------------------------------------------------ admin (Timelock) / guardian
+
+    modifier onlyAdmin() {
+        if (msg.sender != ADMIN || block.timestamp >= ADMIN_EXPIRY) revert NotAdmin();
+        _;
+    }
+
+    /// @notice Disabling an adapter only stops new arming. Existing positions keep working.
+    function setAdapter(address adapter, bool allowed) external onlyAdmin {
+        adapterAllowed[adapter] = allowed;
+        emit AdapterSet(adapter, allowed);
+    }
+
+    /// @notice Feed and route changes reach a position only when its owner re-arms. Until then it delivers raw.
+    function setFeed(address token, address feed, uint32 heartbeat, uint8 tokenDecimals) external onlyAdmin {
+        if ((feed != address(0) && feed.code.length == 0) || tokenDecimals > MAX_TOKEN_DECIMALS) revert BadFeed();
+        ++swapConfig;
+        feeds[token] = Feed(feed, heartbeat, tokenDecimals);
+        emit FeedSet(token, feed, heartbeat, tokenDecimals);
+    }
+
+    /// @notice Uniswap v3 path token -> ... -> STABLE. Validated so a route can only ever end in STABLE.
+    function setRoute(address token, bytes calldata path) external onlyAdmin {
+        if (path.length != 0) {
+            if (path.length < 43 || (path.length - 20) % 23 != 0) revert BadRoute();
+            if (address(bytes20(path[0:20])) != token) revert BadRoute();
+            if (address(bytes20(path[path.length - 20:])) != STABLE) revert BadRoute();
+        }
+        ++swapConfig;
+        routes[token] = path;
+        emit RouteSet(token, path);
+    }
 }
