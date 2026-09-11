@@ -257,4 +257,34 @@ contract ExitRouter is ReentrancyGuard {
 
         emit Exited(exitId, posId, p.owner, msg.sender, alarmKey, viaAlarm);
     }
+
+    /// @notice Pay out anything the owner could not receive at exit time. Anyone may trigger it; it only pays the owner.
+    function claimOwed(address owner, address token) external nonReentrant {
+        uint256 amt = owed[owner][token];
+        if (amt == 0) revert NothingOwed();
+        owed[owner][token] = 0;
+        totalOwed[token] -= amt;
+        if (token == address(0)) {
+            (bool ok,) = owner.call{value: amt}("");
+            if (!ok) revert NothingOwed();
+        } else {
+            token.safeTransfer(owner, amt);
+        }
+        emit OwedClaimed(owner, token, amt);
+    }
+
+    // ------------------------------------------------------------------ views
+
+    function positionId(address owner, address adapter, address target, uint256 tokenId) public pure returns (bytes32) {
+        return keccak256(abi.encode(owner, adapter, target, tokenId));
+    }
+
+    function keysOf(bytes32 posId) external view returns (bytes32[] memory) {
+        return _keys[posId];
+    }
+
+    function isArmed(bytes32 posId) external view returns (bool) {
+        Position storage p = positions[posId];
+        return p.active && p.epoch == epochOf[p.owner];
+    }
 }
