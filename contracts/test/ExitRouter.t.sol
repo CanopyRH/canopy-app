@@ -336,4 +336,43 @@ contract ExitRouterTest is Base {
         assertEq(router.owed(OWNER, address(stable)), 100e6, "victim one still owed");
         assertEq(stable.balanceOf(ATTACKER), 1e6, "attacker got only what its own vault paid");
     }
+
+    function test_owed_cannotBeBookedTwice() public {
+        SelfAssetVault sv = new SelfAssetVault(stable);
+        sv.mint(OWNER, 10e18);
+        vm.prank(OWNER);
+        sv.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        bytes32 id = router.arm(_params(address(sv), RAW, 0, _keys(pauseKey)));
+        sv.setBlocked(OWNER, true); // returning the shares fails, so they are booked as owed
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(router.owed(OWNER, address(sv)), 10e18, "booked exactly once");
+        assertEq(router.totalOwed(address(sv)), 10e18, "total booked exactly once");
+    }
+
+    function test_adapter_onlyRouterCanUnwind() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(AdapterBase.OnlyRouter.selector);
+        adapter.unwind(address(vault), 1);
+    }
+
+    function test_disarmAll_blocksExitsUntilRearmed() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(OWNER);
+        router.disarmAll();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(id, pauseKey, 0);
+        pausable.setPaused(false);
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(OWNER);
+        router.arm(_params(address(vault), RAW, 0, _keys(pauseKey)));
+        vm.warp(block.timestamp + 1);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "re-armed exit works");
+    }
 }
