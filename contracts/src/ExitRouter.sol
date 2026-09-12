@@ -374,4 +374,51 @@ contract ExitRouter is ReentrancyGuard {
         p.asset.safeTransferFrom(p.owner, p.adapter, amt);
         return amt;
     }
+
+    function _outputList(Position memory p, uint256 amountOrId) internal view returns (address[] memory list) {
+        address[] memory outs = IExitAdapter(p.adapter).outputs(p.target, amountOrId);
+        uint256 extra = p.isNft ? 0 : 1;
+        list = new address[](outs.length + extra);
+        for (uint256 i; i < outs.length; ++i) {
+            list[i] = outs[i];
+        }
+        if (extra == 1) list[outs.length] = p.asset; // leftover shares go back to the owner
+    }
+
+    /// @dev Balance minus what is already owed to someone: deltas of this value are what the exit produced.
+    function _free(address token) internal view returns (uint256) {
+        uint256 bal = token == address(0) ? address(this).balance : token.balanceOf(address(this));
+        uint256 o = totalOwed[token];
+        return bal > o ? bal - o : 0;
+    }
+
+    function _settle(uint256 exitId, Position memory p, address[] memory outs, uint256[] memory before, bool viaAlarm)
+        internal
+        returns (bool delivered)
+    {
+        uint16 slip = viaAlarm && p.maxSlipBps > THIRD_PARTY_SLIP_CAP_BPS ? THIRD_PARTY_SLIP_CAP_BPS : p.maxSlipBps;
+        for (uint256 i; i < outs.length; ++i) {
+            address t = outs[i];
+            if (t == STABLE) continue; // paid once, after the loop (swap proceeds included)
+            uint256 nowFree = _free(t);
+            if (nowFree <= before[i]) continue;
+            uint256 d = nowFree - before[i];
+            if (!p.isNft && t == p.asset) {
+                _pay(exitId, p.owner, t, d, false); // unredeemed shares back to the owner
+                continue;
+            }
+            if (p.harbour == HARBOUR_STABLE && t != address(0)) {
+                if (p.swapConfig != swapConfig) {
+                    emit SwapSkipped(t, d);
+                } else if (_trySwap(t, d, slip)) {
+                    nowFree = _free(t);
+                    d = nowFree > before[i] ? nowFree - before[i] : 0;
+                }
+            }
+            if (d > 0) {
+                _pay(exitId, p.owner, t, d, false);
+                delivered = true;
+            }
+        }
+    }
 }
