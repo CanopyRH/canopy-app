@@ -286,4 +286,54 @@ contract ExitRouterTest is Base {
         router.disarmAll();
         assertTrue(!router.isArmed(a) && !router.isArmed(b), "both disarmed");
     }
+
+    function test_disarm_onlyOwner() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotOwner.selector);
+        router.disarm(id);
+    }
+
+    function test_revokedApproval_movesNothing() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(OWNER);
+        vault.approve(address(router), 0);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NothingToExit.selector);
+        router.exit(id, pauseKey, 0);
+        assertEq(vault.balanceOf(OWNER), 100e18, "untouched");
+    }
+
+    // ---------------------------------------------------------------- adversarial
+
+    function test_reentrancy_exitAndClaimAreBlockedDuringExit() public {
+        // Victim one has funds owed in the router. Victim two is armed with a live alarm.
+        bytes32 v1 = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(v1, bytes32(0), 0);
+        stable.setBlocked(OWNER, false);
+        bytes32 v2 = _setup(KEEPER, tVault, 1e18, RAW, 0);
+        _fireAlarm();
+
+        ReentrantVault rv = new ReentrantVault(stable, address(router));
+        rv.setVictim(v2, pauseKey, OWNER);
+        rv.mint(ATTACKER, 10e18);
+        vm.prank(ATTACKER);
+        rv.approve(address(router), type(uint256).max);
+        vm.prank(ATTACKER);
+        bytes32 id = router.arm(_params(address(rv), RAW, 0, _keys(pauseKey)));
+
+        vm.prank(ATTACKER);
+        router.exit(id, bytes32(0), 0); // succeeds, so the attempts below stay recorded
+
+        assertTrue(!rv.exitEntered(), "nested exit blocked");
+        assertTrue(!rv.claimEntered(), "nested claim blocked");
+        assertTrue(rv.exitError() == ReentrancyGuard.Reentrancy.selector, "exit stopped by the guard");
+        assertTrue(rv.claimError() == ReentrancyGuard.Reentrancy.selector, "claim stopped by the guard");
+        assertEq(tVault.balanceOf(KEEPER), 1e18, "victim two untouched");
+        assertEq(router.owed(OWNER, address(stable)), 100e6, "victim one still owed");
+        assertEq(stable.balanceOf(ATTACKER), 1e6, "attacker got only what its own vault paid");
+    }
 }
