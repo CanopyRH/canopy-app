@@ -421,4 +421,34 @@ contract ExitRouter is ReentrancyGuard {
             }
         }
     }
+
+    /// @dev Optional leg. Any failure (no route, stale or missing feed, stablecoin off peg, pool below the
+    /// oracle bound, token refusing approval) returns false and the raw token is delivered instead.
+    function _trySwap(address token, uint256 amount, uint16 slipBps) internal returns (bool swapped) {
+        bytes memory path = routes[token];
+        // An external call, because try can't catch a feed with no code or an overflow in the pricing.
+        (bool called, bytes memory ret) = address(this).staticcall(abi.encodeCall(this.quoteMinOut, (token, amount, slipBps)));
+        (bool ok, uint256 minOut) = called && ret.length == 64 ? abi.decode(ret, (bool, uint256)) : (false, 0);
+        if (path.length == 0 || !ok) {
+            emit SwapSkipped(token, amount);
+            return false;
+        }
+        if (!token.tryApprove(SWAP_ROUTER, amount)) {
+            emit SwapSkipped(token, amount);
+            return false;
+        }
+        try IV3SwapRouter(SWAP_ROUTER).exactInput(
+            IV3SwapRouter.ExactInputParams({
+                path: path,
+                recipient: address(this),
+                amountIn: amount,
+                amountOutMinimum: minOut
+            })
+        ) returns (uint256) {
+            swapped = true;
+        } catch {
+            emit SwapSkipped(token, amount);
+        }
+        token.tryApprove(SWAP_ROUTER, 0);
+    }
 }
