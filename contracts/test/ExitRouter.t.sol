@@ -375,4 +375,53 @@ contract ExitRouterTest is Base {
         router.exit(id, pauseKey, 0);
         assertEq(stable.balanceOf(OWNER), 100e6, "re-armed exit works");
     }
+
+    function test_evilAdapter_cannotTouchVictimApproval() public {
+        EvilAdapter evil = new EvilAdapter();
+        vm.prank(ADMIN);
+        router.setAdapter(address(evil), true);
+        _setup(OWNER, vault, 100e18, RAW, 0);
+
+        vm.prank(ATTACKER);
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, _keys(pauseKey));
+        p.adapter = address(evil);
+        bytes32 id = router.arm(p);
+        _fireAlarm();
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NothingToExit.selector); // attacker's position, attacker holds nothing
+        router.exit(id, pauseKey, 0);
+        assertEq(vault.balanceOf(OWNER), 100e18, "victim untouched");
+    }
+
+    function test_evilVault_cannotReenterOrReachOwedFunds() public {
+        // A real victim with funds owed sitting in the router.
+        bytes32 victim = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(victim, bytes32(0), 0);
+        uint256 held = stable.balanceOf(address(router));
+        assertEq(held, 100e6, "owed held");
+        stable.setBlocked(OWNER, false);
+
+        // Second victim position, still armed and approved.
+        bytes32 victim2 = _setup(KEEPER, tVault, 1e18, RAW, 0);
+
+        // Attacker arms an unlisted vault that claims the stablecoin as its asset.
+        EvilVault ev = new EvilVault(address(stable), address(router));
+        ev.setVictim(victim2, OWNER, address(stable));
+        ev.mint(ATTACKER, 10e18);
+        vm.prank(ATTACKER);
+        ev.approve(address(router), type(uint256).max);
+        vm.prank(ATTACKER);
+        bytes32 id = router.arm(_params(address(ev), RAW, 0, _keys(pauseKey)));
+
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NothingWithdrawn.selector);
+        router.exit(id, bytes32(0), 0);
+
+        assertEq(stable.balanceOf(ATTACKER), 0, "attacker got nothing");
+        assertEq(stable.balanceOf(address(router)), held, "owed funds intact");
+        assertEq(router.owed(OWNER, address(stable)), held, "owed record intact");
+        assertEq(tVault.balanceOf(KEEPER), 1e18, "other victim intact");
+    }
 }
