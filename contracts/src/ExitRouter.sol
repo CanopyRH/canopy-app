@@ -451,4 +451,51 @@ contract ExitRouter is ReentrancyGuard {
         }
         token.tryApprove(SWAP_ROUTER, 0);
     }
+
+    function _pay(uint256 exitId, address owner, address token, uint256 amount, bool swapped) internal {
+        bool ok;
+        if (token == address(0)) {
+            (ok,) = owner.call{value: amount}("");
+            if (!ok && WETH != address(0)) {
+                // Owner cannot take ETH: deliver WETH instead.
+                try IWETH(WETH).deposit{value: amount}() {
+                    ok = WETH.tryTransfer(owner, amount);
+                    if (!ok) {
+                        owed[owner][WETH] += amount;
+                        totalOwed[WETH] += amount;
+                        emit Owed(owner, WETH, amount);
+                        return;
+                    }
+                    emit Paid(exitId, owner, WETH, amount, false);
+                    return;
+                } catch {}
+            }
+        } else {
+            ok = token.tryTransfer(owner, amount);
+        }
+        if (ok) {
+            emit Paid(exitId, owner, token, amount, swapped);
+        } else {
+            owed[owner][token] += amount;
+            totalOwed[token] += amount;
+            emit Owed(owner, token, amount);
+        }
+    }
+
+    function _price(address feed, uint32 heartbeat) internal view returns (bool ok, uint256 price, uint8 dec) {
+        try IAggregatorV3(feed).latestRoundData() returns (uint80, int256 answer, uint256, uint256 updatedAt, uint80) {
+            if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) return (false, 0, 0);
+            if (block.timestamp - updatedAt > heartbeat) return (false, 0, 0);
+            price = uint256(answer);
+        } catch {
+            return (false, 0, 0);
+        }
+        try IAggregatorV3(feed).decimals() returns (uint8 d) {
+            if (d > 30) return (false, 0, 0);
+            dec = d;
+        } catch {
+            return (false, 0, 0);
+        }
+        ok = true;
+    }
 }
