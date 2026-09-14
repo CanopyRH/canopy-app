@@ -270,3 +270,45 @@ contract EvilVault is MockERC20 {
         else reverts++;
     }
 }
+
+/// @dev Malicious vault whose redeem succeeds, so the outcome of each reentry attempt survives the exit.
+contract ReentrantVault is MockERC20 {
+    MockERC20 public immutable stableToken;
+    address public immutable router;
+    bytes32 public victimPos;
+    bytes32 public liveKey;
+    address public victim;
+    bool public armedAttack;
+    bool public exitEntered;
+    bool public claimEntered;
+    bytes4 public exitError;
+    bytes4 public claimError;
+
+    constructor(MockERC20 s, address r) MockERC20(18) {
+        stableToken = s;
+        router = r;
+    }
+
+    function setVictim(bytes32 p, bytes32 k, address v) external {
+        victimPos = p;
+        liveKey = k;
+        victim = v;
+        armedAttack = true;
+    }
+
+    function asset() external view returns (address) {
+        return address(stableToken);
+    }
+
+    function maxRedeem(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function convertToAssets(uint256 s) external pure returns (uint256) {
+        return s;
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return totalSupply;
+    }
+}
