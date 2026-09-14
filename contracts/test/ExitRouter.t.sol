@@ -455,4 +455,42 @@ contract ExitRouterTest is Base {
         vm.expectRevert(ExitRouter.NotAdmin.selector);
         router.setAdapter(address(1), true);
     }
+
+    function test_disablingAdapter_doesNotBlockExistingPositions() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(ADMIN);
+        router.setAdapter(address(adapter), false);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "exit still works");
+    }
+
+    function test_guardianCannotBlockExits() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(GUARD);
+        router.setArmingPaused(true);
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "exit still works");
+    }
+
+    function test_expiry_endsAdminAndGuardian() public {
+        vm.warp(block.timestamp + EXPIRY_FROM_START);
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setAdapter(address(1), true);
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setGuardian(address(1));
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setFeed(address(t), address(tFeed), 1, 18);
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setRoute(address(t), "");
+        vm.prank(GUARD);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(true);
+    }
 }
