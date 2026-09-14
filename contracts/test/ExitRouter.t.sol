@@ -493,4 +493,46 @@ contract ExitRouterTest is Base {
         vm.expectRevert(ExitRouter.NotGuardian.selector);
         router.setArmingPaused(true);
     }
+
+    function test_expiry_pausedRouterAcceptsArmingAgain() public {
+        vm.prank(GUARD);
+        router.setArmingPaused(true);
+        vm.warp(block.timestamp + EXPIRY_FROM_START);
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        assertTrue(router.isArmed(id), "armed after expiry");
+    }
+
+    function test_exitAbiHasNoRecipient() public pure {
+        assertTrue(
+            ExitRouter.exit.selector == bytes4(keccak256("exit(bytes32,bytes32,uint256)")), "exit signature is fixed"
+        );
+    }
+
+    // ---------------------------------------------------------------- fuzz
+
+    function testFuzz_anyCallerAnyAmount_onlyOwnerGains(address caller, uint96 shares, uint96 amount, uint96 liquidity)
+        public
+    {
+        vm.assume(caller != OWNER && caller != address(router) && caller != address(vault) && caller != address(0));
+        vm.assume(shares >= 1e12);
+        bytes32 id = _setup(OWNER, vault, shares, RAW, 0);
+        vault.setLiquid(uint256(liquidity) % (vault.liquid() + 1));
+        _fireAlarm();
+        uint256 keeperBefore = stable.balanceOf(caller);
+        uint256 ownerBefore = stable.balanceOf(OWNER);
+        uint256 sharesBefore = vault.balanceOf(OWNER);
+
+        vm.prank(caller);
+        try router.exit(id, pauseKey, amount) {
+            assertTrue(stable.balanceOf(OWNER) > ownerBefore, "owner gained");
+            assertTrue(vault.balanceOf(OWNER) < sharesBefore, "shares fell");
+        } catch {
+            assertEq(vault.balanceOf(OWNER), sharesBefore, "failed exit moves nothing");
+            assertEq(stable.balanceOf(OWNER), ownerBefore, "failed exit pays nothing");
+        }
+        assertEq(stable.balanceOf(caller), keeperBefore, "caller gained nothing");
+        assertEq(stable.balanceOf(address(router)), 0, "router holds nothing");
+        assertEq(vault.balanceOf(address(router)), 0, "router holds no shares");
+        assertEq(vault.balanceOf(address(adapter)), 0, "adapter holds no shares");
+    }
 }
