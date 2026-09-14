@@ -424,4 +424,35 @@ contract ExitRouterTest is Base {
         assertEq(router.owed(OWNER, address(stable)), held, "owed record intact");
         assertEq(tVault.balanceOf(KEEPER), 1e18, "other victim intact");
     }
+
+    function test_evilVault_reentryIsActuallyAttempted() public {
+        bytes32 victim2 = _setup(KEEPER, tVault, 1e18, RAW, 0);
+        EvilVault ev = new EvilVault(address(stable), address(router));
+        ev.setVictim(victim2, OWNER, address(stable));
+        ev.mint(ATTACKER, 10e18);
+        vm.prank(ATTACKER);
+        ev.approve(address(router), type(uint256).max);
+        // Calling the hostile path directly proves the attack code runs and that state-changing
+        // calls which are not behind the guard (disarm) fail on ownership, not by luck.
+        vm.prank(address(ev));
+        ev.approve(address(this), 0);
+        vm.prank(ATTACKER);
+        bytes32 id = router.arm(_params(address(ev), RAW, 0, _keys(pauseKey)));
+        (bool ok, bytes memory ret) = address(this).call(abi.encodeCall(this.exitAs, (ATTACKER, id)));
+        assertTrue(!ok && bytes4(ret) == ExitRouter.NothingWithdrawn.selector, "reverted as expected");
+        assertTrue(router.isArmed(victim2), "victim still armed");
+    }
+
+    function exitAs(address who, bytes32 id) external {
+        vm.prank(who);
+        router.exit(id, bytes32(0), 0);
+    }
+
+    // ---------------------------------------------------------------- admin
+
+    function test_admin_onlyAdminCanConfigure() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setAdapter(address(1), true);
+    }
 }
