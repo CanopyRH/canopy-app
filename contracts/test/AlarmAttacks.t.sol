@@ -82,4 +82,48 @@ contract AlarmAttackTest is Base {
         book.setWatcher(vm.addr(PK_B), true);
         vm.stopPrank();
     }
+
+    function _deposit(address who, uint256 a) internal {
+        asset.mint(who, a);
+        vm.prank(who);
+        asset.approve(address(rv), a);
+        vm.prank(who);
+        rv.deposit(a, who);
+    }
+
+    function _arm(address who, bytes32[] memory keys) internal returns (bytes32) {
+        vm.prank(who);
+        rv.approve(address(router), type(uint256).max);
+        vm.prank(who);
+        return router.arm(_params(address(rv), 0, 0, keys));
+    }
+
+    function _drainKey() internal returns (bytes32) {
+        return book.register(_detector(AlarmBook.Kind.DRAIN, address(rv), 2500, WINDOW, 0, 0));
+    }
+
+    /// @dev The app's "Vault drain + confirmation" preset.
+    function _bothKeys() internal returns (bytes32 drain, bytes32 quorum, bytes32 both) {
+        drain = _drainKey();
+        quorum = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, drain, quorum));
+    }
+
+    /// @dev A keeper's routine pass, with a baseline ready at the end of it.
+    function _period(bytes32 key) internal {
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key);
+    }
+
+    function _sigs(bytes32 digest) internal returns (address[] memory s, bytes[] memory g) {
+        (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
+        s = new address[](2);
+        g = new bytes[](2);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        (uint8 v0, bytes32 r0, bytes32 s0) = vm.sign(lo, digest);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(hi, digest);
+        g[0] = abi.encodePacked(r0, s0, v0);
+        g[1] = abi.encodePacked(r1, s1, v1);
+    }
 }
