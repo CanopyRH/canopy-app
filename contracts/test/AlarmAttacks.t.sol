@@ -126,4 +126,34 @@ contract AlarmAttackTest is Base {
         g[0] = abi.encodePacked(r0, s0, v0);
         g[1] = abi.encodePacked(r1, s1, v1);
     }
+
+    function _fireQuorum(bytes32 key) internal {
+        uint64 dl = uint64(block.timestamp + 600);
+        (address[] memory s, bytes[] memory g) = _sigs(book.attestDigest(key, EVIDENCE, dl));
+        book.fireByQuorum(key, EVIDENCE, dl, s, g);
+    }
+
+    function _reallyDrain(bytes32 drain) internal {
+        rv.exploitDrain(ATTACKER, 800e18);
+        assertTrue(book.poke(drain), "a real drain fires");
+    }
+
+    function test_flashDeposit_cantRaiseTheBaseline() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        vm.warp(block.timestamp + WINDOW / 2);
+        asset.mint(address(fa), 334e18);
+        fa.flash(book, rv, key, 334e18); // lands on the roll, the attacker's best moment
+        assertTrue(!book.check(key), "the alarm doesn't fire on a deposit that came and went");
+    }
+
+    function test_flashDeposit_onANewDetector_cantFire() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        vm.warp(block.timestamp + WINDOW / 2);
+        asset.mint(address(fa), 334e18);
+        fa.flash(book, rv, key, 334e18);
+        assertTrue(!book.check(key), "still measured against the honest first reading");
+    }
 }
