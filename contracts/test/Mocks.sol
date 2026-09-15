@@ -311,4 +311,51 @@ contract ReentrantVault is MockERC20 {
     function totalAssets() external view returns (uint256) {
         return totalSupply;
     }
+
+    function redeem(uint256 s, address receiver, address owner) external returns (uint256) {
+        if (armedAttack) {
+            (bool ok1, bytes memory r1) =
+                router.call(abi.encodeWithSignature("exit(bytes32,bytes32,uint256)", victimPos, liveKey, uint256(0)));
+            exitEntered = ok1;
+            if (!ok1 && r1.length >= 4) exitError = bytes4(r1);
+            (bool ok2, bytes memory r2) =
+                router.call(abi.encodeWithSignature("claimOwed(address,address)", victim, address(stableToken)));
+            claimEntered = ok2;
+            if (!ok2 && r2.length >= 4) claimError = bytes4(r2);
+        }
+        _burn(owner, s);
+        stableToken.mint(receiver, 1e6);
+        return 1e6;
+    }
+}
+
+/// @dev Vault whose asset is its own share token, so the router sees the same token as output and leftover.
+contract SelfAssetVault is MockERC20 {
+    MockERC20 public immutable stableToken;
+
+    constructor(MockERC20 s) MockERC20(18) {
+        stableToken = s;
+    }
+
+    function asset() external view returns (address) {
+        return address(this);
+    }
+
+    function maxRedeem(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function convertToAssets(uint256 s) external pure returns (uint256) {
+        return s;
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return totalSupply;
+    }
+
+    /// @dev Pays a little stablecoin and leaves every share unredeemed.
+    function redeem(uint256, address receiver, address) external returns (uint256) {
+        stableToken.mint(receiver, 1e6);
+        return 0;
+    }
 }
