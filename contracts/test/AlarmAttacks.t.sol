@@ -243,4 +243,46 @@ contract AlarmAttackTest is Base {
         (,,,, uint256 snap) = book.state(key);
         assertEq(snap, 2000e18, "lasting deposits raise the baseline after a full period");
     }
+
+    function test_preburnedDrain_stillLetsARealHackFireBoth() public {
+        _deposit(OWNER, 1000e18);
+        (bytes32 drain, bytes32 quorum, bytes32 both) = _bothKeys();
+        bytes32 id = _arm(OWNER, _keys(both));
+        _period(drain);
+        vm.warp(block.timestamp + 1);
+        rv.exploitDrain(ATTACKER, 300e18);
+        assertTrue(book.poke(drain), "an honest large withdrawal fires the drain part");
+        asset.mint(address(rv), 300e18);
+
+        vm.warp(block.timestamp + WINDOW + 1); // past the old one-hour window
+        rv.exploitDrain(ATTACKER, 800e18);
+        _fireQuorum(quorum);
+        assertTrue(book.poke(both), "the combined alarm fires");
+        vm.prank(KEEPER);
+        router.exit(id, both, 0);
+        assertEq(rv.balanceOf(OWNER), 0, "owner got out");
+    }
+
+    function test_lateConfirmation_stillFiresBoth() public {
+        _deposit(OWNER, 1000e18);
+        (bytes32 drain, bytes32 quorum, bytes32 both) = _bothKeys();
+        bytes32 id = _arm(OWNER, _keys(both));
+        _period(drain);
+        vm.warp(block.timestamp + 1);
+        _reallyDrain(drain);
+        vm.warp(block.timestamp + 23 hours); // a report that takes most of a day
+        _fireQuorum(quorum);
+        assertTrue(book.poke(both), "fires");
+        vm.prank(KEEPER);
+        router.exit(id, both, 0);
+        assertEq(asset.balanceOf(OWNER), 200e18, "owner gets what is left");
+    }
+
+    function test_reusedSignatures_cantOutliveTheRefireDelay() public {
+        bytes32 key = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        uint64 dl = uint64(block.timestamp + 3 days);
+        (address[] memory s, bytes[] memory g) = _sigs(book.attestDigest(key, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.DeadlineTooFar.selector);
+        book.fireByQuorum(key, EVIDENCE, dl, s, g);
+    }
 }
