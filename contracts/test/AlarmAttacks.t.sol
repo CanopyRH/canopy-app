@@ -285,4 +285,49 @@ contract AlarmAttackTest is Base {
         vm.expectRevert(AlarmBook.DeadlineTooFar.selector);
         book.fireByQuorum(key, EVIDENCE, dl, s, g);
     }
+
+    function test_alarmFiredBeforeArming_doesntAuthorizeAThirdParty() public {
+        _fireAlarm();
+        vm.warp(block.timestamp + 1 hours);
+        bytes32 id = _setup(OWNER, vault, 100e18, 0, 0);
+        vm.warp(block.timestamp + 1);
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "the owner can still leave");
+    }
+
+    function test_poisonedShareMark_cantExitALaterUser() public {
+        asset.mint(ATTACKER, 2000e18);
+        vm.startPrank(ATTACKER);
+        asset.approve(address(rv), type(uint256).max);
+        rv.deposit(1000e18, ATTACKER);
+        asset.transfer(address(rv), 1000e18); // price 2
+        vm.stopPrank();
+        bytes32 key = book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(rv), 50, 0, 0, 0));
+        vm.prank(ATTACKER);
+        rv.redeem(1000e18, ATTACKER, ATTACKER); // supply 0, price back to 1
+        assertTrue(book.poke(key), "fires before anyone is armed");
+
+        vm.warp(block.timestamp + 1);
+        _deposit(OWNER, 100e18);
+        bytes32 id = _arm(OWNER, _keys(key));
+        vm.warp(block.timestamp + 1);
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, key, 0);
+    }
+
+    function test_disarmedOwner_canStillExit_whileArmingIsPaused() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, 0, 0);
+        vm.prank(OWNER);
+        router.disarm(id);
+        vm.prank(GUARD);
+        router.setArmingPaused(true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "paid");
+    }
 }
