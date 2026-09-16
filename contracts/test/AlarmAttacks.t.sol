@@ -156,4 +156,55 @@ contract AlarmAttackTest is Base {
         fa.flash(book, rv, key, 334e18);
         assertTrue(!book.check(key), "still measured against the honest first reading");
     }
+
+    function test_flashSample_isPulledDownByTheNextHonestSample() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        vm.warp(block.timestamp + WINDOW / 2);
+        asset.mint(address(fa), 334e18);
+        fa.flash(book, rv, key, 334e18); // the next baseline candidate is now inflated
+        vm.warp(block.timestamp + 600);
+        book.checkpoint(key); // a keeper sample, in the same period
+        vm.warp(block.timestamp + WINDOW / 2 - 600);
+        book.checkpoint(key);
+        (,,,, uint256 snap) = book.state(key);
+        assertEq(snap, 1000e18, "the inflated reading never became the baseline");
+        assertTrue(!book.check(key), "healthy");
+    }
+
+    function test_flashDeposit_cantRaiseAQuorumFiredBoth() public {
+        _deposit(OWNER, 1000e18);
+        (bytes32 drain, bytes32 quorum, bytes32 both) = _bothKeys();
+        _arm(OWNER, _keys(both));
+        _period(drain);
+        _fireQuorum(quorum);
+        vm.warp(block.timestamp + WINDOW / 2);
+        asset.mint(address(fa), 334e18);
+        fa.flash(book, rv, drain, 334e18);
+        assertTrue(!book.poke(drain), "no drain to fire on");
+        assertTrue(!book.poke(both), "the combined alarm stays silent");
+    }
+
+    function test_midDrainCheckpoint_cantHideADrain() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        rv.exploitDrain(ATTACKER, 249e18); // under the threshold, so checkpoint runs
+        book.checkpoint(key);
+        rv.exploitDrain(ATTACKER, 187e18);
+        assertEq(rv.totalAssets(), 564e18, "43.6% gone");
+        assertTrue(book.poke(key), "the baseline didn't move, so it fires");
+    }
+
+    function test_midDrainRoll_cantHideADrain() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        vm.warp(block.timestamp + WINDOW / 2);
+        rv.exploitDrain(ATTACKER, 249e18);
+        book.checkpoint(key); // rolls in the middle of the drain
+        rv.exploitDrain(ATTACKER, 187e18);
+        assertTrue(book.poke(key), "the roll took the earlier low, not the drained value");
+    }
 }
