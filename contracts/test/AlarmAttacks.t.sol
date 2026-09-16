@@ -207,4 +207,40 @@ contract AlarmAttackTest is Base {
         rv.exploitDrain(ATTACKER, 187e18);
         assertTrue(book.poke(key), "the roll took the earlier low, not the drained value");
     }
+
+    function test_flashDeposit_cantResetATrippedDrain() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        vm.warp(block.timestamp + WINDOW / 2);
+        rv.exploitDrain(ATTACKER, 350e18);
+        assertTrue(book.check(key), "tripped");
+        book.checkpoint(key);
+        asset.mint(address(fa), 100e18);
+        fa.flash(book, rv, key, 100e18); // 750 for one call, so the tripped check passes
+        assertTrue(book.check(key), "still tripped against the real baseline");
+    }
+
+    function test_samplesDuringATrippedDrain_cantLowerTheNextBaseline() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        rv.exploitDrain(ATTACKER, 350e18);
+        vm.warp(block.timestamp + 600);
+        book.checkpoint(key); // tripped, so this must not record the drained value as a low
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key);
+        assertTrue(book.check(key), "still measured against the level before the drain");
+    }
+
+    function test_quietVault_baselineFollowsRealGrowth() public {
+        _deposit(OWNER, 1000e18);
+        bytes32 key = _drainKey();
+        _period(key);
+        _deposit(KEEPER, 1000e18);
+        _period(key);
+        _period(key);
+        (,,,, uint256 snap) = book.state(key);
+        assertEq(snap, 2000e18, "lasting deposits raise the baseline after a full period");
+    }
 }
