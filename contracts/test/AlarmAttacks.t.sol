@@ -359,4 +359,53 @@ contract AlarmAttackTest is Base {
         vm.prank(OWNER);
         id = router.arm(_params(address(tv), 1, 100, _keys(pauseKey)));
     }
+
+    function test_feedChangeAfterArming_cantReachAnArmedPosition() public {
+        (MockERC20 t, MockVault tv, bytes32 id) = _tokenPosition();
+        MockFeed low = new MockFeed(1e3);
+        vm.startPrank(ADMIN);
+        router.setFeed(address(t), address(low), type(uint32).max, 18);
+        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(0xE71), uint24(500), address(stable)));
+        vm.stopPrank();
+        swap.setRate(1e3);
+        vm.warp(block.timestamp + 1);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(id, pauseKey, 0);
+        assertEq(t.balanceOf(OWNER), 100e18, "the raw token, not the hostile swap");
+        assertEq(stable.balanceOf(OWNER), 0, "nothing swapped");
+        assertEq(tv.balanceOf(OWNER), 0, "out");
+    }
+
+    function _onlyFeed() internal {
+        vm.prank(ADMIN);
+        router.setFeed(address(0x1), address(stableFeed), 3600, 18);
+    }
+
+    function _onlyRoute() internal {
+        vm.prank(ADMIN);
+        router.setRoute(address(0x1), "");
+    }
+
+    function test_aFeedChangeAlone_turnsOffSwapsUntilReArm() public {
+        MockERC20 t = _swappable();
+        _onlyFeed();
+        _exitSwappable();
+        assertEq(t.balanceOf(OWNER), 100e18, "raw");
+    }
+
+    function test_aRouteChangeAlone_turnsOffSwapsUntilReArm() public {
+        MockERC20 t = _swappable();
+        _onlyRoute();
+        _exitSwappable();
+        assertEq(t.balanceOf(OWNER), 100e18, "raw");
+    }
+
+    function test_withNoChange_theSwapRuns() public {
+        MockERC20 t = _swappable();
+        _exitSwappable();
+        assertEq(t.balanceOf(OWNER), 0, "swapped");
+    }
+
+    bytes32 internal swapPos;
 }
