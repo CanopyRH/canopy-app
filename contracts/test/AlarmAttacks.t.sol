@@ -408,4 +408,45 @@ contract AlarmAttackTest is Base {
     }
 
     bytes32 internal swapPos;
+
+    /// @dev A position armed for the stablecoin harbour after a working feed and route are in place.
+    function _swappable() internal returns (MockERC20 t) {
+        t = new MockERC20(18);
+        MockVault tv = new MockVault(t, 1e18);
+        vm.startPrank(ADMIN);
+        router.setFeed(address(t), address(stableFeed), 3600, 18);
+        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(stable)));
+        vm.stopPrank();
+        stableFeed.set(1e8, block.timestamp);
+        swap.setRate(1e6);
+        tv.deposit(OWNER, 100e18);
+        vm.prank(OWNER);
+        tv.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        swapPos = router.arm(_params(address(tv), 1, 100, _keys(pauseKey)));
+    }
+
+    function _exitSwappable() internal {
+        vm.warp(block.timestamp + 1);
+        _fireAlarm();
+        vm.prank(KEEPER);
+        router.exit(swapPos, pauseKey, 0);
+    }
+
+    function test_badFeed_deliversRaw_forNoCodeAndOverflow() public {
+        MockERC20 t = new MockERC20(18);
+        MockVault tv = new MockVault(t, 1e18);
+        vm.startPrank(ADMIN);
+        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(stable)));
+        vm.expectRevert(ExitRouter.BadFeed.selector);
+        router.setFeed(address(t), address(0xDEAD), 3600, 18);
+        vm.expectRevert(ExitRouter.BadFeed.selector);
+        router.setFeed(address(t), address(stableFeed), 3600, 37);
+        router.setFeed(address(t), address(new MockFeed(type(int256).max)), 3600, 18);
+        vm.stopPrank();
+        bytes32 id = _setup(OWNER, tv, 1e18, 1, 100);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw delivery, not a revert");
+    }
 }
