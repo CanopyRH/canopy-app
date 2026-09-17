@@ -330,4 +330,33 @@ contract AlarmAttackTest is Base {
         router.exit(id, bytes32(0), 0);
         assertEq(stable.balanceOf(OWNER), 100e6, "paid");
     }
+
+    function test_afterDisarmAll_ownerExits_butNoThirdParty() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, 0, 0);
+        vm.warp(block.timestamp + 1);
+        _fireAlarm();
+        vm.prank(OWNER);
+        router.disarmAll();
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(id, pauseKey, 0);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(stable.balanceOf(OWNER), 100e6, "paid");
+    }
+
+    function test_unknownPosition_reverts() public {
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(keccak256("nothing"), bytes32(0), 0);
+    }
+
+    function _tokenPosition() internal returns (MockERC20 t, MockVault tv, bytes32 id) {
+        t = new MockERC20(18);
+        tv = new MockVault(t, 1e18);
+        tv.deposit(OWNER, 100e18);
+        vm.prank(OWNER);
+        tv.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        id = router.arm(_params(address(tv), 1, 100, _keys(pauseKey)));
+    }
 }
