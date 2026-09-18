@@ -34,4 +34,43 @@ contract Timelock {
         if (msg.sender != PROPOSER) revert NotProposer();
         _;
     }
+
+    function idOf(address target, uint256 value, bytes calldata data, bytes32 salt) public pure returns (bytes32) {
+        return keccak256(abi.encode(target, value, data, salt));
+    }
+
+    function schedule(address target, uint256 value, bytes calldata data, bytes32 salt)
+        external
+        onlyProposer
+        returns (bytes32 id)
+    {
+        id = idOf(target, value, data, salt);
+        if (eta[id] != 0) revert AlreadyScheduled();
+        eta[id] = block.timestamp + DELAY;
+        emit Scheduled(id, target, value, data, salt, eta[id]);
+    }
+
+    function cancel(bytes32 id) external onlyProposer {
+        delete eta[id];
+        emit Cancelled(id);
+    }
+
+    function execute(address target, uint256 value, bytes calldata data, bytes32 salt)
+        external
+        payable
+        onlyProposer
+        returns (bytes memory ret)
+    {
+        bytes32 id = idOf(target, value, data, salt);
+        uint256 t = eta[id];
+        if (t == 0 || block.timestamp < t) revert NotReady();
+        if (block.timestamp > t + GRACE) revert Lapsed();
+        delete eta[id];
+        bool ok;
+        (ok, ret) = target.call{value: value}(data);
+        if (!ok) revert CallFailed(ret);
+        emit Executed(id);
+    }
+
+    receive() external payable {}
 }
