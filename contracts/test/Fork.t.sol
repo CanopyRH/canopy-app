@@ -167,4 +167,46 @@ contract ForkTest {
             }
         }
     }
+
+    function test_fork_realOwnerExit() public {
+        if (block.chainid != 4663) return;
+        address h = holders[3];
+        uint256 shares = IERC20(address(VAULT)).balanceOf(h);
+        uint256 expected = VAULT.convertToAssets(shares);
+        require(expected >= 1_000e6, "holder still holds a real position, so refresh the list if this fails");
+        bytes32 id = _arm(h);
+        uint256 before = USDG.balanceOf(h);
+        vm.prank(h);
+        router.exit(id, bytes32(0), 0);
+        uint256 got = USDG.balanceOf(h) - before;
+        require(got + 1e6 >= expected && got <= expected + 1e6, "paid fair value");
+        require(IERC20(address(VAULT)).balanceOf(h) == 0, "all shares redeemed");
+        require(USDG.balanceOf(address(router)) == 0, "no router residue");
+        require(IERC20(address(VAULT)).balanceOf(address(adapter)) == 0, "no adapter residue");
+        emit log_named_uint("owner exit USDG", got / 1e6);
+    }
+
+    function test_fork_keeperExitPaysOwnerOnly() public {
+        if (block.chainid != 4663) return;
+        address h = holders[1];
+        bytes32 id = _arm(h);
+        _fire();
+        uint256 before = USDG.balanceOf(h);
+        vm.prank(KEEPER);
+        router.exit(id, key, 0);
+        require(USDG.balanceOf(h) > before, "owner paid");
+        require(USDG.balanceOf(KEEPER) == 0, "keeper paid nothing");
+        emit log_named_uint("keeper exit USDG", (USDG.balanceOf(h) - before) / 1e6);
+    }
+
+    function test_fork_partialExitReturnsRest() public {
+        if (block.chainid != 4663) return;
+        address h = holders[2];
+        uint256 shares = IERC20(address(VAULT)).balanceOf(h);
+        bytes32 id = _arm(h);
+        _fire();
+        vm.prank(KEEPER);
+        router.exit(id, key, shares / 4);
+        require(IERC20(address(VAULT)).balanceOf(h) == shares - shares / 4, "rest stays with the owner");
+    }
 }
