@@ -209,4 +209,41 @@ contract ForkTest {
         router.exit(id, key, shares / 4);
         require(IERC20(address(VAULT)).balanceOf(h) == shares - shares / 4, "rest stays with the owner");
     }
+
+    function test_fork_penaltyIsZero() public view {
+        if (block.chainid != 4663) return;
+        require(IVaultV2(address(VAULT)).forceDeallocatePenalty(VAULT_ADAPTER) == 0, "penalty is 0");
+    }
+
+    function test_fork_keeperBundleRaisesExitCapacity() public {
+        if (block.chainid != 4663) return;
+        for (uint256 i; i < holders.length; ++i) {
+            _arm(holders[i]);
+        }
+        _fire();
+        require(IERC20(address(VAULT)).balanceOf(KEEPER) == 0, "keeper holds no shares");
+
+        uint256 snap = vm.snapshotState();
+        (uint256 plain, uint256 okA, uint256 failA) = _exitAll();
+        vm.revertToState(snap);
+
+        uint256 idleBefore = USDG.balanceOf(address(VAULT));
+        (uint256 moved, uint256 calls) = _keeperDeallocate();
+        uint256 idleAfter = USDG.balanceOf(address(VAULT));
+        (uint256 bundled, uint256 okB, uint256 failB) = _exitAll();
+
+        emit log_named_uint("plain USDG", plain / 1e6);
+        emit log_named_uint("plain ok", okA);
+        emit log_named_uint("plain failed", failA);
+        emit log_named_uint("deallocate calls", calls);
+        emit log_named_uint("moved USDG", moved / 1e6);
+        emit log_named_uint("idle gain USDG", (idleAfter - idleBefore) / 1e6);
+        emit log_named_uint("bundled USDG", bundled / 1e6);
+        emit log_named_uint("bundled ok", okB);
+        emit log_named_uint("bundled failed", failB);
+        require(calls > 0, "keeper with no shares could deallocate");
+        require(idleAfter > idleBefore, "idle rose");
+        // Live liquidity moves. When every wallet already fits, the bundle can't add to that, only never reduce it.
+        require(bundled >= plain && okB >= okA, "bundle never lowers capacity");
+    }
 }
