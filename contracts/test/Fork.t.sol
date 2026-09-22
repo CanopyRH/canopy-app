@@ -116,4 +116,55 @@ contract ForkTest {
             })
         );
     }
+
+    function _fire() internal {
+        bytes32 ev = keccak256("evidence");
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 d = book.attestDigest(key, ev, dl);
+        (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(lo, d);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(hi, d);
+        g[0] = abi.encodePacked(r1, s1, v1);
+        g[1] = abi.encodePacked(r2, s2, v2);
+        book.fireByQuorum(key, ev, dl, s, g);
+    }
+
+    /// @dev Moves every other market's free liquidity into vault idle, from a wallet holding no shares.
+    function _keeperDeallocate() internal returns (uint256 moved, uint256 calls) {
+        uint256 n = IMarketAdapter(VAULT_ADAPTER).marketIdsLength();
+        for (uint256 i; i < n; ++i) {
+            bytes32 id = IMarketAdapter(VAULT_ADAPTER).marketIds(i);
+            (uint128 sup,, uint128 bor,,,) = IMorpho(MORPHO).market(id);
+            uint256 free = uint256(sup) - bor;
+            if (free < 1_000e6) continue;
+            (address a, address b, address c, address d, uint256 e) = IMorpho(MORPHO).idToMarketParams(id);
+            uint256 amt = (free * 999) / 1000;
+            vm.prank(KEEPER);
+            try IVaultV2(address(VAULT)).forceDeallocate(VAULT_ADAPTER, abi.encode(a, b, c, d, e), amt, KEEPER) {
+                moved += amt;
+                calls++;
+            } catch {}
+        }
+    }
+
+    function _exitAll() internal returns (uint256 total, uint256 ok, uint256 failed) {
+        uint256 before;
+        for (uint256 i; i < holders.length; ++i) {
+            address h = holders[i];
+            bytes32 id = router.positionId(h, address(adapter), address(VAULT), 0);
+            before = USDG.balanceOf(h);
+            vm.prank(KEEPER);
+            try router.exit(id, key, 0) {
+                total += USDG.balanceOf(h) - before;
+                ok++;
+                require(IERC20(address(VAULT)).balanceOf(h) == 0, "shares left");
+            } catch {
+                failed++;
+            }
+        }
+    }
 }
