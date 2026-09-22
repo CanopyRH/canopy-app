@@ -78,4 +78,42 @@ contract ForkTest {
     bytes32 internal key;
     uint256 internal constant PK_A = 0xA1;
     uint256 internal constant PK_B = 0xB2;
+
+    function setUp() public {
+        if (block.chainid != 4663) return;
+        book = new AlarmBook(address(this));
+        router = new ExitRouter(
+            address(USDG), WETH, SWAP, address(book), address(this), address(this), FEED, 90_000,
+            block.timestamp + 365 days
+        );
+        adapter = new ERC4626Adapter(address(router));
+        router.setAdapter(address(adapter), true);
+        book.setWatcher(vm.addr(PK_A), true);
+        book.setWatcher(vm.addr(PK_B), true);
+        key = book.register(
+            AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: address(VAULT), threshold: 2, window: 0, a: 0, b: 0})
+        );
+    }
+
+    function _keys() internal view returns (bytes32[] memory a) {
+        a = new bytes32[](1);
+        a[0] = key;
+    }
+
+    function _arm(address h) internal returns (bytes32 id) {
+        vm.prank(h);
+        require(IERC20(address(VAULT)).approve(address(router), type(uint256).max), "approve");
+        vm.prank(h);
+        id = router.arm(
+            ExitRouter.ArmParams({
+                adapter: address(adapter),
+                target: address(VAULT),
+                tokenId: 0,
+                harbour: 0,
+                maxSlipBps: 0,
+                termsHash: keccak256("terms-v1"),
+                keys: _keys()
+            })
+        );
+    }
 }
