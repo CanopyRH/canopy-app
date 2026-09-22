@@ -246,4 +246,40 @@ contract ForkTest {
         // Live liquidity moves. When every wallet already fits, the bundle can't add to that, only never reduce it.
         require(bundled >= plain && okB >= okA, "bundle never lowers capacity");
     }
+
+    function _deallocateCall(bytes32 id, uint256 amt, address onBehalf) internal view returns (IMulticall3.Call3 memory) {
+        (address a, address b, address c, address d, uint256 e) = IMorpho(MORPHO).idToMarketParams(id);
+        bytes memory data = abi.encode(a, b, c, d, e);
+        return IMulticall3.Call3({
+            target: address(VAULT),
+            allowFailure: true,
+            callData: abi.encodeCall(IVaultV2.forceDeallocate, (VAULT_ADAPTER, data, amt, onBehalf))
+        });
+    }
+
+    function _deallocateCalls(address onBehalf) internal view returns (IMulticall3.Call3[] memory out) {
+        uint256 n = IMarketAdapter(VAULT_ADAPTER).marketIdsLength();
+        IMulticall3.Call3[] memory calls = new IMulticall3.Call3[](n);
+        uint256 k;
+        for (uint256 i; i < n; ++i) {
+            bytes32 id = IMarketAdapter(VAULT_ADAPTER).marketIds(i);
+            (uint128 sup,, uint128 bor,,,) = IMorpho(MORPHO).market(id);
+            uint256 free = uint256(sup) - bor;
+            if (free < 1_000e6) continue;
+            calls[k++] = _deallocateCall(id, (free * 999) / 1000, onBehalf);
+        }
+        out = new IMulticall3.Call3[](k);
+        for (uint256 i; i < k; ++i) {
+            out[i] = calls[i];
+        }
+    }
+
+    function _exitCall(address h) internal view returns (IMulticall3.Call3 memory) {
+        bytes32 id = router.positionId(h, address(adapter), address(VAULT), 0);
+        return IMulticall3.Call3({
+            target: address(router),
+            allowFailure: true,
+            callData: abi.encodeCall(ExitRouter.exit, (id, key, 0))
+        });
+    }
 }
