@@ -282,4 +282,47 @@ contract ForkTest {
             callData: abi.encodeCall(ExitRouter.exit, (id, key, 0))
         });
     }
+
+    /// @dev One atomic transaction: deallocate, then exit, through Multicall3, from a keeper with no shares.
+    function test_fork_atomicMulticallBundle() public {
+        if (block.chainid != 4663) return;
+        IMulticall3 mc = IMulticall3(0xcA11bde05977b3631167028862bE2a173976CA11);
+        for (uint256 i; i < holders.length; ++i) {
+            _arm(holders[i]);
+        }
+        _fire();
+        IMulticall3.Call3[] memory d = _deallocateCalls(address(mc));
+        IMulticall3.Call3[] memory all = new IMulticall3.Call3[](d.length + holders.length);
+        uint256[] memory before = new uint256[](holders.length);
+        for (uint256 i; i < d.length; ++i) {
+            all[i] = d[i];
+        }
+        for (uint256 i; i < holders.length; ++i) {
+            before[i] = USDG.balanceOf(holders[i]);
+            all[d.length + i] = _exitCall(holders[i]);
+        }
+        vm.prank(KEEPER);
+        IMulticall3.Result[] memory res = mc.aggregate3(all);
+        uint256 okE;
+        uint256 total;
+        for (uint256 i; i < holders.length; ++i) {
+            if (res[d.length + i].success) okE++;
+            total += USDG.balanceOf(holders[i]) - before[i];
+        }
+        emit log_named_uint("atomic deallocate calls", d.length);
+        emit log_named_uint("atomic exits ok", okE);
+        emit log_named_uint("atomic USDG", total / 1e6);
+        require(USDG.balanceOf(address(mc)) == 0, "multicall keeps nothing");
+        require(USDG.balanceOf(KEEPER) == 0, "keeper keeps nothing");
+        require(okE == holders.length, "all exits landed in one transaction");
+    }
+
+    /// @dev The launch list in web/src/config.ts. Each must give USDG back through the keeper path, from a fresh depositor.
+    address[5] internal launchVaults = [
+        0xBeEff033F34C046626B8D0A041844C5d1A5409dd, // Steakhouse USDG
+        0xBEEff039907422219Fb367e525954DDC092854d9, // Grove x Steakhouse USDG
+        0xd0dACE70434fF7567b108B5a8c2a36C150C830FE, // Galaxy USDG RH Stock Tokens
+        0x8c258F25fc6fBe3f01ccC828E2C3840A46a4a9A2, // Yearn Stonk USDG
+        0x37788ff0c1d4e45A7FE06BC7e71e0cc00121d0A8 // Purinta USDG
+    ];
 }
