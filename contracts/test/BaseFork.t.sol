@@ -161,4 +161,48 @@ contract BaseForkTest {
         require(IERC20(v).balanceOf(address(router)) == 0, "router holds no shares");
         require(IERC20(v).balanceOf(address(adapter)) == 0, "adapter holds no shares");
     }
+
+    /// @dev Gates that were abdicated can never be set, so they cannot block an exit on these vaults.
+    function test_base_largestV2VaultsAbdicatedGates() public view {
+        if (block.chainid != 8453) return;
+        address[4] memory v = [
+            0xbeef0786756810478b88982DE00F3CD7fdB8e7c7,
+            0xbeeff2490FEffa212faC2f6553682C219E6a8845,
+            0xbeef0e0834849aCC03f0089F01f4F1Eeb06873C9,
+            0x050cE30b927Da55177A4914EC73480238BAD56f0
+        ];
+        for (uint256 i; i < v.length; ++i) {
+            IVaultV2Admin g = IVaultV2Admin(v[i]);
+            require(g.abdicated(IVaultV2Admin.setSendSharesGate.selector), "send abdicated");
+            require(g.abdicated(IVaultV2Admin.setReceiveSharesGate.selector), "receive abdicated");
+            require(g.abdicated(IVaultV2Admin.setReceiveAssetsGate.selector), "assets abdicated");
+        }
+    }
+
+    /// @dev Real Uniswap pool and real feed: exits a WETH vault into USDC.
+    function test_base_swapOnRealPool() public {
+        if (block.chainid != 8453) return;
+        router.setFeed(WETH, ETH_FEED, 3600, 18);
+        router.setRoute(WETH, abi.encodePacked(WETH, uint24(500), address(USDC)));
+        address v = address(bytes20(hex"a0e430870c4604ccfc7b38ca7845b1ff653d0ff1"));
+        address h = address(bytes20(hex"a9911182421b6bad13d188914d602f7924de840e"));
+        uint256 shares = IERC20(v).balanceOf(h);
+        uint256 wethOut = IERC4626(v).convertToAssets(shares);
+        (bool ok, uint256 minOut) = router.quoteMinOut(WETH, wethOut, 100);
+        require(ok, "quote ok");
+        bytes32 id = _arm(v, h, 1, 1000);
+        _fire();
+        uint256 before = USDC.balanceOf(h);
+        uint256 wBefore = IERC20(WETH).balanceOf(h);
+        vm.prank(KEEPER);
+        router.exit(id, key, 0);
+        uint256 got = USDC.balanceOf(h) - before;
+        emit log_named_uint("WETH milli out", wethOut / 1e15);
+        emit log_named_uint("USDC received", got / 1e6);
+        emit log_named_uint("oracle floor at 1%", minOut / 1e6);
+        require(got >= minOut, "at or above the 1% floor");
+        require(IERC20(WETH).balanceOf(h) == wBefore, "no raw WETH");
+        require(USDC.balanceOf(address(router)) == 0 && IERC20(WETH).balanceOf(address(router)) == 0, "no residue");
+        require(IERC20(WETH).allowance(address(router), SWAP) == 0, "approval cleared");
+    }
 }
