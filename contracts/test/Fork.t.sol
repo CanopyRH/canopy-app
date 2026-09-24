@@ -325,4 +325,53 @@ contract ForkTest {
         0x8c258F25fc6fBe3f01ccC828E2C3840A46a4a9A2, // Yearn Stonk USDG
         0x37788ff0c1d4e45A7FE06BC7e71e0cc00121d0A8 // Purinta USDG
     ];
+
+    function test_fork_everyLaunchVaultKeeperExit() public {
+        if (block.chainid != 4663) return;
+        for (uint256 i; i < launchVaults.length; ++i) {
+            address v = launchVaults[i];
+            address user = address(uint160(0xC0FFEE00 + i));
+            require(IERC4626(v).asset() == address(USDG), "USDG vault");
+            vm.prank(MORPHO); // Morpho Blue holds USDG, so it funds the test depositor.
+            require(USDG.transfer(user, 1_000e6), "fund");
+            vm.prank(user);
+            require(USDG.approve(v, 1_000e6), "approve vault");
+            vm.prank(user);
+            uint256 shares = IDeposit(v).deposit(1_000e6, user);
+            require(shares > 0, "deposit");
+            uint256 expected = IERC4626(v).convertToAssets(shares);
+
+            bytes32 k = book.register(
+                AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: v, threshold: 2, window: 0, a: 0, b: 0})
+            );
+            bytes32[] memory ks = new bytes32[](1);
+            ks[0] = k;
+            vm.prank(user);
+            require(IERC20(v).approve(address(router), type(uint256).max), "approve router");
+            vm.prank(user);
+            bytes32 id = router.arm(
+                ExitRouter.ArmParams({
+                    adapter: address(adapter), target: v, tokenId: 0, harbour: 0, maxSlipBps: 0,
+                    termsHash: keccak256("terms-v1"), keys: ks
+                })
+            );
+            bytes32 saved = key;
+            key = k;
+            _fire();
+            key = saved;
+
+            uint256 before = USDG.balanceOf(user);
+            vm.prank(KEEPER);
+            router.exit(id, k, 0);
+            uint256 got = USDG.balanceOf(user) - before;
+            require(got + 2 >= expected && got <= expected + 2, "fair value");
+            require(IERC20(v).balanceOf(user) == 0, "shares left");
+            require(USDG.balanceOf(KEEPER) == 0, "keeper paid nothing");
+            require(USDG.balanceOf(address(router)) == 0, "router residue");
+            require(IERC20(v).balanceOf(address(adapter)) == 0, "adapter residue");
+            emit log_named_uint("vault exit USDG", got / 1e6);
+        }
+    }
+
+    event log_named_uint(string key, uint256 val);
 }
