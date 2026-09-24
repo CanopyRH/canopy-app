@@ -111,4 +111,54 @@ contract BaseForkTest {
         g[1] = abi.encodePacked(r2, s2, v2);
         book.fireByQuorum(key, ev, dl, s, g);
     }
+
+    function test_base_realHolderKeeperExits_everyVault() public {
+        if (block.chainid != 8453) return;
+        _fire();
+        uint256 ran;
+        for (uint256 i; i < cases.length; ++i) {
+            Case memory c = cases[i];
+            uint256 shares = IERC20(c.vault).balanceOf(c.holder);
+            if (shares == 0) continue; // A real holder can leave. The other vaults still prove the path.
+            ++ran;
+            uint256 expected = IERC4626(c.vault).convertToAssets(shares);
+            bytes32 id = _arm(c.vault, c.holder, 0, 0);
+            uint256 before = USDC.balanceOf(c.holder);
+            uint256 keeperBefore = USDC.balanceOf(KEEPER);
+            vm.prank(KEEPER);
+            router.exit(id, key, 0);
+            uint256 got = USDC.balanceOf(c.holder) - before;
+            require(got + 2 >= expected && got <= expected + 2, string.concat("fair value ", c.name));
+            require(IERC20(c.vault).balanceOf(c.holder) == 0, string.concat("shares left ", c.name));
+            require(USDC.balanceOf(address(router)) == 0, "router residue");
+            require(USDC.balanceOf(KEEPER) == keeperBefore, "keeper paid");
+            require(IERC20(c.vault).balanceOf(address(adapter)) == 0, "adapter residue");
+            emit log_named_uint(c.name, got / 1e6);
+        }
+        require(ran * 2 > cases.length, "too few holders left, so refresh the list");
+    }
+
+    /// @dev A $300M+ V1 holder cannot fully exit, so the adapter's maxRedeem fallback runs on a live vault.
+    function test_base_v1FallbackRedeemsWhatIsLiquid() public {
+        if (block.chainid != 8453) return;
+        address v = 0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61;
+        address h = address(bytes20(hex"93904eec579e5bf7a57c2dd4afbea0f1c3e6a1d1"));
+        uint256 shares = IERC20(v).balanceOf(h);
+        uint256 maxS = IERC4626(v).maxRedeem(h);
+        emit log_named_uint("position USDC", IERC4626(v).convertToAssets(shares) / 1e6);
+        emit log_named_uint("maxRedeem USDC", IERC4626(v).convertToAssets(maxS) / 1e6);
+        bytes32 id = _arm(v, h, 0, 0);
+        _fire();
+        uint256 before = USDC.balanceOf(h);
+        vm.prank(KEEPER);
+        router.exit(id, key, 0);
+        uint256 got = USDC.balanceOf(h) - before;
+        uint256 left = IERC20(v).balanceOf(h);
+        emit log_named_uint("redeemed USDC", got / 1e6);
+        emit log_named_uint("shares left, USDC value", IERC4626(v).convertToAssets(left) / 1e6);
+        require(got > 0, "something came out");
+        require(USDC.balanceOf(address(router)) == 0, "router residue");
+        require(IERC20(v).balanceOf(address(router)) == 0, "router holds no shares");
+        require(IERC20(v).balanceOf(address(adapter)) == 0, "adapter holds no shares");
+    }
 }
