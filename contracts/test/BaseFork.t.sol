@@ -78,4 +78,37 @@ contract BaseForkTest {
         a = new bytes32[](1);
         a[0] = key;
     }
+
+    function _arm(address v, address h, uint8 harbour, uint16 slip) internal returns (bytes32 id) {
+        vm.prank(h);
+        IERC20(v).approve(address(router), type(uint256).max);
+        vm.prank(h);
+        id = router.arm(
+            ExitRouter.ArmParams({
+                adapter: address(adapter),
+                target: v,
+                tokenId: 0,
+                harbour: harbour,
+                maxSlipBps: slip,
+                termsHash: keccak256("terms-v1"),
+                keys: _keys()
+            })
+        );
+    }
+
+    function _fire() internal {
+        bytes32 ev = keccak256("evidence");
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 d = book.attestDigest(key, ev, dl);
+        (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(lo, d);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(hi, d);
+        g[0] = abi.encodePacked(r1, s1, v1);
+        g[1] = abi.encodePacked(r2, s2, v2);
+        book.fireByQuorum(key, ev, dl, s, g);
+    }
 }
