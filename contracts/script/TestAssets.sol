@@ -82,3 +82,47 @@ contract TestTimelock {
         require(ok, "call failed");
     }
 }
+
+/// @notice Testnet only. A plain 1:1 ERC-4626 vault with a pause switch, so a real alarm can fire on a live chain.
+contract TestVault {
+    string public constant name = "Canopy Test Vault";
+    string public constant symbol = "tVAULT";
+    uint8 public constant decimals = 6;
+    TestUSD public immutable token;
+    address public immutable owner;
+    address public immutable curator;
+    bool public paused;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(TestUSD token_) {
+        token = token_;
+        owner = msg.sender;
+        curator = msg.sender;
+    }
+
+    function asset() external view returns (address) {
+        return address(token);
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return token.balanceOf(address(this));
+    }
+
+    function convertToAssets(uint256 shares) external pure returns (uint256) {
+        return shares;
+    }
+
+    function maxRedeem(address who) external view returns (uint256) {
+        return balanceOf[who];
+    }
+
+    function setPaused(bool p) external {
+        require(msg.sender == owner, "owner");
+        paused = p;
+    }
+}
