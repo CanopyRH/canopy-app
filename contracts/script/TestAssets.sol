@@ -125,4 +125,48 @@ contract TestVault {
         require(msg.sender == owner, "owner");
         paused = p;
     }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256) {
+        token.transferFrom(msg.sender, address(this), assets);
+        totalSupply += assets;
+        balanceOf[receiver] += assets;
+        emit Transfer(address(0), receiver, assets);
+        return assets;
+    }
+
+    function redeem(uint256 shares, address receiver, address from) external returns (uint256) {
+        if (msg.sender != from) {
+            uint256 a = allowance[from][msg.sender];
+            if (a != type(uint256).max) allowance[from][msg.sender] = a - shares;
+        }
+        balanceOf[from] -= shares;
+        totalSupply -= shares;
+        emit Transfer(from, address(0), shares);
+        token.transfer(receiver, shares);
+        return shares;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _move(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 a = allowance[from][msg.sender];
+        if (a != type(uint256).max) allowance[from][msg.sender] = a - amount;
+        _move(from, to, amount);
+        return true;
+    }
+
+    function _move(address from, address to, uint256 amount) internal {
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(from, to, amount);
+    }
 }
