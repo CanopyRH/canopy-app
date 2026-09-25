@@ -43,3 +43,42 @@ contract TestUSD {
         emit Transfer(from, to, amount);
     }
 }
+
+/// @notice Testnet only. The real Timelock's flow, kept so test runs exercise a short delay. Never deploy to mainnet.
+contract TestTimelock {
+    address public immutable PROPOSER;
+    uint256 public immutable DELAY;
+
+    mapping(bytes32 => uint256) public eta;
+
+    constructor(address proposer, uint256 delay) {
+        PROPOSER = proposer;
+        DELAY = delay;
+    }
+
+    function idOf(address target, uint256 value, bytes calldata data, bytes32 salt) public pure returns (bytes32) {
+        return keccak256(abi.encode(target, value, data, salt));
+    }
+
+    function schedule(address target, uint256 value, bytes calldata data, bytes32 salt) external returns (bytes32 id) {
+        require(msg.sender == PROPOSER, "proposer");
+        id = idOf(target, value, data, salt);
+        require(eta[id] == 0, "scheduled");
+        eta[id] = block.timestamp + DELAY;
+    }
+
+    function execute(address target, uint256 value, bytes calldata data, bytes32 salt)
+        external
+        payable
+        returns (bytes memory ret)
+    {
+        require(msg.sender == PROPOSER, "proposer");
+        bytes32 id = idOf(target, value, data, salt);
+        uint256 t = eta[id];
+        require(t != 0 && block.timestamp >= t, "not ready");
+        delete eta[id];
+        bool ok;
+        (ok, ret) = target.call{value: value}(data);
+        require(ok, "call failed");
+    }
+}
