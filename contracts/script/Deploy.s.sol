@@ -78,4 +78,63 @@ contract Deploy {
         vm.stopBroadcast();
         check(c, d);
     }
+
+    function validate(Config memory c) public view {
+        if (c.proposer == address(0)) revert ZeroAddress("proposer");
+        if (c.guardian == address(0)) revert ZeroAddress("guardian");
+        if (c.proposer == c.guardian) revert SameAdmin();
+        // Personal wallets as admin are only ever allowed off mainnet.
+        bool strict = isMainnet() || !c.allowEoaAdmin;
+        if (strict && c.proposer.code.length == 0) revert AdminMustBeContract("proposer");
+        if (strict && c.guardian.code.length == 0) revert AdminMustBeContract("guardian");
+
+        if (c.stable.code.length == 0) revert NoCode("stable");
+        if (c.weth.code.length == 0) revert NoCode("weth");
+        if (c.swapRouter.code.length == 0) revert NoCode("swapRouter");
+        if (c.stableFeed.code.length == 0) revert NoCode("stableFeed");
+        if (IERC20(c.stable).decimals() != 6) revert BadStable();
+
+        if (c.heartbeat == 0 || c.heartbeat > 2 days) revert BadHeartbeat();
+        IAggregatorV3 feed = IAggregatorV3(c.stableFeed);
+        (, int256 answer,, uint256 updatedAt,) = feed.latestRoundData();
+        if (feed.decimals() != 8 || answer < 0.9e8 || answer > 1.1e8) revert BadFeed();
+        if (block.timestamp - updatedAt > c.heartbeat) revert BadFeed();
+
+        if (c.adminExpiry < block.timestamp + MIN_ADMIN_LIFE || c.adminExpiry > block.timestamp + MAX_ADMIN_LIFE) {
+            revert BadExpiry();
+        }
+    }
+
+    function isMainnet() public view returns (bool) {
+        return block.chainid == BASE_MAINNET || block.chainid == ROBINHOOD_MAINNET;
+    }
+
+    function deploy(Config memory c) public returns (Deployed memory d) {
+        d.timelock = new Timelock(c.proposer, c.timelockDelay);
+        d.book = new AlarmBook(address(d.timelock));
+        d.router = new ExitRouter(
+            c.stable,
+            c.weth,
+            c.swapRouter,
+            address(d.book),
+            address(d.timelock),
+            c.guardian,
+            c.stableFeed,
+            c.heartbeat,
+            c.adminExpiry
+        );
+        d.adapter = new ERC4626Adapter(address(d.router));
+    }
+
+    function check(Config memory c, Deployed memory d) public view {
+        if (d.timelock.PROPOSER() != c.proposer || d.timelock.DELAY() != c.timelockDelay) revert WiringFailed("timelock");
+        if (d.book.ADMIN() != address(d.timelock)) revert WiringFailed("book admin");
+        if (d.router.ADMIN() != address(d.timelock)) revert WiringFailed("router admin");
+        if (d.router.guardian() != c.guardian) revert WiringFailed("guardian");
+        if (address(d.router.ALARMS()) != address(d.book)) revert WiringFailed("alarms");
+        if (d.router.ADMIN_EXPIRY() != c.adminExpiry) revert WiringFailed("expiry");
+        if (d.router.STABLE() != c.stable) revert WiringFailed("stable");
+        if (d.adapter.ROUTER() != address(d.router)) revert WiringFailed("adapter");
+        if (d.router.adapterAllowed(address(d.adapter))) revert WiringFailed("adapter must start disabled");
+    }
 }
