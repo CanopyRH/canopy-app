@@ -47,4 +47,35 @@ contract Deploy {
         ExitRouter router;
         ERC4626Adapter adapter;
     }
+
+    error BadChain();
+    error NoCode(string what);
+    error SameAdmin();
+    error ZeroAddress(string what);
+    error AdminMustBeContract(string what);
+    error BadExpiry();
+    error BadStable();
+    error BadFeed();
+    error BadHeartbeat();
+    error WiringFailed(string what);
+
+    function run() external returns (Deployed memory d) {
+        Config memory c = Config({
+            stable: vm.envAddress("STABLE"),
+            weth: vm.envAddress("WETH"),
+            swapRouter: vm.envAddress("SWAP_ROUTER"),
+            stableFeed: vm.envAddress("STABLE_FEED"),
+            proposer: vm.envAddress("PROPOSER_MULTISIG"),
+            guardian: vm.envAddress("GUARDIAN_MULTISIG"),
+            heartbeat: uint32(vm.envUint("STABLE_FEED_HEARTBEAT")),
+            adminExpiry: vm.envUint("ADMIN_EXPIRY"),
+            timelockDelay: vm.envOr("TIMELOCK_DELAY", uint256(0)),
+            allowEoaAdmin: vm.envOr("ALLOW_EOA_ADMIN", false)
+        });
+        validate(c);
+        vm.startBroadcast();
+        d = deploy(c);
+        vm.stopBroadcast();
+        check(c, d);
+    }
 }
