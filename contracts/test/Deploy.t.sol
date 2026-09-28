@@ -33,4 +33,48 @@ contract DeployTest {
         proposer = address(new ContractAdmin());
         guardian = address(new ContractAdmin());
     }
+
+    function _cfg() internal view returns (Deploy.Config memory) {
+        return Deploy.Config({
+            stable: address(stable),
+            weth: address(weth),
+            swapRouter: address(weth),
+            stableFeed: address(feed),
+            proposer: proposer,
+            guardian: guardian,
+            heartbeat: 90_000,
+            adminExpiry: block.timestamp + 365 days,
+            timelockDelay: 0,
+            allowEoaAdmin: false
+        });
+    }
+
+    function test_validConfigDeploysAndWires() public {
+        Deploy.Config memory c = _cfg();
+        script.validate(c);
+        Deploy.Deployed memory d = script.deploy(c);
+        script.check(c, d);
+        require(!d.router.adapterAllowed(address(d.adapter)), "adapter starts disabled");
+    }
+
+    function test_rejectsPersonalWalletAdminByDefault() public {
+        Deploy.Config memory c = _cfg();
+        c.proposer = EOA;
+        vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "proposer"));
+        script.validate(c);
+        c = _cfg();
+        c.guardian = EOA;
+        vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "guardian"));
+        script.validate(c);
+    }
+
+    function test_eoaOverrideNeverWorksOnMainnet() public {
+        Deploy.Config memory c = _cfg();
+        c.proposer = EOA;
+        c.allowEoaAdmin = true;
+        script.validate(c); // allowed on a test chain
+        vm.chainId(8453);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "proposer"));
+        script.validate(c);
+    }
 }
