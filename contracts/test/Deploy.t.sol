@@ -120,4 +120,49 @@ contract DeployTest {
         vm.expectRevert(abi.encodeWithSelector(Deploy.NoCode.selector, "swapRouter"));
         script.validate(c);
     }
+
+    function test_rejectsWrongDecimalStable() public {
+        Deploy.Config memory c = _cfg();
+        c.stable = address(weth);
+        vm.expectRevert(Deploy.BadStable.selector);
+        script.validate(c);
+    }
+
+    function test_rejectsBadOrStaleFeed() public {
+        Deploy.Config memory c = _cfg();
+        feed.set(0.5e8, block.timestamp);
+        vm.expectRevert(Deploy.BadFeed.selector);
+        script.validate(c);
+        feed.set(1e8, block.timestamp - 90_001);
+        vm.expectRevert(Deploy.BadFeed.selector);
+        script.validate(c);
+    }
+
+    function test_rejectsBadHeartbeat() public {
+        Deploy.Config memory c = _cfg();
+        c.heartbeat = 0;
+        vm.expectRevert(Deploy.BadHeartbeat.selector);
+        script.validate(c);
+        c.heartbeat = 3 days;
+        vm.expectRevert(Deploy.BadHeartbeat.selector);
+        script.validate(c);
+    }
+
+    function test_rejectsExpiryOutsideRange() public {
+        Deploy.Config memory c = _cfg();
+        c.adminExpiry = block.timestamp + 30 days;
+        vm.expectRevert(Deploy.BadExpiry.selector);
+        script.validate(c);
+        c.adminExpiry = block.timestamp + 3650 days;
+        vm.expectRevert(Deploy.BadExpiry.selector);
+        script.validate(c);
+    }
+
+    function test_checkCatchesWrongWiring() public {
+        Deploy.Config memory c = _cfg();
+        Deploy.Deployed memory d = script.deploy(c);
+        c.guardian = address(0xBEEF);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.WiringFailed.selector, "guardian"));
+        script.check(c, d);
+    }
 }
