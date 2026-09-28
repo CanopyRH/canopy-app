@@ -77,4 +77,47 @@ contract DeployTest {
         vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "proposer"));
         script.validate(c);
     }
+
+    function test_eoaOverrideNeverWorksOnRobinhood() public {
+        Deploy.Config memory c = _cfg();
+        c.guardian = EOA;
+        c.allowEoaAdmin = true;
+        vm.chainId(4663);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "guardian"));
+        script.validate(c);
+    }
+
+    function test_delayIsASetting() public {
+        Deploy.Config memory c = _cfg();
+        Deploy.Deployed memory d = script.deploy(c);
+        require(d.timelock.DELAY() == 0, "no delay by default");
+        c.timelockDelay = 6 hours;
+        d = script.deploy(c);
+        script.check(c, d);
+        require(d.timelock.DELAY() == 6 hours, "delay set");
+        c.timelockDelay = 0;
+        vm.expectRevert(abi.encodeWithSelector(Deploy.WiringFailed.selector, "timelock"));
+        script.check(c, d);
+    }
+
+    function test_rejectsSameProposerAndGuardian() public {
+        Deploy.Config memory c = _cfg();
+        c.guardian = c.proposer;
+        vm.expectRevert(Deploy.SameAdmin.selector);
+        script.validate(c);
+    }
+
+    function test_rejectsZeroAdmins() public {
+        Deploy.Config memory c = _cfg();
+        c.proposer = address(0);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.ZeroAddress.selector, "proposer"));
+        script.validate(c);
+    }
+
+    function test_rejectsMissingContracts() public {
+        Deploy.Config memory c = _cfg();
+        c.swapRouter = address(0x1234);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.NoCode.selector, "swapRouter"));
+        script.validate(c);
+    }
 }
