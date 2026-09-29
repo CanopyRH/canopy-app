@@ -1,0 +1,23 @@
+{
+  "name": "canopy-services",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "banned-words": "bun ../tools/banned-words.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.135.0",
+    "grammy": "1.46.0",
+    "hono": "4.13.13",
+    "viem": "2.57.7",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
+    "@types/bun": "1.3.1",
+    "typescript": "5.9.3"
+  },
+  "trustedDependencies": []
+}
