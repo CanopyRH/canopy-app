@@ -53,3 +53,36 @@ export async function applyRouterLog(r: Repo, log: Log) {
       break;
   }
 }
+
+/** Credits exact plan payments. Anything else stays uncredited for manual review. Replays credit nothing twice. */
+export async function applyPayment(r: Repo, log: Log, now: number) {
+  const ev = decodeEventLog({ abi: erc20Abi, eventName: "Transfer", data: log.data, topics: log.topics as never });
+  const wallet = lc(ev.args.from);
+  const days = daysFor(ev.args.value);
+  const fresh = await r.recordPayment({
+    tx: log.transactionHash!, logIndex: log.logIndex!, wallet, amount: ev.args.value, credited: days !== null, at: now,
+  });
+  if (fresh) await r.applyPayment(log.transactionHash!, log.logIndex!, wallet, days === null ? null : extendPlan(await r.paidUntil(wallet), days, now));
+  return { wallet, days, fresh };
+}
+
+export interface FiredAlarm { key: Hex; target: Address; evidence: Hex; tx: Hex | null }
+
+/** Records a detector so the watcher knows which quorum keys exist. Returns null for other events. */
+export async function applyRegistered(db: Db, log: Log): Promise<boolean> {
+  const ev = decodeEventLog({ abi: alarmBookAbi, data: log.data, topics: log.topics as never, strict: false });
+  if (ev.eventName !== "Registered") return false;
+  const a = ev.args as unknown as { key: Hex; kind: number; target: Address; threshold: bigint; window: number; a: Hex; b: Hex };
+  await db.query(
+    `INSERT INTO detectors (key, kind, target, threshold, window_s, a, b) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+    [a.key, a.kind, a.target.toLowerCase(), a.threshold.toString(), a.window, a.a, a.b],
+  );
+  return true;
+}
+
+export function decodeFired(log: Log): FiredAlarm | null {
+  const ev = decodeEventLog({ abi: alarmBookAbi, data: log.data, topics: log.topics as never, strict: false });
+  if (ev.eventName !== "Fired") return null;
+  const a = ev.args as { key: Hex; target: Address; evidence: Hex };
+  return { key: a.key, target: a.target, evidence: a.evidence, tx: log.transactionHash };
+}
