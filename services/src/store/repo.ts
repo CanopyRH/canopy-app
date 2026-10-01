@@ -245,3 +245,5 @@ export const repo = (db: Db) => ({
     return (await db.query<{ numbers: unknown; text: string; updated_at: string }>(`SELECT numbers, text, updated_at FROM risk_cards WHERE target=$1`, [target]))[0] ?? null;
   },
 });
+
+export type Repo = ReturnType<typeof repo>;
