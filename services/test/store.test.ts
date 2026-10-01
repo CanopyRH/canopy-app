@@ -33,3 +33,41 @@ beforeEach(async () => {
   db = await freshDb();
   r = repo(db);
 });
+
+describe("indexer", () => {
+  test("Armed creates a position with its keys, and replays are harmless", async () => {
+    await applyRouterLog(r, armedLog());
+    await applyRouterLog(r, armedLog());
+    const pos = await r.armedWith(K);
+    expect(pos).toHaveLength(1);
+    expect(pos[0]!.owner).toBe(A.toLowerCase());
+    expect(pos[0]!.target).toBe(V.toLowerCase());
+  });
+
+  test("Disarmed removes a position from keeper work", async () => {
+    await applyRouterLog(r, armedLog());
+    const topics = encodeEventTopics({ abi: routerAbi, eventName: "Disarmed", args: { posId: P, owner: A } as never });
+    await applyRouterLog(r, { ...armedLog(), data: "0x", topics: topics as never });
+    expect(await r.armedWith(K)).toHaveLength(0);
+  });
+
+  test("DisarmedAll drops every position, and a later arm uses the new epoch", async () => {
+    await applyRouterLog(r, armedLog(P));
+    await applyRouterLog(r, armedLog(`0x${"12".repeat(32)}`));
+    const topics = encodeEventTopics({ abi: routerAbi, eventName: "DisarmedAll", args: { owner: A } as never });
+    await applyRouterLog(r, { ...armedLog(), data: encodeAbiParameters([{ type: "uint64" }], [1n]), topics: topics as never });
+    expect(await r.armedWith(K)).toHaveLength(0);
+    await applyRouterLog(r, armedLog(P));
+    const pos = await r.armedWith(K);
+    expect(pos).toHaveLength(1);
+    expect(Number(pos[0]!.epoch)).toBe(1);
+  });
+
+  test("Fired decodes with its evidence", () => {
+    const topics = encodeEventTopics({ abi: alarmBookAbi, eventName: "Fired", args: { key: K, target: V } as never });
+    const data = encodeAbiParameters([{ type: "uint8" }, { type: "address" }, { type: "bytes32" }], [5, B, P]);
+    const f = decodeFired({ ...armedLog(), data, topics: topics as never });
+    expect(f?.key).toBe(K);
+    expect(f?.evidence).toBe(P);
+  });
+});
