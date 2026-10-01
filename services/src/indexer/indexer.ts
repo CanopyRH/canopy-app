@@ -86,3 +86,47 @@ export function decodeFired(log: Log): FiredAlarm | null {
   const a = ev.args as { key: Hex; target: Address; evidence: Hex };
   return { key: a.key, target: a.target, evidence: a.evidence, tx: log.transactionHash };
 }
+
+const MAX_LOG_TRIES = 3;
+const logTries = new Map<string, number>();
+
+/**
+ * Reads logs from the saved cursor in small ranges, so a restart resumes where it stopped.
+ * A log that keeps failing is skipped and counted, because registering a detector is open to anyone and one bad log must not stop the indexer.
+ */
+export async function syncLogs(
+  client: Pick<PublicClient, "getBlockNumber" | "getLogs">,
+  r: Repo,
+  opts: {
+    name: string;
+    address: Address | Address[];
+    startBlock: bigint;
+    step?: bigint;
+    /** Narrows a busy contract, such as plan payments on the stablecoin. */
+    filter?: { event: AbiEvent; args: Record<string, unknown> };
+    onLog: (l: Log) => Promise<void>;
+  },
+) {
+  const tip = await client.getBlockNumber();
+  const step = opts.step ?? 2_000n;
+  let from = (await r.cursor(opts.name)) ?? opts.startBlock;
+  while (from <= tip) {
+    const to = from + step - 1n > tip ? tip : from + step - 1n;
+    const logs = await client.getLogs({ address: opts.address, fromBlock: from, toBlock: to, ...opts.filter } as never);
+    for (const l of logs) {
+      try {
+        await opts.onLog(l as unknown as Log);
+      } catch (e) {
+        const id = `${l.transactionHash}:${l.logIndex}`;
+        const n = (logTries.get(id) ?? 0) + 1;
+        logTries.set(id, n);
+        if (n < MAX_LOG_TRIES) throw e;
+        console.error("skipped log", id, (e as Error).message);
+        await r.bump("log_skipped");
+      }
+    }
+    await r.setCursor(opts.name, to + 1n);
+    from = to + 1n;
+  }
+  return tip;
+}
