@@ -108,3 +108,44 @@ describe("billing storage", () => {
     expect(rows.map((x) => x.credited)).toEqual([false]);
   });
 });
+
+describe("alerts and jobs", () => {
+  test("follows store chats and vaults only", async () => {
+    await r.follow(42, V);
+    await r.follow(42, V);
+    expect(await r.following(42)).toEqual([V]);
+    expect(await r.followers(V)).toEqual([42]);
+    await r.unfollow(42, V);
+    expect(await r.followers(V)).toEqual([]);
+  });
+
+  test("JSON columns store real objects, so fields can be queried", async () => {
+    await r.saveCard(V, { name: "Steakhouse USDC" }, "t", 1);
+    await r.saveCard(V, { name: "Renamed" }, "t", 2);
+    const rows = await db.query<{ name: string }>(`SELECT numbers->>'name' AS name FROM risk_cards WHERE target=$1`, [V]);
+    expect(rows[0]!.name).toBe("Renamed");
+    await r.enqueue("exit", "j", { posId: "0xabc" }, 1);
+    const [job] = await r.dueJobs("exit", 1);
+    expect((job!.payload as { posId: string }).posId).toBe("0xabc");
+  });
+
+  test("jobs dedupe, wait for their time, and retry", async () => {
+    await r.enqueue("exit", "a", { x: 1 }, 100);
+    await r.enqueue("exit", "a", { x: 2 }, 100);
+    expect(await r.dueJobs("exit", 99)).toHaveLength(0);
+    const [j] = await r.dueJobs("exit", 100);
+    expect(j).toBeDefined();
+    await r.retryJob(j!.id, 200);
+    expect(await r.dueJobs("exit", 100)).toHaveLength(0);
+    await r.finishJob(j!.id);
+    expect(await r.dueJobs("exit", 999)).toHaveLength(0);
+  });
+});
+
+describe("migrations", () => {
+  test("many processes can migrate at once", async () => {
+    const db = await freshDb();
+    await Promise.all(Array.from({ length: 6 }, () => migrate(db)));
+    expect(await db.query(`SELECT 1 FROM plans`)).toEqual([]);
+  });
+});
