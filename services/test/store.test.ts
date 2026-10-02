@@ -70,4 +70,41 @@ describe("indexer", () => {
     expect(f?.key).toBe(K);
     expect(f?.evidence).toBe(P);
   });
+
+  test("the cursor resumes where it stopped", async () => {
+    const calls: [bigint, bigint][] = [];
+    const client = {
+      getBlockNumber: async () => 25n,
+      getLogs: async (o: { fromBlock: bigint; toBlock: bigint }) => (calls.push([o.fromBlock, o.toBlock]), []),
+    } as never;
+    await syncLogs(client, r, { name: "c", address: V, startBlock: 1n, step: 10n, onLog: async () => {} });
+    expect(calls).toEqual([[1n, 10n], [11n, 20n], [21n, 25n]]);
+    calls.length = 0;
+    await syncLogs(client, r, { name: "c", address: V, startBlock: 1n, step: 10n, onLog: async () => {} });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("billing storage", () => {
+  test("an exact payment credits once, even when replayed", async () => {
+    const now = 1_000_000;
+    await applyPayment(r, transferLog(A, 15_000_000n), now);
+    await applyPayment(r, transferLog(A, 15_000_000n), now);
+    expect(await r.paidUntil(A.toLowerCase())).toBe(now + 90 * 86_400);
+  });
+
+  test("a second real payment extends the plan", async () => {
+    const now = 1_000_000;
+    await applyPayment(r, transferLog(A, 15_000_000n, 0), now);
+    await applyPayment(r, transferLog(A, 60_000_000n, 1), now);
+    expect(await r.paidUntil(A.toLowerCase())).toBe(now + 455 * 86_400);
+  });
+
+  test("a wrong amount is recorded but not credited", async () => {
+    const out = await applyPayment(r, transferLog(A, 14_000_000n), 1000);
+    expect(out.days).toBeNull();
+    expect(await r.paidUntil(A.toLowerCase())).toBeNull();
+    const rows = await db.query<{ credited: boolean }>(`SELECT credited FROM plan_payments`);
+    expect(rows.map((x) => x.credited)).toEqual([false]);
+  });
 });
