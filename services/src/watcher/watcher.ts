@@ -34,3 +34,40 @@ const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
 const GENERIC = new Set(["usdc", "usd", "usdg", "usdt", "dai", "eth", "weth", "btc", "the", "vault", "vaults", "protocol", "finance", "financial", "labs", "dao", "prime", "high", "yield", "core", "v1", "v2"]);
 /** Every launch vault runs on these, so a report about one concerns them all. */
 const PLATFORMS = new Set(["morpho"]);
+
+/** Vaults a report is about, by name. A wide match only adds soft signals, which still need on-chain evidence. */
+export function matchVaults<T extends { name: string }>(protocol: string, vaults: T[]): T[] {
+  const named = words(protocol);
+  if (named.some((w) => PLATFORMS.has(w))) return vaults;
+  return vaults.filter((v) => words(v.name).some((n) => !GENERIC.has(n) && n.length >= 4 && named.some((w) => w === n || w.startsWith(n))));
+}
+
+/** Independent watchers must sign identical values, so the deadline comes from a shared 10-minute window. */
+export const sharedDeadline = (now: number) => BigInt(Math.floor(now / 600) * 600 + 1200);
+
+/** Reports both operators saw, by content hash. On-chain details can differ between operators, so they stay out. */
+export function sharedEvidence(key: Hex, signals: Signal[]): Hex {
+  const reports = [...new Set(signals.filter((s) => s.kind.startsWith("FEED_")).map((s) => s.evidence))].sort();
+  return evidenceHash([key, reports]);
+}
+
+/** Signs only when the decision rules say so. The LLM has no path to this function except through decide(). */
+export async function maybeAttest(acct: PrivateKeyAccount, alarmBook: Address, chainId: number, key: Hex, signals: Signal[], now: number): Promise<Attestation | null> {
+  const d = decide(signals);
+  if (d.path !== "ATTEST") return null;
+  const evidence = sharedEvidence(key, d.signals);
+  const deadline = sharedDeadline(now);
+  return { key, evidence, deadline, signer: acct.address, sig: await signAttest(acct, alarmBook, chainId, key, evidence, deadline) };
+}
+
+/** Labelled reports from the last hour. Rechecked every cycle, because the on-chain signal may arrive later. */
+export async function recentReports(db: Db, since: number) {
+  const rows = await db.query<{ sha256: string; label: string; protocol: string; confidence: number }>(
+    `SELECT sha256, label, protocol, confidence FROM feed_items WHERE at>$1 AND label IS NOT NULL`,
+    [since],
+  );
+  return rows.map((x) => ({
+    hash: x.sha256,
+    classification: { label: x.label, protocol: x.protocol, confidence: Number(x.confidence) } as Classification,
+  }));
+}
