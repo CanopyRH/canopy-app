@@ -71,3 +71,41 @@ export async function recentReports(db: Db, since: number) {
     classification: { label: x.label, protocol: x.protocol, confidence: Number(x.confidence) } as Classification,
   }));
 }
+
+/** AlarmBook refuses these, and storing one first would shut out the genuine signature for that deadline. */
+const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
+export const isHighS = (sig: Hex) => sig.length === 132 && BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N;
+
+/** Accepts a peer's attestation only if it is from an approved watcher and the signature recovers to it. */
+export async function acceptAttestation(db: Db, watchers: Address[], alarmBook: Address, chainId: number, a: Attestation, now: number): Promise<boolean> {
+  if (!watchers.some((w) => w.toLowerCase() === a.signer.toLowerCase())) return false;
+  if (Number(a.deadline) < now) return false;
+  if (isHighS(a.sig)) return false;
+  const signer = await recoverTypedDataAddress({
+    domain: attestDomain(alarmBook, chainId),
+    types: attestTypes,
+    primaryType: "Attest",
+    message: { key: a.key, evidence: a.evidence, deadline: a.deadline },
+    signature: a.sig,
+  });
+  if (signer.toLowerCase() !== a.signer.toLowerCase()) return false;
+  await db.query(
+    `INSERT INTO attestations (key, evidence_hash, deadline, signer, sig) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+    [a.key, a.evidence, a.deadline.toString(), a.signer, a.sig],
+  );
+  return true;
+}
+
+/** fireByQuorum calldata once k approved signatures agree on the same evidence and deadline. */
+export async function quorumCall(db: Db, a: { key: Hex; evidence: Hex; deadline: bigint }, k: number, alarmBook: Address) {
+  const rows = await db.query<{ signer: Address; sig: Hex }>(
+    `SELECT signer, sig FROM attestations WHERE key=$1 AND evidence_hash=$2 AND deadline=$3`,
+    [a.key, a.evidence, a.deadline.toString()],
+  );
+  const q = assembleQuorum(rows, k);
+  if (!q) return null;
+  return {
+    to: alarmBook,
+    data: encodeFunctionData({ abi: alarmBookAbi, functionName: "fireByQuorum", args: [a.key, a.evidence, a.deadline, q.signers, q.sigs] }),
+  };
+}
