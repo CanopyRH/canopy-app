@@ -78,4 +78,41 @@ describe("checkpoints", () => {
     await checkpointKeys(deps(Kind.DRAIN, 10_000 - 1799, sent, 99n), [DRAIN]);
     expect(sent).toHaveLength(1);
   });
+
+  test("a DRAIN baseline half a window old is sent", async () => {
+    const sent: unknown[] = [];
+    await checkpointKeys(deps(Kind.DRAIN, 10_000 - 1800, sent), [DRAIN]);
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a SHARE_DROP baseline always goes to the contract, which decides", async () => {
+    const sent: unknown[] = [];
+    await checkpointKeys(deps(Kind.SHARE_DROP, 10_000, sent), [DRAIN]);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("admin changes", () => {
+  const was = { owner: A, curator: A };
+
+  test("a first reading signals nothing", () => {
+    expect(adminChanges(null, was, V, 1)).toEqual([]);
+  });
+
+  test("a curator change is a soft on-chain signal", () => {
+    const [s] = adminChanges(was, { owner: A, curator: B }, V, 1);
+    expect(s?.kind).toBe("GOVERNANCE");
+    expect(s?.severity).toBe("soft");
+    expect(s?.evidence).toContain("curator");
+  });
+
+  test("an owner change is reported on its own", () => {
+    const out = adminChanges(was, { owner: B, curator: A }, V, 1);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.evidence).toContain("owner");
+  });
+
+  test("a failed read is not a change", () => {
+    expect(adminChanges(was, { owner: null, curator: null }, V, 1)).toEqual([]);
+  });
 });
