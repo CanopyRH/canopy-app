@@ -127,3 +127,54 @@ describe("attestations", () => {
     expect(canonicalJson({ b: [1], a: "x" })).toBe('{"a":"x","b":[1]}');
   });
 });
+
+describe("simulation gate", () => {
+  const t = ["A", "B"];
+  test("passes when the owner gains and the router is unchanged", () => {
+    const r = judge([1n, 5n], [3n, 5n], [0n, 0n], [0n, 0n], t);
+    expect(r.ok).toBe(true);
+    expect(r.gains).toEqual({ A: 2n });
+  });
+  test("fails on router residue", () => expect(judge([0n, 0n], [1n, 0n], [0n, 0n], [1n, 0n], t).ok).toBe(false));
+  test("fails if the owner loses", () => expect(judge([5n, 0n], [4n, 1n], [0n, 0n], [0n, 0n], t).ok).toBe(false));
+  test("fails if nothing came out", () => expect(judge([1n, 1n], [1n, 1n], [0n, 0n], [0n, 0n], t).reason).toBe("nothing out"));
+
+  test("sizing halves down and stops after 6 steps", async () => {
+    const tried: bigint[] = [];
+    const got = await sizeExit(1000n, async (a) => (tried.push(a), a <= 300n));
+    expect(got).toBe(250n);
+    expect(tried).toEqual([1000n, 500n, 250n]);
+    expect(await sizeExit(1000n, async () => false)).toBe(0n);
+    expect(await sizeExit(0n, async () => true)).toBe(0n);
+  });
+});
+
+describe("billing", () => {
+  test("only exact plan amounts credit", () => {
+    expect(daysFor(15_000_000n)).toBe(90);
+    expect(daysFor(60_000_000n)).toBe(365);
+    expect(daysFor(14_999_999n)).toBeNull();
+    expect(daysFor(20_000_000n)).toBeNull();
+  });
+  test("renewals extend from the end date, lapsed plans from now", () => {
+    expect(extendPlan(2000, 1, 1000)).toBe(2000 + 86_400);
+    expect(extendPlan(500, 1, 1000)).toBe(1000 + 86_400);
+    expect(extendPlan(null, 1, 1000)).toBe(1000 + 86_400);
+  });
+  test("keeper runs paid positions only", () => {
+    expect(keeperShouldRun(2000, 1000)).toBe(true);
+    expect(keeperShouldRun(1000, 1000)).toBe(false);
+    expect(keeperShouldRun(null, 1000)).toBe(false);
+  });
+});
+
+describe("copy", () => {
+  test("banned-words gate catches return language", () => {
+    expect(findBanned("Earn 8% APY, guaranteed")).toHaveLength(2);
+    expect(findBanned("Funds go only to each owner's wallet")).toHaveLength(0);
+  });
+  test("alert copy is clean", () => {
+    const text = [WELCOME, alarmAlert({ vaultName: "V", alarm: "share drop" }), alarmAlert({ vaultName: "V", alarm: "x", withdrawInRobinhoodApp: true })];
+    for (const t of text) expect(findBanned(t)).toEqual([]);
+  });
+});
