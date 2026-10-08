@@ -42,3 +42,37 @@ export async function handle(r: Repo, publicUrl: string, chatId: number, cmd: st
       return { text: WELCOME };
   }
 }
+
+export function createBot(token: string, r: Repo, publicUrl: string, apiRoot?: string, listed: string[] = []) {
+  const bot = new Bot(token, apiRoot ? { client: { apiRoot } } : {});
+  for (const cmd of ["start", "vaults", "watch", "unwatch", "list", "card"]) {
+    bot.command(cmd, async (ctx) => {
+      const reply = await handle(r, publicUrl, ctx.chat.id, cmd, ctx.match?.toString() ?? "", listed);
+      await ctx.reply(reply.text, reply.keyboard ? { reply_markup: reply.keyboard } : {});
+    });
+  }
+  // A failed reply must not answer the webhook with an error, or Telegram sends the same update again.
+  bot.catch((e) => console.warn("bot", e.message));
+  return bot;
+}
+
+/** Sends one alert to everyone following a vault. A failed chat never stops the rest. */
+export async function notifyText(r: Repo, send: (chatId: number, text: string) => Promise<unknown>, target: string, text: string) {
+  let sent = 0;
+  for (const chat of await r.followers(target)) {
+    try {
+      await send(chat, text).catch(async (e: { error_code?: number; parameters?: { retry_after?: number } }) => {
+        if (e.error_code !== 429) throw e;
+        await Bun.sleep((e.parameters?.retry_after ?? 1) * 1000);
+        await send(chat, text);
+      });
+      sent++;
+    } catch {
+      // A blocked bot or deleted chat is not an error worth stopping for.
+    }
+  }
+  return sent;
+}
+
+export const notifyFollowers = (r: Repo, send: (chatId: number, text: string) => Promise<unknown>, target: string, a: AlertInput) =>
+  notifyText(r, send, target, alarmAlert(a));
