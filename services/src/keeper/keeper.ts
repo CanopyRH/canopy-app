@@ -76,3 +76,44 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
   }
   return poked;
 }
+
+/** Queues exits straight after a poke, so an alarm this keeper fired doesn't wait for the indexer. */
+export async function pokeAndQueue(d: KeeperDeps) {
+  for (const key of await pokeTripped(d)) {
+    const state = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "state", args: [key] });
+    // A node a block behind reads no alarm yet. The indexer's record picks this one up instead.
+    if (state[1] !== 0n) await onFired(d, key, Number(state[1]));
+  }
+}
+
+/**
+ * Rolls SHARE_DROP and DRAIN baselines forward, so those alarms measure against current values.
+ * A DRAIN key needs a sample whenever assets fall below its lowest reading, because that sample is what keeps a flash deposit out of the next baseline. Otherwise it costs gas only when a period ends.
+ */
+export async function checkpointKeys(d: KeeperDeps, keys: Hex[]) {
+  for (const key of keys) {
+    try {
+      const det = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "detector", args: [key] });
+      if (det.kind === Kind.DRAIN) {
+        const [, , snapAt, low] = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "state", args: [key] });
+        const assets = await d.client.readContract({ address: det.target, abi: vaultAbi, functionName: "totalAssets" });
+        if (d.now() < Number(snapAt) + det.window / 2 && assets >= low) continue;
+      }
+      await d.send({ to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [key] }) });
+    } catch (e) {
+      console.warn("checkpoint", key, (e as Error).message);
+    }
+  }
+}
+
+/** Queues exits for a fired alarm. Canopy's keeper skips unpaid wallets; no contract does. */
+export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise<number> {
+  let queued = 0;
+  for (const p of await d.repo.armedWith(key)) {
+    if (d.paidOnly && !keeperShouldRun(await d.repo.paidUntil(p.owner), d.now())) continue;
+    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt };
+    await d.repo.enqueue("exit", `${key}:${firedAt}:${p.pos_id}`, job, d.now());
+    queued++;
+  }
+  return queued;
+}
