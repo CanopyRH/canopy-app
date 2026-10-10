@@ -117,3 +117,55 @@ export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise
   }
   return queued;
 }
+
+/** Simulates [deallocate..., exit] and applies the gate. Failed deallocations are tolerated; a failed exit is not. */
+export async function gateExit(d: KeeperDeps, j: ExitJob, asset: Address, amount: bigint, prep: PlainCall[]) {
+  const watch = [j.owner, d.router, d.account];
+  const reads = watch.map((w) => balanceCall(asset, w));
+  const exitCall = {
+    to: d.router,
+    data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, amount] }),
+  };
+  const calls = [...reads, ...prep, exitCall, ...reads];
+  const { results } = await d.client.simulateCalls({ account: d.account, calls });
+  const exitAt = reads.length + prep.length;
+  return gateOne(results as readonly SimResult[], exitAt, 0, exitAt + 1, asset);
+}
+
+/** Runs one exit. Returns "done" or "retry". Retries end when the 24h alarm expires. */
+export async function runExit(d: KeeperDeps, j: ExitJob): Promise<"done" | "retry"> {
+  if (d.now() > j.firedAt + ALARM_TTL) return "done";
+  const shares = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] });
+  const allowed = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] });
+  const total = shares < allowed ? shares : allowed;
+  if (total === 0n) return "done";
+
+  const asset = await d.client.readContract({ address: j.target, abi: vaultAbi, functionName: "asset" });
+  const direct = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, 0n] }) };
+  const prep = await deallocateCalls(d.client, d.morpho, j.target, d.account);
+  const amount = await sizeExit(total, async (a) => {
+    try {
+      return (await gateExit(d, j, asset, a, prep)).ok;
+    } catch {
+      return false;
+    }
+  });
+  if (amount === 0n) {
+    await d.repo.bump("gate_reject");
+    return "retry";
+  }
+
+  const exitData = encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, amount] });
+  if (prep.length === 0) {
+    await d.send({ ...direct, data: exitData });
+  } else {
+    const all = [...prep.map((c) => ({ target: c.to, allowFailure: true, callData: c.data })), { target: d.router, allowFailure: false, callData: exitData }];
+    await d.send({ to: d.multicall3, data: encodeFunctionData({ abi: multicall3Abi, functionName: "aggregate3", args: [all] }) });
+  }
+  // A redeem can pay part and hand the rest back without reverting, so only the chain can say this is finished.
+  const [left, room] = await Promise.all([
+    d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] }),
+    d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] }),
+  ]);
+  return left === 0n || room === 0n ? "done" : "retry";
+}
