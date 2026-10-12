@@ -295,3 +295,52 @@ describe("settings", () => {
     expect(r.error?.issues.map((i) => i.path[0])).toEqual(["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
   });
 });
+
+describe("keeper sending", () => {
+  const TX1 = `0x${"01".repeat(32)}` as Hex;
+  const CALL = { to: V, data: "0x" as Hex };
+
+  function chain(opts: { landAfter?: number; failFirstSend?: boolean } = {}) {
+    let clock = 0;
+    const sends: { nonce: number; fee: bigint }[] = [];
+    const d = {
+      pendingNonce: async () => 5 + sends.filter((s) => s.nonce !== 5).length,
+      fees: async () => ({ maxFeePerGas: 100n, maxPriorityFeePerGas: 10n }),
+      send: async (_: unknown, nonce: number, f: { maxFeePerGas: bigint }) => {
+        if (opts.failFirstSend && sends.length === 0) {
+          sends.push({ nonce, fee: f.maxFeePerGas });
+          throw new Error("rejected");
+        }
+        sends.push({ nonce, fee: f.maxFeePerGas });
+        return TX1;
+      },
+      receipt: async () => (sends.length >= (opts.landAfter ?? 1) ? { status: "success" } : null),
+      sleep: async (ms: number) => void (clock += ms),
+      now: () => clock,
+    };
+    return { d, sends };
+  }
+
+  test("a stuck transaction is replaced on the same nonce at a higher fee", async () => {
+    const { d, sends } = chain({ landAfter: 3 });
+    await serialSender(d)(CALL);
+    expect(sends).toEqual([{ nonce: 5, fee: 100n }, { nonce: 5, fee: 125n }, { nonce: 5, fee: 156n }]);
+  });
+
+  test("it gives up with a clear error, instead of waiting forever", async () => {
+    const { d, sends } = chain({ landAfter: 99 });
+    await expect(serialSender(d)(CALL)).rejects.toThrow("stuck at nonce 5");
+    expect(sends).toHaveLength(4);
+  });
+
+  test("a call that can't be sent fails at once", async () => {
+    const { d } = chain({ failFirstSend: true });
+    await expect(serialSender(d)(CALL)).rejects.toThrow("rejected");
+  });
+
+  test("a reverted transaction is an error", async () => {
+    const { d } = chain();
+    d.receipt = async () => ({ status: "reverted" });
+    await expect(serialSender(d)(CALL)).rejects.toThrow("reverted");
+  });
+});
