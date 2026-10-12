@@ -343,4 +343,53 @@ describe("keeper sending", () => {
     d.receipt = async () => ({ status: "reverted" });
     await expect(serialSender(d)(CALL)).rejects.toThrow("reverted");
   });
+
+  test("two loops never send at the same time, and a failure doesn't stop the next", async () => {
+    let running = 0;
+    let most = 0;
+    const { d } = chain();
+    const inner = d.send;
+    d.send = async (...a: Parameters<typeof inner>) => {
+      running++;
+      most = Math.max(most, running);
+      await Bun.sleep(1);
+      running--;
+      return inner(...a);
+    };
+    const send = serialSender(d);
+    d.fees = async () => ({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
+    const out = await Promise.allSettled([send(CALL), send(CALL), send(CALL)]);
+    expect(most).toBe(1);
+    expect(out.every((o) => o.status === "fulfilled")).toBe(true);
+  });
+});
+
+describe("keeper resilience", () => {
+  const job = { posId: POS, key: KEY, owner: A, target: V, firedAt: 1000 };
+  const OK = "0x0000000000000000000000000000000000000000000000000000000000000001";
+  const ZERO_WORD = `0x${"00".repeat(32)}`;
+
+  function exitDeps(after: { shares: bigint; allowance: bigint }) {
+    let sent = 0;
+    const read = ({ functionName }: { functionName: string }) => {
+      if (functionName === "asset") return stableToken;
+      if (functionName === "liquidityAdapter") throw new Error("not v2");
+      if (functionName === "balanceOf") return sent ? after.shares : 100n;
+      if (functionName === "allowance") return sent ? after.allowance : 100n;
+      throw new Error(functionName);
+    };
+    return {
+      deps: {
+        repo: r, router: B, alarmBook: B, multicall3: B, morpho: B, account: A, paidOnly: false, now: () => 1001,
+        send: async () => { sent++; return TX; },
+        client: {
+          readContract: async (a: { functionName: string }) => read(a),
+          // Three balance reads, the exit, then the same reads again: the owner gains, and nobody else's balance moves.
+          simulateCalls: async ({ calls }: { calls: unknown[] }) => ({ results: calls.map((_, i) => ({ status: "success", data: i === 4 ? OK : ZERO_WORD })) }),
+        },
+      } as unknown as KeeperDeps,
+      sentCount: () => sent,
+    };
+  }
+  const stableToken = "0x00000000000000000000000000000000000000d4";
 });
