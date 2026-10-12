@@ -169,3 +169,29 @@ export async function runExit(d: KeeperDeps, j: ExitJob): Promise<"done" | "retr
   ]);
   return left === 0n || room === 0n ? "done" : "retry";
 }
+
+/** Pays out what an owner couldn't receive at exit time, once the token moves again. Anyone may do this, and it only pays the owner. */
+export async function claimOwed(d: KeeperDeps) {
+  for (const o of await d.repo.openOwed()) {
+    const args = [o.owner as Address, o.token as Address] as const;
+    try {
+      await d.client.simulateContract({ address: d.router, abi: routerAbi, functionName: "claimOwed", args, account: d.account });
+    } catch {
+      continue; // Still paused, or already claimed.
+    }
+    await d.send({ to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "claimOwed", args }) });
+  }
+}
+
+/** What each job can still exit: the shares its owner holds and has approved. Zero means the job is finished. */
+async function exitable(d: KeeperDeps, jobs: ExitJob[]): Promise<bigint[]> {
+  const out = await d.client.multicall({
+    multicallAddress: d.multicall3,
+    allowFailure: false,
+    contracts: jobs.flatMap((j) => [
+      { address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] },
+      { address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] },
+    ]),
+  }) as unknown as bigint[];
+  return jobs.map((_, i) => (out[2 * i]! < out[2 * i + 1]! ? out[2 * i]! : out[2 * i + 1]!));
+}
