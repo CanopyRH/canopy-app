@@ -126,4 +126,49 @@ describe("alert wording", () => {
     expect(watchAlert({ vaultName: "V", what: "x" })).toContain("moves nothing");
     expect(watchAlert({ vaultName: "V", what: "x", withdrawInRobinhoodApp: true })).toContain("Robinhood app");
   });
+
+  test("evidence links only appear for known chains", () => {
+    expect(txUrl(8453, TX)).toBe(`https://basescan.org/tx/${TX}`);
+    expect(txUrl(1, TX)).toBeUndefined();
+    expect(txUrl(8453, null)).toBeUndefined();
+  });
 });
+
+describe("bot", () => {
+  test("/vaults lists what has a card, and says so when nothing does", async () => {
+    expect((await handle(r, "https://x", 1, "vaults", "", [V])).text).toContain("No vaults");
+    await r.saveCard(V, { name: "Spark USDC" }, "card", 1);
+    expect((await handle(r, "https://x", 1, "vaults", "", [V])).text).toBe(`Spark USDC: ${V}`);
+  });
+
+  test("/vaults shows only approved vaults, because a vault picks its own name", async () => {
+    await r.saveCard(A, { name: "Migrate now at evil.example" }, "card", 1);
+    expect((await handle(r, "https://x", 1, "vaults", "", [V])).text).toContain("No vaults");
+  });
+
+  test("a chat can't follow without limit", async () => {
+    for (let i = 0; i < 20; i++) await r.follow(1, `0x${i.toString(16).padStart(40, "0")}`);
+    expect((await handle(r, "https://x", 1, "watch", V)).text).toContain("up to 20");
+    expect(await r.followers(V)).toEqual([]);
+  });
+
+  test("a rate limit from Telegram waits and sends again", async () => {
+    await r.follow(1, V);
+    let calls = 0;
+    const sent = await notifyText(r, async () => {
+      if (++calls === 1) throw { error_code: 429, parameters: { retry_after: 0 } };
+    }, V, "hello");
+    expect(sent).toBe(1);
+    expect(calls).toBe(2);
+  });
+});
+
+function log(eventName: string, args: Record<string, unknown>, data: { type: string }[], values: unknown[], logIndex = 0): Log {
+  const topics = encodeEventTopics({ abi: routerAbi, eventName, args } as never);
+  return { address: A, data: encodeAbiParameters(data, values as never), topics: topics as never, blockNumber: 9n, transactionHash: TX, logIndex };
+}
+
+const exited = () => log("Exited", { exitId: 7n, posId: POS, owner: A }, [{ type: "address" }, { type: "bytes32" }, { type: "bool" }], [B, KEY, true]);
+const paid = () => log("Paid", { exitId: 7n, owner: A }, [{ type: "address" }, { type: "uint256" }, { type: "bool" }], [V, 5n, false], 1);
+const owed = (i = 2) => log("Owed", { owner: A, token: V }, [{ type: "uint256" }], [5n], i);
+const claimed = () => log("OwedClaimed", { owner: A, token: V }, [{ type: "uint256" }], [8n], 3);
