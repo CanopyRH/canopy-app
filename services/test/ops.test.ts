@@ -253,4 +253,45 @@ describe("operator checks", () => {
   test("a healthy system says nothing", () => {
     expect(opsProblems(fine)).toEqual([]);
   });
+
+  test("lag above 20 blocks, low gas and a stuck job each raise their own warning", () => {
+    expect(opsProblems({ ...fine, lagBlocks: 20n })).toEqual([]);
+    // Robinhood Chain makes about 10 blocks a second, so 20 blocks is only 2 seconds there.
+    expect(opsProblems({ ...fine, lagBlocks: 399n, maxLagBlocks: 400n })).toEqual([]);
+    expect(opsProblems({ ...fine, lagBlocks: 401n, maxLagBlocks: 400n }).map((p) => p.code)).toEqual(["lag"]);
+    expect(opsProblems({ ...fine, lagBlocks: 21n }).map((p) => p.code)).toEqual(["lag"]);
+    expect(opsProblems({ ...fine, gasWei: 0n }).map((p) => p.code)).toEqual(["gas"]);
+    expect(opsProblems({ ...fine, oldestJobSec: 301 }).map((p) => p.code)).toEqual(["jobs"]);
+  });
+
+  test("health numbers never name a wallet", async () => {
+    await r.enqueue("exit", "d", {}, 900);
+    await r.bump("poke_ok");
+    await r.bump("poke_ok");
+    await r.setCursor("router", 5n);
+    await applyRouterLog(r, exited());
+    const h = await r.health(1000);
+    expect(h).toEqual({ openJobs: 1, oldestJobSec: 100, alarmExits: 1, watchersSeen7d: 0, counters: { poke_ok: "2" }, cursors: { router: "5" } });
+    expect(JSON.stringify(h)).not.toContain(A.slice(2));
+  });
+});
+
+describe("settings", () => {
+  const base = { PUBLIC_URL: "https://x.example", DATABASE_URL: "postgres://x", CHAIN_ID: "4663", RPC_URL: "https://a.example", RPC_URL_BACKUP: "https://b.example", TELEGRAM_BOT_TOKEN: "1:a", TELEGRAM_WEBHOOK_SECRET: "s".repeat(16) };
+
+  test("an alerts-only chain needs no contracts", () => {
+    expect(Env.safeParse({ ...base, ALERTS_ONLY: "true" }).success).toBe(true);
+  });
+
+  test("blank lines in an env file count as not set", () => {
+    const e = loadEnv({ ...base, ALERTS_ONLY: "true", ROUTER: "", OPS_CHAT_ID: "" });
+    expect(e.ROUTER).toBeUndefined();
+    expect(e.OPS_CHAT_ID).toBeUndefined();
+  });
+
+  test("a normal deployment can't start with a contract missing", () => {
+    const r = Env.safeParse(base);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.path[0])).toEqual(["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
+  });
 });
