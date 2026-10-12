@@ -81,4 +81,49 @@ describe("vault scan", () => {
   test("a vault with no pause switch still scans", async () => {
     expect(await scanVault({ client: client({ totalAssets: P, price: P, paused: "none" }), repo: r, now: () => 1000 }, V)).toEqual([]);
   });
+
+  test("a curator change shows up against the stored reading", async () => {
+    await scanVault({ client: client({ totalAssets: P, price: P, owner: A, curator: A }), repo: r, now: () => 1000 }, V);
+    const out = await scanVault({ client: client({ totalAssets: P, price: P, owner: A, curator: B }), repo: r, now: () => 1060 }, V);
+    expect(out.map((s) => s.kind)).toEqual(["GOVERNANCE"]);
+  });
+
+  test("a failed admin read keeps the last reading, so the next one isn't a false change", async () => {
+    await scanVault({ client: client({ totalAssets: P, price: P, owner: A, curator: A }), repo: r, now: () => 1000 }, V);
+    await scanVault({ client: client({ totalAssets: P, price: P }), repo: r, now: () => 1060 }, V);
+    expect(await scanVault({ client: client({ totalAssets: P, price: P, owner: A, curator: A }), repo: r, now: () => 1120 }, V)).toEqual([]);
+  });
+});
+
+describe("alert limits", () => {
+  test("one alert per vault and kind each day, across every process", async () => {
+    expect(await r.claimAlert(V, "PAUSED", 1000)).toBe(true);
+    expect(await r.claimAlert(V, "PAUSED", 1001)).toBe(false);
+    expect(await r.claimAlert(V, "DRAIN", 1001)).toBe(true);
+    expect(await r.claimAlert(V, "PAUSED", 1000 + 86_400)).toBe(true);
+  });
+
+  test("a quiet period can be set per use", async () => {
+    await r.claimAlert("ops", "gas", 1000, 3600);
+    expect(await r.claimAlert("ops", "gas", 2000, 3600)).toBe(false);
+    expect(await r.claimAlert("ops", "gas", 4600, 3600)).toBe(true);
+  });
+});
+
+describe("alert wording", () => {
+  test("every line passes the banned-words gate and promises nothing", () => {
+    const lines = ["PAUSED", "SHARE_DROP", "DRAIN", "GOVERNANCE", "OTHER"].map((k) => signalLine(k, 2600));
+    const all = [...lines, ...ALARM_NAMES, ...lines.map((what) => watchAlert({ vaultName: "V", what })), watchAlert({ vaultName: "V", what: "x", withdrawInRobinhoodApp: true })];
+    for (const t of all) expect(findBanned(t)).toEqual([]);
+  });
+
+  test("a drain alert says what it can't tell", () => {
+    expect(signalLine("DRAIN", 8000)).toContain("about 80%");
+    expect(signalLine("DRAIN", 8000)).toContain("honest withdrawals");
+  });
+
+  test("a free alert says it moved nothing, and a Robinhood one points to the app", () => {
+    expect(watchAlert({ vaultName: "V", what: "x" })).toContain("moves nothing");
+    expect(watchAlert({ vaultName: "V", what: "x", withdrawInRobinhoodApp: true })).toContain("Robinhood app");
+  });
 });
