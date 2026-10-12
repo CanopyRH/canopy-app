@@ -249,3 +249,40 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
   }
   return [...skipped, ...refused];
 }
+
+/**
+ * Works through due exit jobs, one transaction per vault when several are due. A failed job waits 30 s and tries again; it
+ * never blocks the others.
+ */
+export async function drainExits(d: KeeperDeps) {
+  const byVault = new Map<string, DueJob[]>();
+  for (const job of await d.repo.dueJobs("exit", d.now())) {
+    const target = (job.payload as ExitJob).target.toLowerCase();
+    byVault.set(target, [...(byVault.get(target) ?? []), job]);
+  }
+  const single: DueJob[] = [];
+  for (const group of byVault.values()) {
+    if (group.length === 1) {
+      single.push(...group);
+      continue;
+    }
+    try {
+      single.push(...(await runBundle(d, group)));
+    } catch (e) {
+      console.warn("bundle", (e as Error).message);
+      await d.repo.bump("bundle_error");
+      single.push(...group);
+    }
+  }
+  for (const job of single) {
+    const j = job.payload as ExitJob;
+    try {
+      if ((await runExit(d, j)) === "done") await d.repo.finishJob(job.id);
+      else await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+    } catch (e) {
+      console.warn("exit", j.posId, (e as Error).message);
+      await d.repo.bump("exit_error");
+      await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+    }
+  }
+}
