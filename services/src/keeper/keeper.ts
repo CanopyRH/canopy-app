@@ -195,3 +195,57 @@ async function exitable(d: KeeperDeps, jobs: ExitJob[]): Promise<bigint[]> {
   }) as unknown as bigint[];
   return jobs.map((_, i) => (out[2 * i]! < out[2 * i + 1]! ? out[2 * i]! : out[2 * i + 1]!));
 }
+
+/**
+ * Exits many positions in one vault with one transaction. Each exit may fail alone, and the chain says afterwards which landed.
+ * The gas limit comes from the simulation, because with failures allowed an estimate could settle on too little and only the
+ * exits would fail. Bundles stay within one vault, so a vault built to burn gas can only cost its own holders.
+ * Returns the jobs the gate turned down, for the one-by-one path to size. Jobs over the gas budget stay due for the next pass.
+ */
+export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]> {
+  const live = d.now();
+  const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL);
+  const totals = await exitable(d, open.map((x) => x.payload as ExitJob));
+  const jobs = open.flatMap((job, i) => (totals[i]! > 0n ? [{ job, j: job.payload as ExitJob, amount: totals[i]! }] : []));
+  const skipped = due.filter((x) => !jobs.some((y) => y.job.id === x.id));
+  if (jobs.length === 0) return skipped;
+
+  const target = jobs[0]!.j.target;
+  const asset = await d.client.readContract({ address: target, abi: vaultAbi, functionName: "asset" });
+  const prep = await deallocateCalls(d.client, d.morpho, target, d.account);
+  const exitData = (x: (typeof jobs)[number]) => encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [x.j.posId, x.j.key, x.amount] });
+  const reads = (owner: Address) => [owner, d.router, d.account].map((w) => balanceCall(asset, w));
+  const STEP = 7; // Three reads, the exit, three reads.
+  const calls = [...prep, ...jobs.flatMap((x) => [...reads(x.j.owner), { to: d.router, data: exitData(x) }, ...reads(x.j.owner)])];
+  const { results } = await d.client.simulateCalls({ account: d.account, calls });
+  const sim = results as readonly SimResult[];
+
+  const gasOf = (from: number, to: number) => sim.slice(from, to).reduce((s, r) => s + r.gasUsed, 0n);
+  let gas = gasOf(0, prep.length);
+  const picked: typeof jobs = [];
+  const refused: DueJob[] = [];
+  for (const [i, x] of jobs.entries()) {
+    const at = prep.length + i * STEP;
+    if (!gateOne(sim, at + 3, at, at + 4, asset).ok) {
+      refused.push(x.job);
+      continue;
+    }
+    const cost = sim[at + 3]!.gasUsed;
+    if (gas + cost > BUNDLE_GAS) break;
+    gas += cost;
+    picked.push(x);
+  }
+  if (picked.length === 0) return [...skipped, ...refused];
+
+  const all = [
+    ...prep.map((c) => ({ target: c.to, allowFailure: true, callData: c.data })),
+    ...picked.map((x) => ({ target: d.router, allowFailure: true, callData: exitData(x) })),
+  ];
+  await d.send({ to: d.multicall3, data: encodeFunctionData({ abi: multicall3Abi, functionName: "aggregate3", args: [all] }), gas: (gas * 3n) / 2n + 100_000n });
+  const left = await exitable(d, picked.map((x) => x.j));
+  for (const [i, x] of picked.entries()) {
+    if (left[i] === 0n) await d.repo.finishJob(x.job.id);
+    else await d.repo.retryJob(x.job.id, d.now() + RETRY_SEC);
+  }
+  return [...skipped, ...refused];
+}
