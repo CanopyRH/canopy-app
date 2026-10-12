@@ -172,3 +172,43 @@ const exited = () => log("Exited", { exitId: 7n, posId: POS, owner: A }, [{ type
 const paid = () => log("Paid", { exitId: 7n, owner: A }, [{ type: "address" }, { type: "uint256" }, { type: "bool" }], [V, 5n, false], 1);
 const owed = (i = 2) => log("Owed", { owner: A, token: V }, [{ type: "uint256" }], [5n], i);
 const claimed = () => log("OwedClaimed", { owner: A, token: V }, [{ type: "uint256" }], [8n], 3);
+
+describe("exit records", () => {
+  test("an exit and its payout are stored once, however often the logs replay", async () => {
+    for (let i = 0; i < 2; i++) {
+      await applyRouterLog(r, exited());
+      await applyRouterLog(r, paid());
+    }
+    const rows = await db.query<{ owner: string; via_alarm: boolean }>(`SELECT owner, via_alarm FROM exits`);
+    expect(rows).toEqual([{ owner: A, via_alarm: true }]);
+    expect(await db.query(`SELECT 1 FROM exit_payouts`)).toHaveLength(1);
+  });
+
+  test("owed amounts add up, a replay doesn't double them, and a claim clears them", async () => {
+    await applyRouterLog(r, owed(2));
+    await applyRouterLog(r, owed(2));
+    await applyRouterLog(r, owed(4));
+    expect((await r.openOwed()).map((o) => Number(o.amount))).toEqual([10]);
+    await applyRouterLog(r, claimed());
+    expect(await r.openOwed()).toEqual([]);
+  });
+});
+
+describe("owed claims", () => {
+  const deps = (works: (owner: string) => boolean, sent: unknown[]) =>
+    ({
+      repo: r,
+      router: A,
+      account: B,
+      send: async (tx: unknown) => void sent.push(tx),
+      client: { simulateContract: async ({ args }: { args: string[] }) => { if (!works(args[0]!)) throw new Error("paused"); } },
+    }) as unknown as KeeperDeps;
+
+  test("only what the chain would pay gets sent, and a stuck token never blocks the rest", async () => {
+    await r.addOwed(TX, 1, A, V, 5n);
+    await r.addOwed(TX, 2, B, V, 5n);
+    const sent: unknown[] = [];
+    await claimOwed(deps((o) => o === B, sent));
+    expect(sent).toHaveLength(1);
+  });
+});
