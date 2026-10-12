@@ -35,3 +35,50 @@ beforeEach(async () => {
 });
 
 interface Chain { code?: string; totalAssets: bigint; price: bigint; paused?: boolean | "none"; owner?: Address; curator?: Address }
+
+const client = (c: Chain) => ({
+  getCode: async () => c.code ?? "0x60",
+  readContract: async ({ functionName }: { functionName: string }) => {
+    if (functionName === "totalAssets") return c.totalAssets;
+    if (functionName === "convertToAssets") return c.price;
+    if (functionName === "paused") {
+      if (c.paused === "none") throw new Error("no such function");
+      return c.paused ?? false;
+    }
+    if (functionName === "owner" && c.owner) return c.owner;
+    if (functionName === "curator" && c.curator) return c.curator;
+    throw new Error("no such function");
+  },
+}) as never;
+
+const P = 1_000_000n;
+
+describe("vault scan", () => {
+  test("a quiet vault signals nothing, and is recorded", async () => {
+    expect(await scanVault({ client: client({ totalAssets: 100n * P, price: P }), repo: r, now: () => 1000 }, V)).toEqual([]);
+    expect(await r.snaps(V, 0)).toHaveLength(1);
+  });
+
+  test("a vault on another chain is skipped", async () => {
+    expect(await scanVault({ client: client({ code: "0x", totalAssets: 0n, price: 0n }), repo: r, now: () => 1000 }, V)).toEqual([]);
+    expect(await r.snaps(V, 0)).toHaveLength(0);
+  });
+
+  test("a real drain shows up on the next pass, for followers and for watchers", async () => {
+    await scanVault({ client: client({ totalAssets: 100n * P, price: P }), repo: r, now: () => 1000 }, V);
+    const out = await scanVault({ client: client({ totalAssets: 20n * P, price: P }), repo: r, now: () => 1060 }, V);
+    expect(out.map((s) => s.kind)).toEqual(["DRAIN"]);
+    expect((await r.recentSignals(V, 0)).map((s) => s.kind)).toEqual(["DRAIN"]);
+  });
+
+  test("a pause or a share-price drop reaches followers but never the watchers' list", async () => {
+    await scanVault({ client: client({ totalAssets: 100n * P, price: P }), repo: r, now: () => 1000 }, V);
+    const out = await scanVault({ client: client({ totalAssets: 100n * P, price: (P * 98n) / 100n, paused: true }), repo: r, now: () => 1060 }, V);
+    expect(out.map((s) => s.kind).sort()).toEqual(["PAUSED", "SHARE_DROP"]);
+    expect(await r.recentSignals(V, 0)).toEqual([]);
+  });
+
+  test("a vault with no pause switch still scans", async () => {
+    expect(await scanVault({ client: client({ totalAssets: P, price: P, paused: "none" }), repo: r, now: () => 1000 }, V)).toEqual([]);
+  });
+});
