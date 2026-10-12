@@ -212,3 +212,45 @@ describe("owed claims", () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+describe("quorum across hosts", () => {
+  const add = (signer: Address, deadline: number) => db.query(`INSERT INTO attestations (key, evidence_hash, deadline, signer, sig) VALUES ($1,$2,$3,$4,$5)`, [KEY, TX, deadline, signer, "0x"]);
+
+  test("a set with enough signers is ready for whichever process holds the keeper key", async () => {
+    await add(A, 2000);
+    expect(await r.quorumReady(2, 1000)).toEqual([]);
+    await add(B, 2000);
+    expect((await r.quorumReady(2, 1000)).map((q) => q.key)).toEqual([KEY]);
+  });
+
+  test("an expired set is not ready", async () => {
+    await add(A, 2000);
+    await add(B, 2000);
+    expect(await r.quorumReady(2, 2000)).toEqual([]);
+  });
+
+  test("a signer can sign the same evidence for a new deadline, so two watchers either side of a window still meet", async () => {
+    await add(A, 2000);
+    await add(A, 2600);
+    await add(B, 2600);
+    expect((await r.quorumReady(2, 1000)).map((q) => Number(q.deadline))).toEqual([2600]);
+  });
+});
+
+describe("chain parts", () => {
+  test("the keeper uses the Morpho and the lag limit of its own chain", () => {
+    expect(chainParts(4663).morpho).toBe(ROBINHOOD.morpho);
+    expect(chainParts(8453).morpho).toBe(BASE.morpho);
+    expect(chainParts(4663).maxLagBlocks).toBe(400n);
+    expect(chainParts(8453).maxLagBlocks).toBe(20n);
+    expect(txUrl(4663, "0xabc")).toBe("https://robinhoodchain.blockscout.com/tx/0xabc");
+  });
+});
+
+describe("operator checks", () => {
+  const fine = { lagBlocks: 0n, gasWei: 10n, minGasWei: 1n, oldestJobSec: 0 };
+
+  test("a healthy system says nothing", () => {
+    expect(opsProblems(fine)).toEqual([]);
+  });
+});
