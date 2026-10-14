@@ -392,4 +392,32 @@ describe("keeper resilience", () => {
     };
   }
   const stableToken = "0x00000000000000000000000000000000000000d4";
+
+  test("a full-sized exit that only partly paid stays open for a retry", async () => {
+    const { deps, sentCount } = exitDeps({ shares: 90n, allowance: 90n });
+    expect(await runExit(deps, job)).toBe("retry");
+    expect(sentCount()).toBe(1);
+  });
+
+  test("an exit is done only when the chain shows nothing left", async () => {
+    const { deps } = exitDeps({ shares: 0n, allowance: 0n });
+    expect(await runExit(deps, job)).toBe("done");
+  });
+
+  test("one key that reverts doesn't stop the keys behind it", async () => {
+    await db.query(`INSERT INTO plans (wallet, paid_until) VALUES ($1, 9999999999)`, [A]);
+    for (const [pos, key] of [[`0x${"01".repeat(32)}`, `0x${"a1".repeat(32)}`], [`0x${"02".repeat(32)}`, `0x${"b2".repeat(32)}`]] as [Hex, Hex][]) {
+      await r.upsertPosition({ posId: pos, owner: A, adapter: B, target: V, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "x", keys: [key] });
+    }
+    const poked: string[] = [];
+    const deps = {
+      repo: r, alarmBook: B, paidOnly: false, now: () => 1,
+      client: {
+        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) =>
+          contracts.map(({ args }) => (args[0]!.startsWith("0xa1") ? { status: "failure", error: new Error("reverted") } : { status: "success", result: true })),
+      },
+      send: async (tx: { data: string }) => { poked.push(tx.data); return TX; },
+    } as unknown as KeeperDeps;
+    expect(await pokeTripped(deps)).toEqual([`0x${"b2".repeat(32)}`]);
+  });
 });
