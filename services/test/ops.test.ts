@@ -420,4 +420,36 @@ describe("keeper resilience", () => {
     } as unknown as KeeperDeps;
     expect(await pokeTripped(deps)).toEqual([`0x${"b2".repeat(32)}`]);
   });
+
+  test("checking many armed keys takes one request per few hundred keys, not one per key", async () => {
+    await db.query(`INSERT INTO plans (wallet, paid_until) VALUES ($1, 9999999999)`, [A]);
+    const n = 300;
+    for (let i = 0; i < n; i++) {
+      const hex = i.toString(16).padStart(4, "0");
+      await r.upsertPosition({ posId: `0x${hex.repeat(16)}`, owner: A, adapter: B, target: V, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "x", keys: [`0x${"c".repeat(60)}${hex}`] });
+    }
+    const requests: number[] = [];
+    const deps = {
+      repo: r, alarmBook: B, multicall3: A, paidOnly: false, now: () => 1,
+      client: {
+        readContract: async () => { throw new Error("checks must be batched"); },
+        multicall: async ({ contracts, batchSize }: { contracts: unknown[]; batchSize: number }) => {
+          requests.push(Math.ceil((contracts.length * 36) / batchSize));
+          return contracts.map(() => ({ status: "success", result: false }));
+        },
+      },
+      send: async () => TX,
+    } as unknown as KeeperDeps;
+    expect(await pokeTripped(deps)).toEqual([]);
+    expect(requests).toEqual([2]);
+  });
+
+  test("an unpaid key costs Canopy's keeper nothing", async () => {
+    await r.upsertPosition({ posId: POS, owner: A, adapter: B, target: V, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "x", keys: [KEY] });
+    expect(await r.liveKeys(1000)).toEqual([]);
+    expect(await r.liveKeys()).toEqual([KEY]);
+    await r.setPaidUntil(A, 2000);
+    expect(await r.liveKeys(1000)).toEqual([KEY]);
+    expect(await r.liveKeys(3000)).toEqual([]);
+  });
 });
