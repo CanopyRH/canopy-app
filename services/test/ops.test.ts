@@ -453,3 +453,68 @@ describe("keeper resilience", () => {
     expect(await r.liveKeys(3000)).toEqual([]);
   });
 });
+
+describe("exit bundles", () => {
+  const stable = "0x00000000000000000000000000000000000000d4" as Address;
+  const OK = `0x${"00".repeat(31)}01` as Hex;
+  const ZERO = `0x${"00".repeat(32)}` as Hex;
+  const owner = (i: number) => `0x${(0xa00 + i).toString(16).padStart(40, "0")}` as Address;
+  const pos = (i: number) => `0x${(0x100 + i).toString(16).padStart(64, "0")}` as Hex;
+  const V2 = "0x00000000000000000000000000000000000000c4" as Address;
+
+  const queue = async (i: number, target: Address = V, firedAt = 1000) => {
+    const job: ExitJob = { posId: pos(i), key: KEY, owner: owner(i), target, firedAt };
+    await r.enqueue("exit", `job-${i}`, job, 1);
+  };
+
+  const bundled = (tx: { data: Hex }) => (decodeFunctionData({ abi: multicall3Abi, data: tx.data }).args![0] as readonly { allowFailure: boolean; callData: Hex }[]);
+
+  /** A chain where every exit passes unless `refuse` names it, and shares clear unless `stuck` names the owner. */
+  function bundleDeps(o: { refuse?: number[]; stuck?: Address[]; gasEach?: bigint; failSim?: boolean; revert?: boolean; now?: number } = {}) {
+    const sent: { to: Address; data: Hex; gas?: bigint }[] = [];
+    const landed = new Set<string>();
+    const land = (data: Hex) => landed.add(owner(Number(BigInt(decodeFunctionData({ abi: routerAbi, data }).args![0] as Hex)) - 0x100));
+    const holds = (w: Address) => (landed.has(w) && !o.stuck?.includes(w) ? 0n : 100n);
+    const deps = {
+      repo: r, router: B, alarmBook: B, multicall3: A, morpho: B, account: A, paidOnly: false, now: () => o.now ?? 1001,
+      send: async (tx: { to: Address; data: Hex; gas?: bigint }) => {
+        if (o.revert) throw new Error("reverted");
+        sent.push(tx);
+        if (tx.to === A) for (const c of bundled(tx)) land(c.callData);
+        else land(tx.data);
+        return TX;
+      },
+      client: {
+        multicall: async ({ contracts }: { contracts: { args: Address[]; functionName: string }[] }) =>
+          contracts.map((c) => (c.functionName === "balanceOf" ? holds(c.args[0]!) : 100n)),
+        readContract: async ({ functionName, args }: { functionName: string; args: Address[] }) => {
+          if (functionName === "asset") return stable;
+          if (functionName === "balanceOf" || functionName === "allowance") return holds(args[0]!);
+          throw new Error("not v2");
+        },
+        simulateCalls: async ({ calls }: { calls: unknown[] }) => {
+          if (o.failSim && calls.length > 7) throw new Error("node refused");
+          return {
+            results: calls.map((_, i) => ({
+              status: i % 7 === 3 && o.refuse?.includes((i - 3) / 7) ? "failure" : "success",
+              data: i % 7 === 4 ? OK : ZERO,
+              gasUsed: i % 7 === 3 ? (o.gasEach ?? 500_000n) : 30_000n,
+            })),
+          };
+        },
+      },
+    } as unknown as KeeperDeps;
+    return { deps, sent, landed };
+  }
+
+  test("exits in one vault share a transaction, and the gas limit comes from the simulation", async () => {
+    for (const i of [1, 2, 3]) await queue(i);
+    const { deps, sent } = bundleDeps();
+    await drainExits(deps);
+    expect(sent.length).toBe(1);
+    expect(bundled(sent[0]!).length).toBe(3);
+    // An estimate could settle on a limit where the exits fail and the bundle still succeeds.
+    expect(sent[0]!.gas).toBe((1_500_000n * 3n) / 2n + 100_000n);
+    expect(await r.dueJobs("exit", 2000)).toEqual([]);
+  });
+});
