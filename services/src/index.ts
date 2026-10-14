@@ -47,3 +47,39 @@ function every(baseMs: number, name: string, fn: () => Promise<unknown>) {
   };
   void tick();
 }
+
+await migrate(db);
+const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
+const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, env.PUBLIC_URL, env.TELEGRAM_API_ROOT, listed);
+const sendAlert = (chat: number, text: string) => bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(env.PUBLIC_URL) });
+const vaultName = async (vault: string) => ((await r.card(vault)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? vault;
+
+const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
+  ? (() => {
+      const account = privateKeyToAccount(env.KEEPER_PRIVATE_KEY as Hex);
+      const wallet = createWalletClient({ account, transport });
+      const send = serialSender({
+        pendingNonce: () => client.getTransactionCount({ address: account.address, blockTag: "pending" }),
+        fees: async () => {
+          const f = await client.estimateFeesPerGas();
+          return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+        },
+        send: async (tx, nonce, fees) => wallet.sendTransaction({ ...tx, gas: tx.gas ?? withMargin(await client.estimateGas({ ...tx, account })), nonce, ...fees, chain: null } as never),
+        receipt: (hash) => client.getTransactionReceipt({ hash }).catch(() => null),
+        sleep: Bun.sleep,
+        now: Date.now,
+      });
+      return {
+        client: client as never,
+        repo: r,
+        router,
+        alarmBook,
+        multicall3: parts.multicall3,
+        morpho: parts.morpho,
+        account: account.address,
+        send,
+        now,
+        paidOnly: env.KEEPER_PAID_ONLY,
+      };
+    })()
+  : null;
