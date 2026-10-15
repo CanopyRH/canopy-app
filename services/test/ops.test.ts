@@ -517,4 +517,46 @@ describe("exit bundles", () => {
     expect(sent[0]!.gas).toBe((1_500_000n * 3n) / 2n + 100_000n);
     expect(await r.dueJobs("exit", 2000)).toEqual([]);
   });
+
+  test("one exit failing can't sink the bundle", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps, sent } = bundleDeps();
+    await drainExits(deps);
+    expect(bundled(sent[0]!).every((c) => c.allowFailure)).toBe(true);
+  });
+
+  test("different vaults never share a transaction", async () => {
+    await queue(1); await queue(2); await queue(3, V2); await queue(4, V2);
+    const { deps, sent } = bundleDeps();
+    await drainExits(deps);
+    expect(sent.map((x) => bundled(x).length)).toEqual([2, 2]);
+  });
+
+  test("an exit the gate turns down goes on alone, and the rest still leave", async () => {
+    for (const i of [1, 2, 3]) await queue(i);
+    const { deps, sent, landed } = bundleDeps({ refuse: [1] });
+    await drainExits(deps);
+    expect(bundled(sent[0]!).length).toBe(2);
+    expect(landed.has(owner(1)) && landed.has(owner(3))).toBe(true);
+    expect(sent[1]!.to).toBe(B); // The one the gate refused, sized and sent on its own.
+  });
+
+  test("what doesn't fit the gas budget stays due for the next pass, with no penalty", async () => {
+    for (const i of [1, 2, 3]) await queue(i);
+    const { deps, sent } = bundleDeps({ gasEach: BUNDLE_GAS / 2n });
+    await drainExits(deps);
+    expect(bundled(sent[0]!).length).toBe(2);
+    const left = await r.dueJobs("exit", 1);
+    expect(left.length).toBe(1);
+    expect(left[0]!.attempts).toBe(0);
+  });
+
+  test("an exit that didn't land stays open for a retry", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps } = bundleDeps({ stuck: [owner(2)] });
+    await drainExits(deps);
+    const left = await r.dueJobs("exit", 2000);
+    expect(left.map((x) => (x.payload as ExitJob).owner)).toEqual([owner(2)]);
+    expect(left[0]!.attempts).toBe(1);
+  });
 });
