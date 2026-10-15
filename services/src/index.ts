@@ -130,3 +130,48 @@ if (run("indexer") && contracts) {
 const watchers = env.WATCHERS.split(",").filter(Boolean) as Address[];
 
 const firing = new Set<Hex>();
+
+/** Fires a quorum alarm once enough approved signatures match. A keeper sends it; others just hold signatures. */
+async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
+  if (!keeper || firing.has(key)) return;
+  firing.add(key);
+  try {
+    const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook);
+    if (!call) return;
+    const live = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "isLive", args: [key, 86_400n] });
+    if (!live) await keeper.send(call);
+  } catch (e) {
+    console.error("quorum", (e as Error).message);
+  } finally {
+    firing.delete(key);
+  }
+}
+
+if (run("keeper") && keeper) {
+  every(1_000, "poke", () => pokeAndQueue(keeper));
+  every(1_000, "exits", () => drainExits(keeper));
+  // Watchers and the indexer run on other hosts, so this process picks up their work from the shared database.
+  every(2_000, "alarm queue", async () => {
+    for (const a of await r.recentAlarms(now() - ALARM_TTL)) await onFired(keeper, a.key as Hex, Number(a.fired_at));
+  });
+  every(2_000, "quorum", async () => {
+    for (const q of await r.quorumReady(env.QUORUM, now())) await tryQuorum(q.key as Hex, q.evidence_hash as Hex, BigInt(q.deadline));
+  });
+  const paidAfter = () => (keeper.paidOnly ? now() : undefined);
+  every(3_600_000, "share baselines", async () => checkpointKeys(keeper, (await r.liveKeysOfKind(Kind.SHARE_DROP, paidAfter())) as Hex[]));
+  // A DRAIN baseline older than its window can't fire, so this checks far more often than a baseline comes due.
+  every(600_000, "drain baselines", async () => checkpointKeys(keeper, (await r.liveKeysOfKind(Kind.DRAIN, paidAfter())) as Hex[]));
+  every(86_400_000, "owed", () => claimOwed(keeper));
+  every(60_000, "ops", async () => {
+    const gasWei = await client.getBalance({ address: keeper.account });
+    await r.setCounter("keeper_gas_wei", gasWei);
+    if (env.OPS_CHAT_ID === undefined) return;
+    const tip = await client.getBlockNumber();
+    const seen = await Promise.all(["router", "alarms"].map((c) => r.cursor(c)));
+    const cursor = seen.reduce<bigint>((low, c) => (c !== null && c < low ? c : low), tip);
+    const { oldestJobSec } = await r.health(now());
+    for (const p of opsProblems({ lagBlocks: tip > cursor ? tip - cursor : 0n, gasWei, minGasWei: env.KEEPER_MIN_GAS_WEI, oldestJobSec, maxLagBlocks: parts.maxLagBlocks })) {
+      if (await r.claimAlert("ops", p.code, now(), 3600)) await bot.api.sendMessage(env.OPS_CHAT_ID, p.text);
+    }
+  });
+}
