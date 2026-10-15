@@ -687,3 +687,48 @@ describe("watcher resilience", () => {
     expect(drainVelocity(samples, 3600, 2500n, V)?.value).toBe(6000);
   });
 });
+
+describe("feeds under attack", () => {
+  const NOW = Date.parse("2026-11-02T00:00:00Z") / 1000;
+
+  test("markup hidden in CDATA can't add or split items", () => {
+    const body = `<rss><channel><item><title><![CDATA[Real title</title></item><item><title>Injected]]></title></item></channel></rss>`;
+    const out = feedItems(body, NOW);
+    expect(out).toHaveLength(1);
+  });
+
+  test("a NUL character can't reach the database", () => {
+    expect(feedItems("<rss><item><title>a\0b</title></item></rss>", NOW)[0]).toBe("ab");
+  });
+
+  test("full post text in content:encoded is read", () => {
+    expect(feedItems(`<rss><item><title>t</title><content:encoded><![CDATA[<p>body</p>]]></content:encoded></item></rss>`, NOW)[0]).toBe("t. body");
+  });
+});
+
+describe("api limits", () => {
+  const api = (extra = {}) => createApi({ db, repo: r, vaults: async () => [], liveAlarms: async () => [], watchers: [], alarmBook: A, chainId: 8453, now: () => 1, ...extra });
+
+  test("a huge body is refused before it's parsed", async () => {
+    const res = await api().request("/watcher/attest", { method: "POST", body: "x".repeat(70_000), headers: { "content-length": "70000" } });
+    expect(res.status).toBe(413);
+  });
+
+  test("/health needs its token, and stays off without one", async () => {
+    const on = api({ health: async () => ({ ok: true }), healthToken: "t".repeat(16) });
+    expect((await on.request("/health")).status).toBe(403);
+    expect((await on.request("/health", { headers: { authorization: `Bearer ${"t".repeat(16)}` } })).status).toBe(200);
+    const unset = api({ health: async () => ({ ok: true }) });
+    expect((await unset.request("/health")).status).toBe(403);
+    expect((await unset.request("/health", { headers: { authorization: "Bearer undefined" } })).status).toBe(403);
+  });
+});
+
+describe("preset check", () => {
+  test("only a vault's own presets count, including their parts", () => {
+    const [first] = registrationOrder(V);
+    expect(isPreset(V, keyOf(first!))).toBe(true);
+    expect(isPreset(V, KEY)).toBe(false);
+    expect(isPreset(A, keyOf(first!))).toBe(false);
+  });
+});
