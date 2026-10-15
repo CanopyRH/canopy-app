@@ -208,3 +208,64 @@ if (run("detector")) {
     }
   });
 }
+
+if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_KEY) {
+  const account = privateKeyToAccount(env.WATCHER_PRIVATE_KEY as Hex);
+  const classify = classifierFor(env.ANTHROPIC_API_KEY, env.ANTHROPIC_BASE_URL, env.CLASSIFIER_MODEL);
+  const urls = env.FEED_URLS.split(",").filter(Boolean);
+  const peers = env.WATCHER_PEERS.split(",").filter(Boolean);
+  every(60_000, "feeds", async () => {
+    for (const url of urls) {
+      for (const text of await fetchFeed(url, now())) {
+        await ingestFeed(db, classify, url, text, now()).catch((e: Error) => console.warn("feed item", e.message));
+      }
+    }
+    const keys = await db.query<{ key: Hex; target: Hex; name: string }>(
+      `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`,
+    );
+    for (const item of await recentReports(db, now() - 3600)) {
+      for (const { key, target } of matchVaults(item.classification.protocol, keys)) {
+        if (await r.firedSince(key, now() - 86_400)) continue;
+        const feed = feedSignal(item.classification, target, now(), item.hash);
+        if (!feed) continue;
+        const soft = (await r.recentSignals(target, now() - 3600)) as Signal[];
+        const a = await maybeAttest(account, alarmBook, env.CHAIN_ID, key, [...soft, feed], now());
+        if (!a) continue;
+        await acceptAttestation(db, watchers, alarmBook, env.CHAIN_ID, a, now());
+        const body = JSON.stringify({ ...a, deadline: a.deadline.toString() });
+        await Promise.allSettled(peers.map((p) => fetch(`${p}/watcher/attest`, { method: "POST", body, signal: AbortSignal.timeout(5_000) })));
+        await tryQuorum(a.key, a.evidence, a.deadline);
+      }
+    }
+  });
+}
+
+if (run("api") || run("bot")) {
+  // grammY refuses polling once a webhook handler exists, so polling mode never creates one.
+  const hook = env.BOT_MODE === "webhook" ? webhookCallback(bot, "std/http") : null;
+  const app = createApi({
+    db,
+    repo: r,
+    vaults: async () => {
+      const rows = await r.cardList(listed);
+      return rows.map((x) => ({ address: x.target as Address, name: x.name ?? "", asset: x.asset ?? "", chainId: env.CHAIN_ID }));
+    },
+    liveAlarms: async () => (await db.query<{ key: string; fired_at: string; tx: string }>(`SELECT key, fired_at, tx FROM alarms WHERE fired_at>$1`, [now() - 86_400])).map((a) => ({ ...a, fired_at: Number(a.fired_at) })),
+    watchers,
+    alarmBook,
+    chainId: env.CHAIN_ID,
+    now,
+    onAttested: tryQuorum,
+    telegramSecret: env.TELEGRAM_WEBHOOK_SECRET,
+    // In polling mode the webhook route has no handler, so it refuses every request.
+    telegram: hook ? async (u) => void (await hook(new Request("http://local", { method: "POST", body: JSON.stringify(u) }))) : undefined,
+    healthToken: env.HEALTH_TOKEN,
+    health: async () => {
+      const tip = await client.getBlockNumber();
+      const cursor = await r.cursor("router");
+      return { chainId: env.CHAIN_ID, tip: tip.toString(), lagBlocks: cursor === null ? null : Number(tip > cursor ? tip - cursor : 0n), watchersApproved: watchers.length, ...(await r.health(now())) };
+    },
+  });
+  Bun.serve({ port: env.PORT, fetch: app.fetch });
+  if (env.BOT_MODE === "polling") void bot.start();
+}
