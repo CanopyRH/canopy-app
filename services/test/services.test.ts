@@ -151,4 +151,40 @@ describe("api", () => {
     db, repo: r, vaults: async () => [{ address: V, name: "V", chainId: 8453, asset: "USDC" }], liveAlarms: async () => [],
     watchers: [a.address], alarmBook: BOOK, chainId: 8453, now: () => 100, telegram: async () => {}, telegramSecret: "s".repeat(16),
   });
+
+  test("routes are read-only apart from watcher and Telegram posts", () => {
+    const routes = app().routes.filter((x) => x.method !== "ALL");
+    expect([...new Set(routes.filter((x) => x.method === "POST").map((x) => x.path))].sort()).toEqual(["/tg/webhook", "/watcher/attest"]);
+    expect(routes.every((x) => !/wallet|owner|account|user/i.test(x.path))).toBe(true);
+  });
+  test("a web app hosted elsewhere can read the API, but can't post to it", async () => {
+    const read = await app().request("/vaults", { headers: { origin: "https://app.example.com" } });
+    expect(read.headers.get("access-control-allow-origin")).toBe("*");
+    const preflight = await app().request("/watcher/attest", { method: "OPTIONS", headers: { origin: "https://app.example.com", "access-control-request-method": "POST" } });
+    expect(preflight.headers.get("access-control-allow-methods")).toBe("GET");
+  });
+  test("bad addresses are rejected and unknown vaults are 404", async () => {
+    expect((await app().request("/risk/nope")).status).toBe(400);
+    expect((await app().request(`/risk/${V}`)).status).toBe(404);
+  });
+  test("presets serialise", async () => {
+    const res = await app().request(`/presets/${V}`);
+    const body = (await res.json()) as { name: string }[];
+    expect(body.map((p) => p.name)).toContain("Vault loss");
+  });
+  test("attest rejects outsiders and malformed bodies, and accepts a watcher", async () => {
+    const post = (b: unknown) => app().request("/watcher/attest", { method: "POST", body: JSON.stringify(b) });
+    const good = await attest(a);
+    expect((await post({ ...good, deadline: "2000" })).status).toBe(200);
+    const bad = await attest(stranger);
+    expect((await post({ ...bad, deadline: "2000" })).status).toBe(403);
+    expect((await post({ hello: 1 })).status).toBe(400);
+    expect((await post({ ...good, deadline: "2000", extra: 1 })).status).toBe(400);
+  });
+  test("the Telegram webhook needs its secret", async () => {
+    const r1 = await app().request("/tg/webhook", { method: "POST", body: "{}" });
+    expect(r1.status).toBe(403);
+    const r2 = await app().request("/tg/webhook", { method: "POST", body: "{}", headers: { "x-telegram-bot-api-secret-token": "s".repeat(16) } });
+    expect(r2.status).toBe(200);
+  });
 });
