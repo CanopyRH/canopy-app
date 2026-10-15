@@ -124,3 +124,31 @@ describe("watcher", () => {
     expect((await quorumCall(db, t, 2, BOOK))?.to).toBe(BOOK);
   });
 });
+
+describe("keeper plan filter", () => {
+  const deps = (paidOnly: boolean, now = 1000): KeeperDeps => ({ repo: r, paidOnly, now: () => now } as never);
+  const arm = (owner: string, id: string) => r.upsertPosition({ posId: id, owner, adapter: "x", target: V.toLowerCase(), tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: [KEY] });
+
+  test("Canopy's keeper queues paid wallets only; an open keeper queues all", async () => {
+    await arm("0xpaid", `0x${"01".repeat(32)}`);
+    await arm("0xfree", `0x${"02".repeat(32)}`);
+    await r.setPaidUntil("0xpaid", 5000);
+    expect(await onFired(deps(true), KEY, 900)).toBe(1);
+    expect(await onFired(deps(false), KEY, 901)).toBe(2);
+  });
+  test("an expired plan is skipped, and a re-queued alarm does not double up", async () => {
+    await arm("0xold", `0x${"03".repeat(32)}`);
+    await r.setPaidUntil("0xold", 999);
+    expect(await onFired(deps(true), KEY, 900)).toBe(0);
+    await onFired(deps(false), KEY, 902);
+    await onFired(deps(false), KEY, 902);
+    expect(await r.dueJobs("exit", 9999)).toHaveLength(1);
+  });
+});
+
+describe("api", () => {
+  const app = () => createApi({
+    db, repo: r, vaults: async () => [{ address: V, name: "V", chainId: 8453, asset: "USDC" }], liveAlarms: async () => [],
+    watchers: [a.address], alarmBook: BOOK, chainId: 8453, now: () => 100, telegram: async () => {}, telegramSecret: "s".repeat(16),
+  });
+});
