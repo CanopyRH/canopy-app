@@ -83,3 +83,50 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
       };
     })()
   : null;
+
+if (run("indexer") && contracts) {
+  every(2_000, "router", () =>
+    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onLog: (l) => applyRouterLog(r, l) }));
+  every(2_000, "alarms", () =>
+    syncLogs(client, r, {
+      name: "alarms",
+      address: alarmBook,
+      startBlock: env.START_BLOCK,
+      onLog: async (l) => {
+        if (await applyRegistered(db, l)) return;
+        const f = decodeFired(l);
+        if (!f) return;
+        // Read at the log's own block, because a node a block behind would report no alarm and the exits would be lost.
+        const state = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "state", args: [f.key], blockNumber: l.blockNumber ?? undefined });
+        const firedAt = Number(state[1]);
+        if (firedAt === 0) throw new Error(`no alarm at ${f.tx}`);
+        await r.recordAlarm(f.key, firedAt, f.tx, f.evidence);
+        if (keeper) await onFired(keeper, f.key, firedAt);
+        const kind = await r.detectorKind(f.key);
+        // Anyone can arm a key of their own on a real vault, so followers only hear about the vault's own presets.
+        const armed = (await r.vaultsFor(f.key)).filter((v) => isPreset(v as Address, f.key));
+        const once = (vault: string) => r.claimAlert(vault, `fired:${f.key}:${firedAt}`, now(), 2 * ALARM_TTL);
+        for (const vault of armed) {
+          if (!(await once(vault))) continue;
+          await notifyFollowers(r, sendAlert, vault, { vaultName: await vaultName(vault), alarm: ALARM_NAMES[kind ?? -1] ?? "an alarm", evidenceUrl: txUrl(env.CHAIN_ID, f.tx) });
+        }
+        // With nothing armed, the scan already covers on-chain signals. A watcher confirmation has no other route to followers.
+        const vault = f.target.toLowerCase();
+        if (armed.length === 0 && kind === Kind.QUORUM && isPreset(vault as Address, f.key) && (await once(vault))) {
+          await notifyText(r, sendAlert, vault, watchAlert({ vaultName: await vaultName(vault), what: "watchers confirmed a report about it", withdrawInRobinhoodApp: onRobinhood }));
+        }
+      },
+    }));
+  every(30_000, "payments", () =>
+    syncLogs(client, r, {
+      name: "payments",
+      address: env.PLAN_TOKEN as Address,
+      startBlock: env.START_BLOCK,
+      filter: { event: getAbiItem({ abi: erc20Abi, name: "Transfer" }), args: { to: env.PLAN_PAY_ADDRESS } },
+      onLog: async (l) => void (await applyPayment(r, l, now())),
+    }));
+}
+
+const watchers = env.WATCHERS.split(",").filter(Boolean) as Address[];
+
+const firing = new Set<Hex>();
