@@ -175,3 +175,36 @@ if (run("keeper") && keeper) {
     }
   });
 }
+
+/** Vaults people are in, plus the app's supported list, so a risk card is there before anyone arms. */
+const trackedVaults = async () => {
+  const rows = await db.query<{ target: string }>(`SELECT DISTINCT target FROM positions UNION SELECT DISTINCT target FROM vault_follows`);
+  return [...new Set([...rows.map((x) => x.target), ...listed])];
+};
+
+if (run("detector")) {
+  every(600_000, "cards", async () => {
+    for (const target of await trackedVaults()) {
+      try {
+        // Followers can name a vault on another chain. That chain's operator builds its card.
+        if (!(await client.getCode({ address: target as Address }))) continue;
+        const c = await readCard(client as never, target as Address);
+        await r.saveCard(target, c, cardText(c), now());
+      } catch (e) {
+        console.error("card", target, (e as Error).message);
+      }
+    }
+  });
+  every(60_000, "scans", async () => {
+    for (const target of await trackedVaults()) {
+      try {
+        for (const s of await scanVault({ client, repo: r, now }, target as Address)) {
+          if (!(await r.claimAlert(target, s.kind, now()))) continue;
+          await notifyText(r, sendAlert, target, watchAlert({ vaultName: await vaultName(target), what: signalLine(s.kind, s.value), withdrawInRobinhoodApp: onRobinhood }));
+        }
+      } catch (e) {
+        console.error("scan", target, (e as Error).message);
+      }
+    }
+  });
+}
