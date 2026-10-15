@@ -559,4 +559,47 @@ describe("exit bundles", () => {
     expect(left.map((x) => (x.payload as ExitJob).owner)).toEqual([owner(2)]);
     expect(left[0]!.attempts).toBe(1);
   });
+
+  test("a job past the alarm's life is closed, not sent", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps, sent } = bundleDeps({ now: 1000 + 86_401 });
+    await drainExits(deps);
+    expect(sent).toEqual([]);
+    expect(await r.dueJobs("exit", 200_000)).toEqual([]);
+  });
+
+  test("a job with nothing left is closed without a transaction", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps, sent, landed } = bundleDeps();
+    landed.add(owner(1));
+    landed.add(owner(2));
+    await drainExits(deps);
+    expect(sent).toEqual([]);
+    expect(await r.dueJobs("exit", 2000)).toEqual([]);
+  });
+
+  test("a node that refuses a large simulation drops back to one by one", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps, sent } = bundleDeps({ failSim: true });
+    await drainExits(deps);
+    expect(sent.map((x) => x.to)).toEqual([B, B]);
+    expect(await r.dueJobs("exit", 2000)).toEqual([]);
+  });
+
+  test("a reverted bundle leaves every job open", async () => {
+    for (const i of [1, 2]) await queue(i);
+    const { deps } = bundleDeps({ revert: true });
+    await drainExits(deps);
+    expect((await r.dueJobs("exit", 2000)).length).toBe(2);
+  });
+
+  test("an estimate gets room for a vault that costs more by the time the transaction lands", () => {
+    // The failure this guards against: 482,098 of a 487,682 limit used, out of gas on the last transfer.
+    expect(withMargin(487_682n)).toBeGreaterThan(600_000n);
+  });
+});
+
+describe("indexer resilience", () => {
+  const client = (logs: unknown[]) => ({ getBlockNumber: async () => 10n, getLogs: async () => logs }) as never;
+  const l = (i: number) => ({ transactionHash: TX, logIndex: i }) as never;
 });
