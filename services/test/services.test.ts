@@ -188,3 +188,54 @@ describe("api", () => {
     expect(r2.status).toBe(200);
   });
 });
+
+describe("presets", () => {
+  test("hard alarms fire alone; soft ones are wrapped in BOTH", () => {
+    const p = presetsFor(V);
+    expect(p.map((x) => x.detector.kind)).toEqual([Kind.SHARE_DROP, Kind.QUORUM, Kind.PAUSED, Kind.BOTH, Kind.BOTH]);
+    expect(p[1]!.detector.threshold).toBe(2n);
+  });
+  test("no USDG or stablecoin depeg preset is offered", () => {
+    expect(presetsFor(V).some((x) => x.detector.kind === Kind.PRICE_BELOW)).toBe(false);
+  });
+  test("registration puts every dependency before the alarm that needs it", () => {
+    const order = registrationOrder(V).map(keyOf);
+    expect(new Set(order).size).toBe(order.length);
+    for (const d of registrationOrder(V)) {
+      if (d.kind !== Kind.BOTH) continue;
+      expect(order.indexOf(d.a)).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf(d.a)).toBeLessThan(order.indexOf(keyOf(d)));
+      expect(order.indexOf(d.b)).toBeLessThan(order.indexOf(keyOf(d)));
+    }
+    expect(order).toHaveLength(7);
+  });
+  test("keys match the detector", () => {
+    for (const x of presetsFor(V)) expect(x.key).toBe(keyOf(x.detector));
+  });
+});
+
+describe("bot", () => {
+  const chat = 42;
+  test("watch, list and unwatch store a chat and a vault", async () => {
+    await handle(r, "https://x", chat, "watch", V);
+    expect((await handle(r, "https://x", chat, "list", "")).text).toContain(V);
+    await handle(r, "https://x", chat, "unwatch", V);
+    expect((await handle(r, "https://x", chat, "list", "")).text).toContain("aren't following");
+  });
+  test("bad input is refused without storing anything", async () => {
+    expect((await handle(r, "https://x", chat, "watch", "hello")).text).toContain("/watch 0x");
+    expect(await r.following(chat)).toEqual([]);
+  });
+  test("keyboards only open links", () => {
+    const rows = appKeyboard("https://x").inline_keyboard.flat();
+    expect(rows.every((b) => "url" in b && !("web_app" in b))).toBe(true);
+  });
+  test("one failed chat does not stop the rest", async () => {
+    await r.follow(1, V);
+    await r.follow(2, V);
+    const sent: number[] = [];
+    const n = await notifyFollowers(r, async (c) => { if (c === 1) throw new Error("blocked"); sent.push(c); }, V, { vaultName: "V", alarm: "x" });
+    expect(n).toBe(1);
+    expect(sent).toEqual([2]);
+  });
+});
