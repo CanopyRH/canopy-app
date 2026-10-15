@@ -641,4 +641,49 @@ describe("watcher resilience", () => {
     expect((await ingestFeed(db, async () => label, "https://a.example", "report", 2))?.classification.label).toBe("EXPLOIT_CONFIRMED");
     expect((await recentReports(db, 1)).map((x) => x.classification.protocol)).toEqual(["Spark"]);
   });
+
+  test("a labelled report isn't paid for twice, and a hopeless one stops after a few tries", async () => {
+    let calls = 0;
+    const count = async () => { calls++; return label; };
+    await ingestFeed(db, count, "https://a.example", "once", 1);
+    await ingestFeed(db, count, "https://a.example", "once", 2);
+    expect(calls).toBe(1);
+    let refused = 0;
+    for (let i = 0; i < 9; i++) await ingestFeed(db, async () => { refused++; return null; }, "https://a.example", "refused", i);
+    expect(refused).toBe(5);
+  });
+
+  const vaults = ["Spark USDC", "Steakhouse USDC", "Gauntlet USDC Prime", "Ethena USDC", "Canopy Test Vault"].map((name) => ({ name }));
+  const names = (p: string) => matchVaults(p, vaults).map((v) => v.name);
+
+  test("a token symbol or a stray word matches nothing", () => {
+    for (const p of ["USDC", "USD", "eth", "the", "Prime", ""]) expect(names(p)).toEqual([]);
+  });
+
+  test("real ways of naming a protocol still match", () => {
+    expect(names("Spark Protocol")).toEqual(["Spark USDC"]);
+    expect(names("SparkLend")).toEqual(["Spark USDC"]);
+    expect(names("Steakhouse Financial")).toEqual(["Steakhouse USDC"]);
+    expect(names("Gauntlet USDC Prime")).toEqual(["Gauntlet USDC Prime"]);
+  });
+
+  test("a report about the platform concerns every vault on it", () => {
+    expect(names("Morpho Blue")).toHaveLength(vaults.length);
+  });
+
+  test("a high-s signature copy is refused, so it can't shut out the real one", () => {
+    const r32 = "11".repeat(32);
+    expect(isHighS(`0x${r32}${"ff".repeat(32)}1b`)).toBe(true);
+    expect(isHighS(`0x${r32}${"11".repeat(32)}1b`)).toBe(false);
+  });
+
+  test("capital parked across one reading can't fake a drain", () => {
+    const samples = [100n, 150n, 100n].map((totalAssets, t) => ({ t, totalAssets }));
+    expect(drainVelocity(samples, 3600, 2500n, V)).toBeNull();
+  });
+
+  test("a drain still shows against the usual level", () => {
+    const samples = [100n, 100n, 100n, 40n].map((totalAssets, t) => ({ t, totalAssets }));
+    expect(drainVelocity(samples, 3600, 2500n, V)?.value).toBe(6000);
+  });
 });
