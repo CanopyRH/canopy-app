@@ -57,3 +57,27 @@ const waitFor = async (what: string, fn: () => Promise<boolean>, ms = 45_000) =>
   console.log(`  timed out waiting for ${what}`);
   return false;
 };
+
+// Local stand-ins.
+const telegram: { chat: number; text: string }[] = [];
+let feedText = "Routine status update. All systems normal.";
+const mock = Bun.serve({
+  port: MOCK,
+  async fetch(req) {
+    const u = new URL(req.url);
+    if (u.pathname === "/feed") return new Response(feedText);
+    if (u.pathname === "/v1/messages") {
+      const body = (await req.json()) as { messages: { content: string }[] };
+      const exploit = body.messages[0]!.content.includes("drained");
+      const verdict = exploit ? { label: "EXPLOIT_CONFIRMED", protocol: "Steakhouse", confidence: 0.97 } : { label: "IRRELEVANT", protocol: "none", confidence: 0.9 };
+      return Response.json({ id: "m", type: "message", role: "assistant", model: "x", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(verdict) }], usage: { input_tokens: 1, output_tokens: 1 } });
+    }
+    if (u.pathname.endsWith("/getMe")) return Response.json({ ok: true, result: { id: 1, is_bot: true, first_name: "Canopy", username: "canopy_bot" } });
+    if (u.pathname.endsWith("/sendMessage")) {
+      const b = (await req.json()) as { chat_id: number; text: string };
+      telegram.push({ chat: b.chat_id, text: b.text });
+      return Response.json({ ok: true, result: { message_id: telegram.length, date: 0, chat: { id: b.chat_id, type: "private" } } });
+    }
+    return new Response("nope", { status: 404 });
+  },
+});
