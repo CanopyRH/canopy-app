@@ -81,3 +81,7 @@ const mock = Bun.serve({
     return new Response("nope", { status: 404 });
   },
 });
+
+const procs: ReturnType<typeof spawn>[] = [];
+const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--fork-url", FORK, "--port", String(RPC_PORT), "--silent", "--no-rate-limit"], { stdout: "ignore", stderr: "ignore" });
+procs.push(anvil);
