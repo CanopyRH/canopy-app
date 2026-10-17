@@ -1,0 +1,5 @@
+[install]
+exact = true
+saveTextLockfile = true
+# Refuse packages published in the last 14 days. Install scripts stay off through empty trustedDependencies.
+minimumReleaseAge = 1209600
