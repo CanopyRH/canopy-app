@@ -84,3 +84,38 @@ export async function presetViews(vault: Address): Promise<PresetView[]> {
   }));
   return views.filter((v) => v !== null);
 }
+
+/** A gate the curator gave up can still be locked on, so this reads what the gates would do to this exit. */
+export function gatesBlock(vault: Address, owner: Address) {
+  const read: Read = (address, functionName, args = []) => client.readContract({ address, abi: gateAbi, functionName, args } as never) as Promise<unknown>;
+  return exitBlocked(read, vault, owner, CONFIG.adapter!, CONFIG.router!);
+}
+
+/** Whether a detector is one of the chosen presets, or a part one of them depends on. */
+function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
+  const key = keyOf(d);
+  return presets.filter((p) => keys.includes(p.key)).some((p) => p.key === key || (p.requires ?? []).some((r) => r.key === key));
+}
+
+/** Registers any missing alarms, approves the shares if needed, then arms. Each step is its own wallet signature. */
+export async function arm(s: Signer, vault: Address, keys: Hex[]) {
+  const presets = presetsFor(vault);
+  for (const d of registrationOrder(vault).filter((d) => needed(presets, keys, d))) {
+    const known = await client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [keyOf(d)] });
+    if (!known[0]) await send(s, registerTx(CONFIG.alarmBook!, d));
+  }
+  const allowed = await client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, CONFIG.router!] });
+  if (allowed < maxUint256 / 2n) await send(s, approveTx(vault, CONFIG.router!));
+  await send(s, armTx(CONFIG.router!, CONFIG.adapter!, vault, keys));
+}
+
+/** Exit Now. The router only handles armed positions; anyone else withdraws from the vault as usual. Returns the exit's transaction. */
+export async function exitNow(s: Signer, vault: Address, posId: Hex): Promise<{ hash: Hex; complete: boolean }> {
+  const hash = await send(s, exitTx(CONFIG.router!, posId));
+  const left = await client.readContract({ address: vault, abi: vaultAbi, functionName: "balanceOf", args: [s.account] });
+  return { hash, complete: left === 0n };
+}
+
+export const disarmAll = (s: Signer) => send(s, disarmAllTx(CONFIG.router!));
+
+export const payPlan = (s: Signer, amount: bigint) => send(s, planTx(CONFIG.planToken, CONFIG.planPayTo!, amount));
