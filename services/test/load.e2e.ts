@@ -48,3 +48,6 @@ const waitFor = async (what: string, fn: () => Promise<boolean>, ms = 120_000) =
   return false;
 };
 const pct = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]!;
+
+const procs: ReturnType<typeof spawn>[] = [];
+procs.push(spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--fork-url", FORK, "--port", String(RPC_PORT), "--silent", "--no-rate-limit"], { stdout: "ignore", stderr: "ignore" }));
