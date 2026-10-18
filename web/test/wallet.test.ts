@@ -42,3 +42,42 @@ const mined = (status: string, replaced?: string) => ({
     return { status };
   },
 });
+
+describe("finding wallets", () => {
+  const provider: Eip1193 = { request: async () => null };
+  const found = (uuid: string, name = uuid): FoundWallet => ({ info: { uuid, name, icon: "" }, provider });
+  const announce = (page: EventTarget, detail: unknown) => page.dispatchEvent(Object.assign(new Event("eip6963:announceProvider"), { detail }));
+
+  test("the page asks, and hears every wallet that answers", () => {
+    const page = new EventTarget();
+    let asked = false;
+    page.addEventListener("eip6963:requestProvider", () => (asked = true));
+    let seen: FoundWallet[] = [];
+    watchWallets(page, (all) => (seen = all));
+    expect(asked).toBe(true);
+    announce(page, found("a"));
+    announce(page, found("b"));
+    expect(seen.map((w) => w.info.name)).toEqual(["a", "b"]);
+  });
+
+  test("a wallet that answers twice is listed once", () => {
+    const page = new EventTarget();
+    let seen: FoundWallet[] = [];
+    watchWallets(page, (all) => (seen = all));
+    announce(page, found("a"));
+    announce(page, found("a"));
+    expect(seen.length).toBe(1);
+  });
+
+  test("a malformed answer is ignored", () => {
+    const page = new EventTarget();
+    let seen: FoundWallet[] = [];
+    watchWallets(page, (all) => (seen = all));
+    for (const bad of [undefined, {}, { info: { uuid: "x", name: "x" } }, { info: { uuid: "x", name: "x" }, provider: {} }]) announce(page, bad);
+    expect(seen).toEqual([]);
+  });
+
+  test("two wallets ask for a choice, however window.ethereum is set", () => {
+    expect(walletChoice([found("a"), found("b")], provider)).toEqual({ pick: [found("a"), found("b")] });
+  });
+});
