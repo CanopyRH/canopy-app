@@ -124,4 +124,45 @@ describe("sending", () => {
     await expect(sendTx(w, mined("success"), FROM, TX, NET)).rejects.toThrow(COPY.wrongChain);
     expect(calls).not.toContain("eth_sendTransaction");
   });
+
+  test("a wallet that stays on the wrong network sends nothing", async () => {
+    const { w, calls } = wallet("0x1", false);
+    await expect(sendTx(w, mined("success"), FROM, TX, NET)).rejects.toThrow(COPY.wrongChain);
+    expect(calls).not.toContain("eth_sendTransaction");
+    expect(calls).not.toContain("wallet_addEthereumChain"); // a person who said no isn't asked again
+  });
+
+  test("a reverted transaction is a failure, never a success", async () => {
+    const { w } = wallet("0x1237");
+    await expect(sendTx(w, mined("reverted"), FROM, TX, NET)).rejects.toThrow(COPY.txFailed);
+  });
+});
+
+describe("replaced transactions", () => {
+  test("a speed-up still counts", async () => {
+    const { w } = wallet("0x1237");
+    expect(await sendTx(w, mined("success", "repriced"), FROM, TX, NET)).toBe(HASH);
+  });
+
+  test("a cancel doesn't read as success, even with a good receipt", async () => {
+    for (const reason of ["cancelled", "replaced"]) {
+      const { w } = wallet("0x1237");
+      await expect(sendTx(w, mined("success", reason), FROM, TX, NET)).rejects.toThrow(COPY.txFailed);
+    }
+  });
+});
+
+describe("wallet errors", () => {
+  test("a declined request reads plainly", () => {
+    expect(friendly({ code: 4001, message: "x" })).toBe(COPY.txRejected);
+    expect(friendly(new Error("User rejected the request."))).toBe(COPY.txRejected);
+  });
+
+  test("a node refusing a call isn't blamed on the user", () => {
+    expect(friendly(new Error("execution reverted: rejected by gate"))).not.toBe(COPY.txRejected);
+  });
+
+  test("a long error is cut to its first line", () => {
+    expect(friendly(new Error("short reason\nlots of details"))).toBe("short reason");
+  });
 });
