@@ -42,3 +42,56 @@ test("the web register call matches the compiled AlarmBook", () => {
   const d = registrationOrder(V)[0]!;
   expect(registerTx(R, d).to).toBe(R);
 });
+
+test("exit has no recipient and uses the owner path", () => {
+  const { functionName, args } = decodeFunctionData({ abi: routerAbi, data: exitTx(R, K).data });
+  expect(functionName).toBe("exit");
+  expect(args).toEqual([K, ZERO_KEY, 0n]);
+  const exit = compiled.find((x) => x.type === "function" && x.name === "exit") as unknown as { inputs: { name: string }[] };
+  expect(exit.inputs.map((i) => i.name)).toEqual(["posId", "alarmKey", "amount"]);
+});
+
+test("approve only ever names the router", () => {
+  const erc = parseAbi(["function approve(address,uint256)"]);
+  const { args } = decodeFunctionData({ abi: erc, data: approveTx(V, R).data });
+  expect((args[0] as string).toLowerCase()).toBe(R);
+  expect(args[1]).toBe(maxUint256);
+});
+
+test("plan amounts match the priced plans", () => {
+  expect(PLAN_AMOUNTS.months3).toBe(15_000_000n);
+  expect(PLAN_AMOUNTS.year).toBe(60_000_000n);
+  expect(planTx(V, R, PLAN_AMOUNTS.year).to).toBe(V);
+  expect(disarmAllTx(R).to).toBe(R);
+});
+
+test("sanctioned addresses are blocked, ordinary ones are not", () => {
+  expect(sanctioned.addresses.length).toBeGreaterThan(100);
+  expect(isBlocked(sanctioned.addresses[0]!.toUpperCase().replace("0X", "0x"))).toBe(true);
+  expect(isBlocked(R)).toBe(false);
+});
+
+test("the OFAC parser reads digital currency entries only", () => {
+  const xml = `<id><idType>Digital Currency Address - ETH</idType>
+    <idNumber>0xAbC0000000000000000000000000000000000001</idNumber></id>
+    <id><idType>Passport</idType><idNumber>0xdef0000000000000000000000000000000000002</idNumber></id>`;
+  expect(extractAddresses(xml)).toEqual(["0xabc0000000000000000000000000000000000001"]);
+});
+
+test("wallet input is validated", () => {
+  expect(parseWallet("nope")).toBeNull();
+  expect(parseWallet(`  ${R} `)?.toLowerCase()).toBe(R);
+});
+
+test("copy is clean and terms are not promises", () => {
+  expect(findBanned(JSON.stringify(COPY))).toEqual([]);
+  expect(TERMS).toContain("does not cover losses");
+  expect(TERMS.length).toBeGreaterThan(50);
+  expect(termsHash()).toMatch(/^0x[0-9a-f]{64}$/);
+});
+
+test("the release build holds no test deployment", () => {
+  expect(CONFIG.chainId).toBe(4663);
+  expect(deployment).toEqual({});
+  expect(CONFIG.vaults.length).toBeGreaterThanOrEqual(5);
+});
