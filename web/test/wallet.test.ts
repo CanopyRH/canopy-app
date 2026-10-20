@@ -80,4 +80,48 @@ describe("finding wallets", () => {
   test("two wallets ask for a choice, however window.ethereum is set", () => {
     expect(walletChoice([found("a"), found("b")], provider)).toEqual({ pick: [found("a"), found("b")] });
   });
+
+  test("one wallet connects straight away, and an older wallet still works", () => {
+    expect(walletChoice([found("a")])).toEqual({ use: provider });
+    expect(walletChoice([], provider)).toEqual({ use: provider });
+    expect(walletChoice([])).toBeNull();
+  });
+
+  test("only an inline icon is shown", () => {
+    expect(safeIcon("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
+    for (const bad of ["https://tracker.test/x.png", "javascript:alert(1)", ""]) expect(safeIcon(bad)).toBeNull();
+  });
+});
+
+describe("sending", () => {
+  test("the right network sends straight away and waits for the receipt", async () => {
+    const { w, calls } = wallet("0x1237");
+    expect(await sendTx(w, mined("success"), FROM, TX, NET)).toBe(HASH);
+    expect(calls).toEqual(["eth_chainId", "eth_sendTransaction"]);
+  });
+
+  test("the same network in another format counts", async () => {
+    const { w, calls } = wallet("0x01237");
+    await sendTx(w, mined("success"), FROM, TX, NET);
+    expect(calls).not.toContain("wallet_switchEthereumChain");
+  });
+
+  test("the wrong network switches first", async () => {
+    const { w, calls } = wallet("0x1");
+    await sendTx(w, mined("success"), FROM, TX, NET);
+    expect(calls).toEqual(["eth_chainId", "wallet_switchEthereumChain", "eth_chainId", "eth_sendTransaction"]);
+  });
+
+  test("a wallet without Robinhood Chain is asked to add it, then sends", async () => {
+    const { w, calls, added } = wallet("0x2105", true, false);
+    expect(await sendTx(w, mined("success"), FROM, TX, NET)).toBe(HASH);
+    expect(calls).toContain("wallet_addEthereumChain");
+    expect(added).toEqual([{ chainId: "0x1237", chainName: "Robinhood Chain", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: [NET.rpcUrl], blockExplorerUrls: [NET.explorer] }]);
+  });
+
+  test("a wallet that refuses to add the network sends nothing", async () => {
+    const { w, calls } = wallet("0x2105", true, false, false);
+    await expect(sendTx(w, mined("success"), FROM, TX, NET)).rejects.toThrow(COPY.wrongChain);
+    expect(calls).not.toContain("eth_sendTransaction");
+  });
 });
