@@ -31,3 +31,40 @@ export const ZERO_KEY = `0x${"00".repeat(32)}` as Hex;
 export const PLAN_AMOUNTS = { months3: 15_000_000n, year: 60_000_000n } as const;
 
 const blocked = new Set(sanctioned.addresses);
+
+export const termsHash = () => keccak256(stringToHex(TERMS));
+export const isBlocked = (a: string) => blocked.has(a.toLowerCase());
+export const parseWallet = (s: string): Address | null => (isAddress(s.trim(), { strict: false }) ? getAddress(s.trim().toLowerCase()) : null);
+
+/** Registration is open to anyone. A key that was never registered can never fire. */
+export function registerTx(book: Address, d: Detector): Tx {
+  return { to: book, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "register", args: [d] }) };
+}
+
+export function approveTx(vault: Address, router: Address): Tx {
+  return { to: vault, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [router, maxUint256] }) };
+}
+
+/** Vault positions take no swap in v1, so harbour and slippage are always 0. */
+export function armTx(router: Address, adapter: Address, vault: Address, keys: Hex[]): Tx {
+  return {
+    to: router,
+    data: encodeFunctionData({
+      abi: routerAbi,
+      functionName: "arm",
+      args: [{ adapter, target: vault, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: termsHash(), keys }],
+    }),
+  };
+}
+
+export function exitTx(router: Address, posId: Hex): Tx {
+  return { to: router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [posId, ZERO_KEY, 0n] }) };
+}
+
+export function disarmAllTx(router: Address): Tx {
+  return { to: router, data: encodeFunctionData({ abi: routerAbi, functionName: "disarmAll" }) };
+}
+
+export function planTx(token: Address, payTo: Address, amount: bigint): Tx {
+  return { to: token, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [payTo, amount] }) };
+}
