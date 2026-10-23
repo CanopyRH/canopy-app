@@ -64,3 +64,19 @@ function PositionRows({ rows, onReview, compact = false }: { rows: Row[]; onRevi
     <button className="cd-icon-button cd-position-review" onClick={() => onReview(r)} aria-label={`Review ${r.vault.name}`}><ArrowUpRight size={18} /></button>
   </article>)}</div>;
 }
+
+function Allocation({ rows }: { rows: Row[] }) {
+  const total = rows.reduce((s, r) => s + r.assets, 0n);
+  const colors = ["#3d4541", "#8e9f91", "#c4cec2", "#a7aaa6"];
+  const share = (r: Row) => (total ? Number((r.assets * 10_000n) / total) / 10_000 : 0);
+  let offset = 0;
+  return <div className="cd-allocation">
+    <div className="cd-donut-wrap"><svg viewBox="0 0 180 180" className="cd-donut" role="img" aria-label={`Allocation across ${rows.length} positions`}><circle cx="90" cy="90" r="70" fill="none" stroke="#e9eae5" strokeWidth="13" />{rows.map((r, i) => {
+      const dash = share(r) * 439.82;
+      const at = offset;
+      offset += dash;
+      return <circle key={r.vault.address} cx="90" cy="90" r="70" fill="none" stroke={colors[i % colors.length]} strokeWidth="13" strokeDasharray={`${Math.max(0, dash - 5)} ${439.82 - Math.max(0, dash - 5)}`} strokeDashoffset={-at} transform="rotate(-90 90 90)" strokeLinecap="round" className="cd-donut-segment" />;
+    })}</svg><div className="cd-donut-label"><strong>{rows.length}</strong><span>positions</span></div></div>
+    <div className="cd-allocation-legend">{rows.map((r, i) => <div key={r.vault.address} className="cd-legend-item"><i style={{ background: colors[i % colors.length] }} /><span>{r.vault.name}</span><strong>{Math.round(share(r) * 100)}%</strong></div>)}</div>
+  </div>;
+}
