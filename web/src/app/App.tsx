@@ -80,3 +80,58 @@ function Allocation({ rows }: { rows: Row[] }) {
     <div className="cd-allocation-legend">{rows.map((r, i) => <div key={r.vault.address} className="cd-legend-item"><i style={{ background: colors[i % colors.length] }} /><span>{r.vault.name}</span><strong>{Math.round(share(r) * 100)}%</strong></div>)}</div>
   </div>;
 }
+
+/** Alarms and the risk card for one position. Arming and Exit Now appear only for the connected owner on a live deployment. */
+function PositionDialog({ row, owner, signer, busy, note, onClose, act }: { row: Row; owner: Address; signer: Signer | null; busy: boolean; note: Note | null; onClose: () => void; act: (fn: () => Promise<Note>) => void }) {
+  const [tab, setTab] = useState<"alarms" | "risk">("alarms");
+  const [risk, setRisk] = useState<string | null | undefined>(undefined);
+  const [views, setViews] = useState<PresetView[] | null>(null);
+  const [picked, setPicked] = useState<Hex[]>([]);
+  const [accepted, setAccepted] = useState(false);
+  const [gated, setGated] = useState(false);
+  const mine = live() && signer !== null && same(signer.account, owner);
+  useEffect(() => void riskCard(row.vault.address).then(setRisk), [row.vault.address]);
+  useEffect(() => {
+    if (!mine) return;
+    void presetViews(row.vault.address).then(setViews);
+    void gatesBlock(row.vault.address, owner).then(setGated);
+  }, [mine, row.vault.address, owner]);
+  const toggle = (key: Hex, on: boolean) => setPicked((p) => (on ? [...p, key] : p.filter((k) => k !== key)));
+  const armIt = () => act(async () => {
+    await arm(signer!, row.vault.address, picked);
+    onClose();
+    return { text: COPY.armedDone };
+  });
+  const exitIt = () => act(async () => {
+    const { hash, complete } = await exitNow(signer!, row.vault.address, row.state!.posId);
+    onClose();
+    return { text: complete ? COPY.exitDone : COPY.exitPartial, link: `${CONFIG.explorer}/tx/${hash}` };
+  });
+
+  return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${CONFIG.chainName}`} onClose={onClose} wide>
+    <div className="cd-position-dialog-summary"><div><span className="cd-asset-icon cd-asset-vault" aria-hidden="true"><Layers3 size={21} strokeWidth={1.5} /></span><div><strong>{usd(row.assets)} {row.vault.asset}</strong><span>Read from the chain just now</span></div></div><Status row={row} /></div>
+    <div className="cd-dialog-tabs" role="tablist" aria-label="Position details">{([["alarms", COPY.alarmsTab], ["risk", COPY.riskTab]] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={tab === id ? "is-active" : ""}>{label}</button>)}</div>
+    {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3></div><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre></div>}
+    {tab === "alarms" && <div className="cd-dialog-content">
+      {!live() && <p className="cd-inline-note"><CircleHelp size={15} />{COPY.notDeployed}</p>}
+      {live() && !mine && <p className="cd-inline-note"><Wallet size={15} />{COPY.connectToAct}</p>}
+      {mine && gated && <p className="cd-inline-note"><TriangleAlert size={15} />{COPY.gateBlocked}</p>}
+      {mine && !gated && <>
+        <div className="cd-section-heading"><h3>{COPY.armTitle}</h3><span>{picked.length} selected</span></div>
+        <p className="cd-caption">{COPY.armHelp}</p>
+        <div className="cd-alarm-editor">{(views ?? []).map(({ preset, tripped }) => {
+          const on = picked.includes(preset.key);
+          return <label key={preset.key} className={`cd-alarm-option ${on ? "is-selected" : ""}`}><input type="checkbox" disabled={tripped || busy} checked={on} onChange={(e) => toggle(preset.key, e.target.checked)} /><span className="cd-checkbox-mark">{on && <Check size={12} strokeWidth={3} />}</span><span><strong>{preset.name}</strong><small>{tripped ? COPY.alarmTripped : preset.note}</small></span>{preset.requires && <span className="cd-confirmation-tag">Watcher confirms</span>}</label>;
+        })}{views === null && <p className="cd-caption">{COPY.reading}</p>}</div>
+        <details className="cd-advanced"><summary>Terms</summary><pre className="cd-risk-text">{TERMS}</pre></details>
+        <label className="cd-terms"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /> {COPY.termsAccept}</label>
+      </>}
+      {/* The page's toast sits under this modal, so wallet prompts and errors show here too. */}
+      {note && <p className={`cd-dialog-status ${note.error ? "is-error" : ""}`} role="status">{note.text}</p>}
+      <div className="cd-dialog-actions">
+        {mine && row.state?.armed && <button className="cd-button cd-button-light" disabled={busy} onClick={exitIt}>{COPY.exitButton}<ArrowUpRight size={15} /></button>}
+        {mine && !gated && <button className="cd-button cd-button-dark" disabled={busy || !accepted || picked.length === 0} onClick={armIt}>{row.state?.armed ? COPY.changeAlarms : COPY.armButton}<ShieldCheck size={15} /></button>}
+      </div>
+    </div>}
+  </Modal>;
+}
