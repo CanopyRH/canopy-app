@@ -50,3 +50,17 @@ function Modal({ title, eyebrow, children, onClose, wide = false }: { title: str
     <div className="cd-dialog-surface"><div className="cd-dialog-header"><div>{eyebrow && <span className="cd-eyebrow">{eyebrow}</span>}<h2 id={titleId}>{title}</h2></div><button className="cd-icon-button" onClick={onClose} aria-label="Close dialog"><X size={20} /></button></div>{children}</div>
   </dialog>, document.body);
 }
+
+function Status({ row }: { row: Row }) {
+  const armed = row.state?.armed ?? false;
+  return <span className={`cd-status ${armed ? "cd-status-armed" : "cd-status-idle"}`}><span className="cd-status-dot" />{armed ? COPY.armed : COPY.idleValue}</span>;
+}
+
+function PositionRows({ rows, onReview, compact = false }: { rows: Row[]; onReview: (r: Row) => void; compact?: boolean }) {
+  return <div className={`cd-position-list ${compact ? "cd-position-list-compact" : ""}`}>{rows.map((r) => <article className="cd-position-row" key={r.vault.address}>
+    <button className="cd-position-title" onClick={() => onReview(r)}><span className="cd-asset-icon cd-asset-vault" aria-hidden="true"><Layers3 size={21} strokeWidth={1.5} /></span><span><strong>{r.vault.name}</strong><small>ERC-4626 · {r.vault.asset}</small></span></button>
+    <div className="cd-position-value"><strong>{usd(r.assets)}</strong><small>{r.vault.asset}</small></div>
+    <Status row={r} />
+    <button className="cd-icon-button cd-position-review" onClick={() => onReview(r)} aria-label={`Review ${r.vault.name}`}><ArrowUpRight size={18} /></button>
+  </article>)}</div>;
+}
