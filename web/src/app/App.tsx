@@ -135,3 +135,20 @@ function PositionDialog({ row, owner, signer, busy, note, onClose, act }: { row:
     </div>}
   </Modal>;
 }
+
+const NAV = [{ id: "overview", label: "Overview", icon: LayoutGrid }, { id: "positions", label: "Positions", icon: Layers3 }, { id: "plan", label: "Plan and controls", icon: CreditCard }] as const;
+function Dock({ active, onNavigate }: { active: Screen; onNavigate: (s: Screen) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const items = () => ref.current?.querySelectorAll<HTMLElement>(".cd-dock-item") ?? [];
+  const reset = () => items().forEach((i) => (i.style.setProperty("--cd-dock-scale", "1"), i.style.setProperty("--cd-dock-rise", "0px")));
+  const magnify = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse" || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    items().forEach((i) => {
+      const r = i.getBoundingClientRect();
+      const pull = Math.max(0, 1 - Math.abs(e.clientX - (r.left + r.width / 2)) / 110);
+      i.style.setProperty("--cd-dock-scale", String(1 + pull * 0.22));
+      i.style.setProperty("--cd-dock-rise", `${-pull * 8}px`);
+    });
+  };
+  return <nav className="cd-dock-wrap" aria-label="App"><div className="cd-dock" ref={ref} onPointerMove={magnify} onPointerLeave={reset}>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={`cd-dock-item ${active === id ? "is-active" : ""}`} onClick={() => (reset(), onNavigate(id))} aria-current={active === id ? "page" : undefined} aria-label={label}><span className="cd-dock-tooltip">{label}</span><span className="cd-dock-icon"><Icon size={24} strokeWidth={1.5} /></span><span className="cd-dock-mobile-label">{label}</span><i /></button>)}</div><span className="cd-dock-caption">YOUR EXIT. YOUR RULES.</span></nav>;
+}
