@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 1,
+  "brand": {
+    "name": "Canopy",
+    "descriptor": "DeFi auto-exit",
+    "title": "Canopy | Your DeFi exit plan",
+    "description": "Canopy watches the DeFi vaults you hold and exits them to your own wallet when an alarm you chose fires. Free wallet check, risk cards and alerts.",
+    "status": "Auto-exit launches on Robinhood Chain",
+    "ticker": null
+  },
+  "navigation": {
+    "menuLabel": "Menu",
+    "items": [
+      { "label": "About", "href": "#about" },
+      { "label": "Capabilities", "href": "#capabilities" },
+      { "label": "How it works", "href": "#process" },
+      { "label": "Fees", "href": "#pricing" },
+      { "label": "Questions", "href": "#faq" }
+    ],
+    "cta": { "label": "Open app", "href": "app.html" }
+  },
+  "hero": {
+    "id": "home",
+    "eyebrow": "Canopy · DeFi auto-exit",
+    "title": "Your DeFi exit,\nready before you need it.",
+    "description": "Canopy watches the vaults you hold. When an alarm you chose fires, it moves your money out to your own wallet.",
+    "primaryCta": { "label": "Check your wallet", "href": "app.html" },
+    "secondaryCta": { "label": "How it works", "href": "#process" },
+    "status": "Auto-exit launches on Robinhood Chain",
+    "note": "Not live on mainnet yet. The wallet check works today."
+  },
+  "about": {
+    "id": "about",
+    "number": "001",
+    "eyebrow": "WHO WE ARE",
+    "statement": "Canopy watches the DeFi vaults you hold. When a hack, a vault loss or a pause starts, it pulls your money out to your own wallet. The permission you sign can only ever pay you.",
+    "visualLabel": "Your vaults. Your alarms. Your wallet.",
+    "metrics": [
+      { "value": "1", "label": "Payout destination", "detail": "The position owner's wallet." },
+      { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can redirect a payout, and the exit contract's settings lock after 12 months." },
+      { "value": "Free", "label": "Scan and alerts", "detail": "Wallet check, risk cards and vault alerts." }
+    ],
+    "note": "An exit can only take what the vault can pay out at that moment. Auto-exit is not live on mainnet yet."
+  },
+  "value": {
+    "id": "value",
+    "number": "002",
+    "eyebrow": "VALUE",
+    "title": "Three rules behind every exit.",
+    "description": "A narrow permission, signals you can read and controls you can take back.",
+    "items": [
+      { "number": "01", "title": "Your wallet is the destination", "description": "The exit contract has no \"send to\" field. Every exit pays the position owner, and nobody else.", "icon": "wallet" },
+      { "number": "02", "title": "Evidence before execution", "description": "On-chain signals like a vault loss can fire directly. Softer signals, like a fast drain, need a watcher to confirm.", "icon": "scan" },
+      { "number": "03", "title": "Permissions you can revoke", "description": "Disarm every position in one transaction, or revoke the vault approval. Your own withdrawals never pass through Canopy.", "icon": "key" }
+    ]
+  },
+  "capabilities": {
+    "id": "capabilities",
+    "number": "003",
+    "eyebrow": "CAPABILITIES",
+    "title": "See the risk. Prepare the exit.",
+    "items": [
+      {
+        "id": "risk-cards",
+        "title": "Read your position's risk.",
+        "description": "Your browser lists your vault positions. Each one gets a plain-words card of on-chain facts.",
+        "bullets": ["Who can change the vault", "What it is exposed to", "How much could be withdrawn now"],
+        "scene": "risk-card"
+      },
+      {
+        "id": "alarms",
+        "title": "Choose your alarms.",
+        "description": "Canopy shows common presets: a vault loss, a pause, a curator change or a confirmed exploit. Nothing is armed until you pick.",
+        "scene": "alarm-threshold"
+      },
+      {
+        "id": "harbour",
+        "title": "Get the vault's own asset.",
+        "description": "An exit redeems your shares for the vault's asset, such as USDG, straight to your wallet. There is no swap in v1.",
+        "scene": "harbour-routing"
+      },
+      {
+        "id": "receipts",
+        "title": "Follow every exit on-chain.",
+        "description": "Each exit is a public transaction, and you get a link to it. Free Telegram alerts tell you when a vault you follow moves.",
+        "scene": "receipt"
+      },
+      {
+        "id": "revoke",
+        "title": "Keep the controls close.",
+        "description": "Exit Now and Disarm All are always free. You can still withdraw from the vault directly, as usual.",
+        "scene": "permissions"
+      }
+    ],
+    "callout": {
+      "title": "Start with a wallet you know.",
+      "description": "Paste any address to see its vault positions and risk cards. Nothing is signed.",
+      "cta": { "label": "Check a wallet", "href": "app.html" },
+      "note": "No wallet connection needed."
+    },
+    "safeguards": {
+      "title": "What the permission allows.",
+      "items": ["Owner-only payouts", "Alarms you chose", "Disarm at any time", "No fee logic in exits"]
+    }
+  },
+  "process": {
+    "id": "process",
+    "number": "004",
+    "eyebrow": "PROCESS",
+    "title": "From a scan to an exit.",
+    "description": "Five steps from reading a position to arming it.",
+    "items": [
+      { "number": "01", "title": "Check your wallet", "description": "Find your vault positions on Robinhood Chain. Your browser reads the chain directly, with no login or seed phrase." },
+      { "number": "02", "title": "Read the risk", "description": "See who can change the vault, what it is exposed to and how much could be withdrawn right now." },
+      { "number": "03", "title": "Follow it for free", "description": "Follow any vault in the Telegram bot and get an alert when it moves. No wallet connection needed." },
+      { "number": "04", "title": "Choose alarms and arm", "description": "Accept the terms, approve your vault shares to the exit contract and arm. You sign each step in your own wallet." },
+      { "number": "05", "title": "If an alarm fires", "description": "Keepers try your exit as soon as the alarm fires. You get the vault's asset and a link to the transaction. Getting back in is up to you." }
+    ]
+  },
+  "caseStudies": {
+    "id": "exit-stories",
+    "number": "005",
+    "eyebrow": "EXIT SCENARIOS",
+    "title": "What the signals mean.",
+    "description": "Illustrative flows using the launch presets. These are not recorded exits or customer results.",
+    "items": [
+      {
+        "id": "loss",
+        "tag": "Illustrative scenario · Vault loss",
+        "title": "A vault's share price drops.",
+        "description": "A vault loss is a hard, on-chain signal. If the share price falls 0.5% below its high, the alarm fires and keepers can exit armed positions.",
+        "metrics": [
+          { "value": "0.5%", "label": "Vault-loss preset", "detail": "Below the share price's highest reading." },
+          { "value": "Direct", "label": "No confirmation", "detail": "The contract checks the share price itself." },
+          { "value": "24h", "label": "Alarm stays live", "detail": "Keepers keep trying while liquidity returns." }
+        ],
+        "cta": { "label": "Read the mechanics", "href": "guide.html#how-it-works" },
+        "landscapeImage": "assets/scenario-depeg-landscape.jpg",
+        "landscapeAlt": "Fog rolls over a rocky coastline."
+      },
+      {
+        "id": "drain",
+        "tag": "Illustrative scenario · Drain",
+        "title": "A vault drains quickly.",
+        "description": "A fast drain can be an exploit or one large honest withdrawal. So the drain preset fires only when a watcher confirms it. Empty liquidity can still stop an exit.",
+        "metrics": [
+          { "value": "25%", "label": "Drain preset", "detail": "Of the vault's assets, within one hour." },
+          { "value": "1h", "label": "Drain window", "detail": "The preset measures over 3,600 seconds." },
+          { "value": "24h", "label": "Confirmation window", "detail": "The drain and a watcher confirmation must both land within 24 hours." }
+        ],
+        "cta": { "label": "Understand the limits", "href": "guide.html#exit-limits" },
+        "landscapeImage": "assets/scenario-vault-landscape.jpg",
+        "landscapeAlt": "Snowy mountain valley and glacial stream."
+      },
+      {
+        "id": "watchers",
+        "tag": "Illustrative scenario · Evidence",
+        "title": "An exploit report needs confirmation.",
+        "description": "Approved watchers check public reports. Two of three must sign before the exploit alarm fires. An AI may label a report, but it never decides an exit.",
+        "metrics": [
+          { "value": "2 of 3", "label": "Watcher quorum", "detail": "Approved watchers on separate infrastructure." },
+          { "value": "0", "label": "AI votes", "detail": "The AI labels reports. Your alarm rules and the contracts decide." },
+          { "value": "Owner", "label": "Payout", "detail": "Exits pay only the position owner." }
+        ],
+        "cta": { "label": "Review permissions", "href": "guide.html#how-it-works" },
+        "landscapeImage": "assets/scenario-quorum-landscape.jpg",
+        "landscapeAlt": "Misty forest under low cloud."
+      }
+    ],
+    "cta": { "label": "Check a wallet", "href": "app.html" }
+  },
+  "integrations": {
+    "id": "integrations",
+    "number": "006",
+    "eyebrow": "INTEGRATIONS",
+    "title": "Built on public contracts.",
+    "description": "Auto-exit launches on Robinhood Chain, for ERC-4626 vaults such as Morpho's USDG vaults. Base support and Uniswap LP exits are planned updates.",
+    "centerLabel": "Canopy",
+    "items": [
+            { "name": "Morpho", "status": "Launch scope", "role": "ERC-4626 vault positions", "image": "assets/integrations/morpho.svg", "imageAlt": "Morpho logo" },
+      { "name": "Telegram", "status": "Free alerts", "role": "Plain bot; signing happens in the web app", "image": "assets/integrations/telegram.svg", "imageAlt": "Telegram logo" },
+      { "name": "Robinhood Chain", "status": "Launch chain", "role": "Auto-exit network", "image": "assets/integrations/robinhood-chain.png", "imageAlt": "Robinhood Chain logo" },
+      { "name": "Base", "status": "Planned update", "role": "Second auto-exit network", "image": "assets/integrations/base.svg", "imageAlt": "Base logo" },
+      { "name": "Uniswap", "status": "Planned update", "role": "LP position exits", "image": "assets/integrations/uniswap.svg", "imageAlt": "Uniswap logo" }
+    ],
+    "cta": { "label": "View launch scope", "href": "guide.html#how-it-works" },
+    "note": "Names identify the networks and protocols Canopy works with. They do not imply endorsement or partnership."
+  },
+  "scenarios": {
+    "id": "limits",
+    "number": "007",
+    "eyebrow": "IN PRACTICE",
+    "title": "The details an exit depends on.",
+    "description": "Illustrative situations and product limits, not testimonials or recorded outcomes.",
+    "items": [
+      { "id": "empty-vault", "kind": "featured", "label": "Liquidity limit", "title": "The alarm is live. The vault is fully lent out.", "body": "An alarm can't create liquidity. Canopy withdraws whatever is liquid and keeps trying while the alarm is live, but there may be nothing to withdraw.", "attribution": "Product limit" },
+      { "id": "rumour", "kind": "text", "label": "False alarms", "title": "A warning turns out to be wrong.", "body": "An unneeded exit gives up your position. Requiring two signals reduces false fires, but can't remove them.", "attribution": "Product limit" },
+      { "id": "same-asset", "kind": "text", "label": "No swap in v1", "title": "The stablecoin itself is the problem.", "body": "You get the vault's own asset. An exit from a vault in a failing stablecoin doesn't help, so Canopy doesn't offer that alarm on those vaults.", "attribution": "Product limit" },
+      { "id": "destination", "kind": "text", "label": "Permission model", "title": "A keeper runs the exit.", "body": "The keeper can't choose a payout address. The contract pays the position owner. Contract risk still applies.", "attribution": "How it works" },
+      { "id": "gates", "kind": "text", "label": "Protocol restrictions", "title": "The vault turns on a share gate.", "body": "A curator can switch on share-transfer gates that block the standard exit. The app reads each vault's gates and won't arm one that would block you.", "attribution": "Product limit" },
+      { "id": "unpaid", "kind": "text", "label": "Separate billing", "title": "A plan payment lapses.", "body": "The exit contract has no fee logic. Canopy's keepers run paid wallets, and anyone can run an exit for an armed position with the open-source keeper. Exit Now stays free.", "attribution": "How it works" },
+      { "id": "ai-limit", "kind": "text", "label": "AI boundary", "title": "A report gets an AI label.", "body": "The AI only labels public reports. It can't fire an alarm, choose an amount or pick where funds go.", "attribution": "How it works" },
+      { "id": "crowded", "kind": "featured", "label": "Crowded exits", "title": "Many people armed the same vault.", "body": "Exits race each other for the same liquidity. Being first stops being an edge when everyone is armed.", "attribution": "Product limit" },
+      { "id": "disarm", "kind": "text", "label": "Your controls", "title": "You decide to stop using Canopy.", "body": "One transaction disarms every position. You can also revoke the vault approval and withdraw directly, as usual.", "attribution": "Permission model" }
+    ]
+  },
+  "pricing": {
+    "id": "pricing",
+    "number": "008",
+    "eyebrow": "PRICING",
+    "title": "Read the risk. Know the cost.",
+    "description": "A free scan and free alerts. One flat plan if you want Canopy's keepers to run your exits.",
+    "periodLabel": "PER WALLET · PAID IN USDG",
+    "plans": [
+      {
+        "id": "scan",
+        "name": "Scan",
+        "description": "Understand a position before you arm it.",
+        "amount": "Free",
+        "unit": "scan, risk cards and alerts",
+        "featuresLabel": "Read before you act:",
+        "features": ["Vault positions on Robinhood Chain", "Plain-words risk cards", "Telegram alerts for any vault", "Exit Now and Disarm All"],
+        "cta": { "label": "Check a wallet", "href": "app.html" }
+      },
+      {
+        "id": "armed",
+        "name": "Armed",
+        "description": "Canopy's keepers run your exits when an alarm fires.",
+        "amount": "$15",
+        "unit": "for 3 months, or $60 a year",
+        "badge": "Launch plan",
+        "featuresLabel": "Everything in Scan, plus:",
+        "features": ["Arm positions with the alarms you choose", "Canopy's keepers run your exits", "Keepers pay the gas", "No per-exit fee"],
+        "exitFee": "Exit Now and Disarm All stay free.",
+        "cta": { "label": "See arming", "href": "app.html" }
+      }
+    ],
+    "note": "Fees never touch an exit. The exit contract has no fee logic, and anyone running the open-source keeper can exit an armed position.",
+    "callout": {
+      "title": "Know what you would sign.",
+      "description": "Read how the vault approval, the arming and the plan payment differ.",
+      "cta": { "label": "Read the fee guide", "href": "guide.html#fees" }
+    }
+  },
+  "controls": {
+    "id": "controls",
+    "number": "009",
+    "eyebrow": "ALARMS",
+    "title": "Seven ways to read a warning.",
+    "description": "The alarm kinds the exit contract knows. The app offers the ones that fit each vault, and you choose.",
+    "items": [
+      { "id": "share-drop", "name": "Vault loss", "role": "SHARE DROP", "description": "The share price falls 0.5% below its high. Fires on its own." },
+      { "id": "paused", "name": "Pause", "role": "PAUSED", "description": "The vault reports that it is paused. Offered only on vaults with a pause switch." },
+      { "id": "address-change", "name": "Curator change", "role": "ADDRESS CHANGE", "description": "The vault's curator changes. Needs a watcher to confirm." },
+      { "id": "drain", "name": "Vault drain", "role": "DRAIN", "description": "Assets fall 25% within an hour. Needs a watcher to confirm." },
+      { "id": "quorum", "name": "Exploit confirmed", "role": "QUORUM", "description": "Two of three approved watchers sign an exploit report." },
+      { "id": "both", "name": "Two signals", "role": "BOTH", "description": "Fires only when a soft signal and a watcher confirmation both land within 24 hours." },
+      { "id": "price-below", "name": "Price floor", "role": "PRICE BELOW", "description": "A price feed falls below a floor. Built into the contract, not offered on launch vaults." }
+    ]
+  },
+  "faq": {
+    "id": "faq",
+    "number": "010",
+    "eyebrow": "FAQ",
+    "title": "Before you arm a position.",
+    "items": [
+      {
+        "question": "What does Canopy do, and what is live now?",
+        "answer": "Canopy watches the DeFi vaults you hold and tries to exit them to your own wallet when an alarm you chose fires. Auto-exit launches on Robinhood Chain for ERC-4626 vaults. It is not live on mainnet yet. The wallet check works now."
+      },
+      {
+        "question": "Can AI or a keeper choose where my funds go?",
+        "answer": "No. The exit contract has no \"send to\" field and pays the position owner only. The AI only labels public reports; your alarm rules and the contracts decide what happens. Contract risk still applies."
+      },
+      {
+        "question": "Will every exit succeed?",
+        "answer": "No. A fully lent-out vault, a share gate, a pause or a bug can limit or stop a withdrawal, and false alarms can cause unneeded exits. Canopy withdraws what is liquid and keeps trying while the alarm is live. It promises no outcome and does not cover losses."
+      },
+      {
+        "question": "What do I pay, and can I revoke access?",
+        "answer": "Scanning, risk cards and alerts are free. The Armed plan is $15 for 3 months or $60 a year per wallet, paid in USDG, and keepers pay the gas. Exit Now and Disarm All are always free. One transaction disarms everything, and you can revoke the vault approval."
+      },
+      {
+        "question": "I hold this vault through Robinhood Earn. Can I use Canopy?",
+        "answer": "You can check your position and follow the vault for free alerts. Auto-exit needs a wallet you sign with yourself, so it doesn't work for positions held in the Robinhood app. Alerts tell you to withdraw there."
+      },
+      {
+        "question": "Do I need an account or my seed phrase?",
+        "answer": "No. Canopy never asks for a seed phrase, a login or any ID. Your browser builds every transaction, and you sign it in your own wallet."
+      }
+    ],
+    "helpLabel": "Want the full mechanics?",
+    "helpCta": { "label": "Read the guides", "href": "guide.html#how-it-works" }
+  },
+  "contact": {
+    "id": "start",
+    "title": "Your exit starts\nwith a plan.",
+    "description": "Paste a wallet address to see its vault positions on Robinhood Chain. Nothing is signed, and the address stays in your browser.",
+    "form": {
+      "fields": [{ "name": "address", "label": "Wallet address", "type": "address", "placeholder": "0x…" }],
+      "submitLabel": "Check this wallet",
+      "note": "Read-only. Your browser reads the chain directly."
+    }
+  },
+  "footer": {
+    "brand": "Canopy",
+    "descriptor": "DeFi auto-exit",
+    "links": [
+      { "label": "Exit scenarios", "href": "#exit-stories" },
+      { "label": "App", "href": "app.html" },
+      { "label": "How it works", "href": "guide.html#how-it-works" },
+      { "label": "Fees", "href": "guide.html#fees" },
+      { "label": "Exit limits", "href": "guide.html#exit-limits" },
+      { "label": "Privacy", "href": "guide.html#privacy" }
+    ],
+    "copyright": "© 2026 Canopy",
+    "note": "Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not cover losses.",
+    "integrationNote": "Third-party names identify networks and protocols Canopy works with, not endorsements."
+  }
+}
