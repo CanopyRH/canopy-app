@@ -1,0 +1,1 @@
+{ "name": "Canopy", "short_name": "Canopy", "start_url": "app.html", "display": "standalone", "background_color": "#e8e8ec", "theme_color": "#e8e8ec", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] }
