@@ -1,0 +1,21 @@
+/* Pieces the designer's sample dashboard didn't have: a scan form, a wallet picker, terms and real risk-card text. */
+.cd-scan{display:flex;gap:10px;align-items:center;margin:0 0 18px;padding:8px 8px 8px 18px;border-radius:999px;background:#ffffffb8;border:1px solid var(--cd-line);box-shadow:0 10px 30px #2b2b2f12;backdrop-filter:blur(18px)}
+.cd-scan input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:15px;color:var(--cd-ink);outline:none}
+.cd-scan input::placeholder{color:#a0a0a4}
+.cd-header-actions{position:relative}
+.cd-connect{white-space:nowrap}
+.cd-wallet-picker{position:absolute;top:calc(100% + 10px);right:0;z-index:5;display:grid;gap:6px;min-width:240px;padding:12px;border-radius:18px;background:#fffffff2;border:1px solid var(--cd-line);box-shadow:0 18px 50px #2b2b2f26;backdrop-filter:blur(20px)}
+.cd-wallet-picker p{margin:0 4px 4px;color:var(--cd-muted);font-size:12px}
+.cd-wallet-picker button{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--cd-line);border-radius:12px;background:#fff;font:inherit;color:var(--cd-ink);cursor:pointer;text-align:left}
+.cd-wallet-picker button:hover{background:#f3f3f5}
+.cd-wallet-picker img{width:22px;height:22px;border-radius:6px}
+.cd-risk-text{margin:0;white-space:pre-wrap;font:inherit;font-size:13px;line-height:1.6;color:var(--cd-ink)}
+.cd-terms{display:flex;gap:8px;align-items:center;margin:14px 0 4px;font-size:13px}
+.cd-toast-error{background:#4a2f2ff5;border-color:#7a5050}
+.cd-toast a{color:inherit;text-decoration:underline;display:inline-flex;gap:4px;align-items:center}
+a.cd-brand{color:inherit;text-decoration:none}
+@media (max-width:640px){.cd-scan{flex-wrap:wrap;border-radius:22px;padding:10px}.cd-scan .cd-button{width:100%;justify-content:center}.cd-header-actions .cd-demo-badge,.cd-header-actions .cd-back-link{display:none}.cd-connect{padding:9px 13px}}
+/* The studio lights reach past the edges. Hidden overflow can still be scrolled by focus, which shifted the whole app sideways. */
+.canopy-dashboard{overflow:clip}
+.cd-dialog-status{margin:14px 0 0;padding:10px 12px;border-radius:12px;background:#f1f1f3;font-size:13px;color:var(--cd-ink)}
+.cd-dialog-status.is-error{background:#f7ecec;color:#6b3030}
