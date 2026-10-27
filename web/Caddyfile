@@ -1,0 +1,22 @@
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	root * /srv
+	encode zstd gzip
+	try_files {path} {path}.html
+	file_server
+
+	header {
+		# The app asks wallets to sign, so no other site may frame it.
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	# A new service worker or page must reach people on their next visit.
+	@fresh path /sw.js /*.html /
+	header @fresh Cache-Control "no-cache"
+}
