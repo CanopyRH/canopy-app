@@ -216,4 +216,46 @@ contract BaseForkV2Test {
         (address a, address b, address c, address d, uint256 e) = MORPHO.idToMarketParams(id);
         return abi.encode(a, b, c, d, e);
     }
+
+    /// @dev Calls in the shape keeper.ts sends: Multicall3 is the caller, the keeper wallet is `onBehalf`, failures
+    /// allowed. `asKeeperSizes` uses the amount liquidity.ts computes today, free * 0.999.
+    function _deallocateCalls(address v, bool asKeeperSizes) internal view returns (IMulticall3.Call3[] memory out) {
+        address la = IVaultV2(v).liquidityAdapter();
+        uint256 n = IMarketAdapter(la).marketIdsLength();
+        IMulticall3.Call3[] memory calls = new IMulticall3.Call3[](n);
+        uint256 k;
+        for (uint256 i; i < n; ++i) {
+            bytes32 id = IMarketAdapter(la).marketIds(i);
+            uint256 size = asKeeperSizes ? _free(id) : _reachable(la, id);
+            if (size < MIN_MOVE) continue;
+            bytes memory call_ = abi.encodeCall(
+                IVaultV2.forceDeallocate, (la, _deallocateData(id), (size * 999) / 1000, KEEPER)
+            );
+            calls[k++] = IMulticall3.Call3({target: v, allowFailure: true, callData: call_});
+        }
+        out = new IMulticall3.Call3[](k);
+        for (uint256 i; i < k; ++i) {
+            out[i] = calls[i];
+        }
+    }
+
+    /// @dev One keeper exit, undone afterwards. Returns what the owner was paid, 0 if it reverted.
+    function _trial(bytes32 id, address h, uint256 amount) internal returns (uint256 got) {
+        uint256 snap = vm.snapshotState();
+        uint256 before = USDC.balanceOf(h);
+        vm.prank(KEEPER);
+        try router.exit(id, key, amount) {
+            got = USDC.balanceOf(h) - before;
+        } catch {}
+        vm.revertToState(snap);
+    }
+
+    /// @dev The keeper's sizeExit in keeper/simulate.ts: 100%, 50%, 25% and so on, up to 6 steps.
+    function _keeperSizedExit(bytes32 id, address h, uint256 shares) internal returns (uint256 got) {
+        uint256 amount = shares;
+        for (uint256 i; i < 6 && got == 0; ++i) {
+            got = _trial(id, h, amount);
+            amount /= 2;
+        }
+    }
 }
