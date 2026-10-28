@@ -1,0 +1,50 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      FOUNDRY_SOLC: 0.8.28
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: canopy
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U canopy" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: forge build && forge test
+        working-directory: contracts
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - run: bun install --frozen-lockfile && bun ../tools/export-abi.ts && bun test && bunx tsc --noEmit
+        working-directory: services
+      - run: bun test
+        working-directory: services
+        env:
+          TEST_DATABASE_URL: postgres://canopy@127.0.0.1:5432/postgres
+      - run: bun test && bunx tsc --noEmit
+        working-directory: web
+      - run: bun tools/banned-words.ts
+      - name: The service image starts
+        run: |
+          docker build -t canopy-services services
+          docker run -d --name api --network host -e ROLE=api -e ALERTS_ONLY=true -e CHAIN_ID=4663 \
+            -e PUBLIC_URL=https://canopy.invalid -e DATABASE_URL=postgres://canopy@127.0.0.1:5432/postgres \
+            -e RPC_URL=https://rpc.mainnet.chain.robinhood.com -e RPC_URL_BACKUP=https://robinhood.drpc.org \
+            -e TELEGRAM_BOT_TOKEN=0:ci -e TELEGRAM_WEBHOOK_SECRET=ci-only-webhook-secret canopy-services
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8443/vaults && exit 0; sleep 1; done
+          docker logs api
+          exit 1
+      - name: The web build is repeatable
+        run: test "$(tools/build-web.sh 2>/dev/null)" = "$(tools/build-web.sh 2>/dev/null)"
