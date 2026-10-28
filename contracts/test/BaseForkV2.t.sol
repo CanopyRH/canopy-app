@@ -130,4 +130,49 @@ contract BaseForkV2Test {
         0x91C056B6d4311a743614FBc03ac32d4E6A2d3a3c
     ];
     address internal constant LAUNCH_HOLDER = 0xF63F5FCC54f5fd11f3c098053F330E032E4D9259;
+
+    ExitRouter internal router;
+    AlarmBook internal book;
+    ERC4626Adapter internal adapter;
+    bytes32 internal key;
+
+    event log_named_uint(string key, uint256 val);
+
+    function setUp() public {
+        if (block.chainid != 8453) return;
+        book = new AlarmBook(address(this));
+        router = new ExitRouter(
+            address(USDC), WETH, SWAP, address(book), address(this), address(this), USDC_FEED, 90_000,
+            block.timestamp + 365 days
+        );
+        adapter = new ERC4626Adapter(address(router));
+        router.setAdapter(address(adapter), true);
+        book.setWatcher(vm.addr(PK_A), true);
+        book.setWatcher(vm.addr(PK_B), true);
+        key = book.register(
+            AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: address(0xBA5E), threshold: 2, window: 0, a: 0, b: 0})
+        );
+    }
+
+    function _keys() internal view returns (bytes32[] memory a) {
+        a = new bytes32[](1);
+        a[0] = key;
+    }
+
+    function _arm(address v, address h) internal returns (bytes32 id) {
+        vm.prank(h);
+        IERC20(v).approve(address(router), type(uint256).max);
+        vm.prank(h);
+        id = router.arm(
+            ExitRouter.ArmParams({
+                adapter: address(adapter),
+                target: v,
+                tokenId: 0,
+                harbour: 0,
+                maxSlipBps: 0,
+                termsHash: keccak256("terms-v1"),
+                keys: _keys()
+            })
+        );
+    }
 }
