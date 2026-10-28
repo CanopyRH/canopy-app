@@ -175,4 +175,45 @@ contract BaseForkV2Test {
             })
         );
     }
+
+    function _fire() internal {
+        bytes32 ev = keccak256("evidence");
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 d = book.attestDigest(key, ev, dl);
+        (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(lo, d);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(hi, d);
+        g[0] = abi.encodePacked(r1, s1, v1);
+        g[1] = abi.encodePacked(r2, s2, v2);
+        book.fireByQuorum(key, ev, dl, s, g);
+    }
+
+    /// @dev Market liquidity anyone could withdraw right now, ignoring who supplied it.
+    function _free(bytes32 id) internal view returns (uint256) {
+        (uint128 sup,, uint128 bor,,,) = MORPHO.market(id);
+        return uint256(sup) - bor;
+    }
+
+    /// @dev What the vault's own adapter has supplied to a market.
+    function _allocated(address la, bytes32 id) internal view returns (uint256) {
+        (uint256 shares,,) = MORPHO.position(id, la);
+        (uint128 sup, uint128 supShares,,,,) = MORPHO.market(id);
+        return supShares == 0 ? 0 : (shares * sup) / supShares;
+    }
+
+    /// @dev The most the vault can take out of one market: its own allocation, capped by the free liquidity.
+    function _reachable(address la, bytes32 id) internal view returns (uint256) {
+        uint256 free = _free(id);
+        uint256 alloc = _allocated(la, id);
+        return free < alloc ? free : alloc;
+    }
+
+    function _deallocateData(bytes32 id) internal view returns (bytes memory) {
+        (address a, address b, address c, address d, uint256 e) = MORPHO.idToMarketParams(id);
+        return abi.encode(a, b, c, d, e);
+    }
 }
