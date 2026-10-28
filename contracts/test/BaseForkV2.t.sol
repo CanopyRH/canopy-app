@@ -258,4 +258,46 @@ contract BaseForkV2Test {
             amount /= 2;
         }
     }
+
+    /// @dev The fairest number for "without forceDeallocate": the largest exit that lands, found by bisection.
+    function _largestPlainExit(bytes32 id, address h, uint256 shares) internal returns (uint256 best) {
+        uint256 lo;
+        uint256 hi = shares;
+        for (uint256 i; i < 24; ++i) {
+            uint256 mid = (lo + hi) / 2;
+            uint256 got = _trial(id, h, mid);
+            if (got > 0) {
+                lo = mid;
+                best = got;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ forceDeallocate
+
+    /// @dev [forceDeallocate..., exit] as one Multicall3 transaction from the keeper. The exit must land.
+    function _runBundle(address v, address h, bytes32 id) internal returns (uint256 got, uint256 calls, uint256 okCalls) {
+        IMulticall3.Call3[] memory d = _deallocateCalls(v, false);
+        IMulticall3.Call3[] memory all = new IMulticall3.Call3[](d.length + 1);
+        for (uint256 i; i < d.length; ++i) {
+            all[i] = d[i];
+        }
+        all[d.length] = IMulticall3.Call3({
+            target: address(router),
+            allowFailure: false,
+            callData: abi.encodeCall(ExitRouter.exit, (id, key, 0))
+        });
+        uint256 before = USDC.balanceOf(h);
+        uint256 keeperBefore = USDC.balanceOf(KEEPER);
+        vm.prank(KEEPER);
+        IMulticall3.Result[] memory res = MC.aggregate3(all);
+        got = USDC.balanceOf(h) - before;
+        calls = d.length;
+        require(USDC.balanceOf(KEEPER) == keeperBefore && USDC.balanceOf(address(MC)) == 0, "keeper keeps nothing");
+        for (uint256 i; i < d.length; ++i) {
+            if (res[i].success) okCalls++;
+        }
+    }
 }
