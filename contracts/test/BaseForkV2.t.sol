@@ -300,4 +300,47 @@ contract BaseForkV2Test {
             if (res[i].success) okCalls++;
         }
     }
+
+    /// @dev A keeper with no shares runs [forceDeallocate..., exit] through Multicall3 on a live 0-penalty V2 vault.
+    /// Nothing about the vault or its markets is altered. The holder is bigger than idle plus the liquidity market.
+    function test_base_v2_keeperBundlePaysMoreThanPlainExit() public {
+        if (block.chainid != 8453) return;
+        address v = ZERO_PENALTY_VAULT;
+        address h = ZERO_PENALTY_HOLDER;
+        address la = IVaultV2(v).liquidityAdapter();
+        require(IVaultV2(v).forceDeallocatePenalty(la) == 0, "penalty is 0");
+        require(IERC20(v).balanceOf(KEEPER) == 0 && IERC20(v).balanceOf(address(MC)) == 0, "keeper holds no shares");
+
+        uint256 shares = IERC20(v).balanceOf(h);
+        uint256 expected = IERC4626(v).convertToAssets(shares);
+        uint256 reach = USDC.balanceOf(v) + _reachable(la, keccak256(IVaultV2(v).liquidityData()));
+        require(expected > reach, "holder is bigger than a plain redeem can reach");
+
+        bytes32 id = _arm(v, h);
+        _fire();
+
+        uint256 fullNoHelp = _trial(id, h, 0);
+        uint256 keeperSized = _keeperSizedExit(id, h, shares);
+        uint256 largestPlain = _largestPlainExit(id, h, shares);
+        require(fullNoHelp == 0, "a full exit reverts without the bundle");
+        require(largestPlain > 0 && largestPlain <= reach + 1e6, "plain redeem stops at the liquidity market");
+
+        (uint256 got, uint256 calls, uint256 okCalls) = _runBundle(v, h, id);
+
+        emit log_named_uint("position USDC", expected / 1e6);
+        emit log_named_uint("idle plus liquidity market USDC", reach / 1e6);
+        emit log_named_uint("without, full exit USDC", fullNoHelp / 1e6);
+        emit log_named_uint("without, keeper halving USDC", keeperSized / 1e6);
+        emit log_named_uint("without, largest possible USDC", largestPlain / 1e6);
+        emit log_named_uint("deallocate calls", calls);
+        emit log_named_uint("deallocate calls ok", okCalls);
+        emit log_named_uint("with bundle USDC", got / 1e6);
+
+        require(okCalls == calls && calls > 1, "keeper with no shares could deallocate");
+        require(got > largestPlain, "bundle paid the owner more");
+        require(got + 1e6 >= expected && got <= expected + 1e6, "paid fair value");
+        require(IERC20(v).balanceOf(h) == 0, "all shares redeemed");
+        require(USDC.balanceOf(address(router)) == 0, "no router residue");
+        require(IERC20(v).balanceOf(address(adapter)) == 0, "no adapter residue");
+    }
 }
