@@ -40,3 +40,48 @@ interface IMarketAdapter {
     function marketIdsLength() external view returns (uint256);
     function marketIds(uint256) external view returns (bytes32);
 }
+
+interface IMulticall3 {
+    struct Call3 {
+        address target;
+        bool allowFailure;
+        bytes callData;
+    }
+
+    struct Result {
+        bool success;
+        bytes returnData;
+    }
+
+    function aggregate3(Call3[] calldata calls) external payable returns (Result[] memory);
+}
+
+interface IMorpho {
+    function market(bytes32) external view returns (uint128, uint128, uint128, uint128, uint128, uint128);
+    function idToMarketParams(bytes32) external view returns (address, address, address, address, uint256);
+    function position(bytes32, address) external view returns (uint256, uint128, uint128);
+}
+
+/// @notice The real allowlist gate behind OUSD Vault V2. Its setter name comes from selector 0x09ec923a.
+interface IAllowlistGate {
+    function owner() external view returns (address);
+    function setIsWhitelisted(address, bool) external;
+}
+
+/// @notice SIMULATED GATE. No live vault runs this contract: it stands in for whatever a curator could point a
+/// gate at. It refuses `refused`, or everyone when `refused` is zero.
+contract RefusingGate {
+    address internal immutable refused;
+
+    constructor(address r) {
+        refused = r;
+    }
+
+    function canSendShares(address a) external view returns (bool) {
+        return refused != address(0) && a != refused;
+    }
+
+    function canReceiveShares(address a) external view returns (bool) {
+        return refused != address(0) && a != refused;
+    }
+}
