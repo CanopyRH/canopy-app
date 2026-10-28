@@ -34,3 +34,9 @@ const deployer = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478
 const keeperKey = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 const w1 = privateKeyToAccount(`0x${"a1".padStart(64, "0")}`);
 const w2 = privateKeyToAccount(`0x${"b2".padStart(64, "0")}`);
+
+const results: [string, boolean, string][] = [];
+const check = (name: string, ok: boolean, detail = "") => {
+  results.push([name, ok, detail]);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
+};
