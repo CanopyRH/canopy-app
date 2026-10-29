@@ -585,4 +585,71 @@ contract BaseForkV2Test {
         require(IERC20(v).balanceOf(h) == 0, "same position exits once the gate is gone");
         vm.revertToState(snap);
     }
+
+    function test_base_v2_simulatedGatesBlockExitCleanly() public {
+        if (block.chainid != 8453) return;
+        address v = OPEN_VAULT;
+        address h = OPEN_HOLDER;
+        IVaultV2 vault = IVaultV2(v);
+        require(!vault.abdicated(IVaultV2.setSendSharesGate.selector), "send gate not abdicated");
+        require(!vault.abdicated(IVaultV2.setReceiveSharesGate.selector), "receive gate not abdicated");
+        require(!vault.abdicated(IVaultV2.setReceiveAssetsGate.selector), "assets gate not abdicated");
+        require(vault.sendSharesGate() == address(0) && vault.receiveSharesGate() == address(0), "no share gate today");
+        require(vault.receiveAssetsGate() == address(0), "no assets gate today");
+
+        uint256 expected = IERC4626(v).convertToAssets(IERC20(v).balanceOf(h));
+        bytes32 id = _arm(v, h);
+        _fire();
+        uint256 control = _trial(id, h, 0);
+        emit log_named_uint("position USDC", expected / 1e6);
+        emit log_named_uint("no gate, exit USDC", control / 1e6);
+        require(control + 1e6 >= expected, "with no gate the exit pays in full");
+
+        address everyone = address(0);
+        bytes memory fromFailed = abi.encodeWithSelector(SafeTransferLib.TransferFromFailed.selector, v);
+        bytes memory backFailed = abi.encodeWithSelector(SafeTransferLib.TransferFailed.selector, v);
+        bytes memory nothingOut = abi.encodeWithSelector(ExitRouter.NothingWithdrawn.selector);
+        bytes memory clearSend = abi.encodeCall(IVaultV2.setSendSharesGate, (address(0)));
+        bytes memory clearReceive = abi.encodeCall(IVaultV2.setReceiveSharesGate, (address(0)));
+        bytes memory clearAssets = abi.encodeCall(IVaultV2.setReceiveAssetsGate, (address(0)));
+
+        // Refuses the owner: the first transfer fails. The owner cannot redeem directly either.
+        _simulatedCase(
+            "send gate, refuses owner",
+            abi.encodeCall(IVaultV2.setSendSharesGate, (address(new RefusingGate(everyone)))),
+            clearSend, fromFailed, false
+        );
+        // Lets the owner send, refuses the adapter: redeem fails, then the adapter cannot hand the shares back.
+        _simulatedCase(
+            "send gate, refuses adapter",
+            abi.encodeCall(IVaultV2.setSendSharesGate, (address(new RefusingGate(address(adapter))))),
+            clearSend, backFailed, true
+        );
+        // The adapter may not hold shares: the first transfer fails. Direct redeem has no such check.
+        _simulatedCase(
+            "receive gate, refuses adapter",
+            abi.encodeCall(IVaultV2.setReceiveSharesGate, (address(new RefusingGate(address(adapter))))),
+            clearReceive, fromFailed, true
+        );
+        // The router may not take assets: redeem fails, shares come back, and nothing was delivered.
+        _simulatedCase(
+            "assets gate, refuses router",
+            abi.encodeCall(IVaultV2.setReceiveAssetsGate, (address(new RefusingGate(address(router))))),
+            clearAssets, nothingOut, true
+        );
+    }
+
+    /// @dev `abdicated` alone says nothing about whether a gate is on, as OUSD Vault V2 shows. Launch vaults need both.
+    function test_base_v2_launchVaultGatesAbdicatedAndUnset() public view {
+        if (block.chainid != 8453) return;
+        for (uint256 i; i < launchV2.length; ++i) {
+            IVaultV2 g = IVaultV2(launchV2[i]);
+            require(g.abdicated(IVaultV2.setSendSharesGate.selector), "send abdicated");
+            require(g.abdicated(IVaultV2.setReceiveSharesGate.selector), "receive abdicated");
+            require(g.abdicated(IVaultV2.setReceiveAssetsGate.selector), "assets abdicated");
+            require(g.sendSharesGate() == address(0), "send unset");
+            require(g.receiveSharesGate() == address(0), "receive unset");
+            require(g.receiveAssetsGate() == address(0), "assets unset");
+        }
+    }
 }
