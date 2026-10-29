@@ -92,3 +92,48 @@ export function presetBatch(d: Deployment, vaults: Address[]): Call[] {
     })),
   );
 }
+
+/** Safe Transaction Builder format. */
+const safeBatch = (chainId: number, name: string, description: string, transactions: Call[]) => ({
+  version: "1.0",
+  chainId: String(chainId),
+  meta: { name, description },
+  transactions,
+});
+
+/** The Safe batch files, in signing order. With no delay, schedule and execute go in one batch. */
+export function planFiles(d: Deployment, s: Settings): [string, ReturnType<typeof safeBatch>][] {
+  const t = timelockBatches(d, s);
+  const delay = delayOf(s);
+  const register = (n: number) => [`${n}-register-alarms.safe.json`, safeBatch(s.chainId, `Canopy ${n}: register alarm presets`, `${s.vaults.length} vaults`, presetBatch(d, s.vaults))] as [string, ReturnType<typeof safeBatch>];
+  if (delay === 0) {
+    return [
+      ["1-admin-setup.safe.json", safeBatch(s.chainId, "Canopy 1: admin setup", t.labels.join("; "), [...t.schedule, ...t.execute])],
+      register(2),
+    ];
+  }
+  return [
+    ["1-schedule.safe.json", safeBatch(s.chainId, "Canopy 1: schedule admin setup", t.labels.join("; "), t.schedule)],
+    ["2-execute-after-delay.safe.json", safeBatch(s.chainId, "Canopy 2: execute admin setup", `Only valid ${delay} seconds after step 1.`, t.execute)],
+    register(3),
+  ];
+}
+
+export function writePlan(d: Deployment, s: Settings, out: string) {
+  mkdirSync(out, { recursive: true });
+  const write = (f: string, v: unknown) => writeFileSync(join(out, f), `${JSON.stringify(v, null, 2)}\n`);
+  write("deployment.json", { ...d, settings: s });
+  for (const [file, batch] of planFiles(d, s)) write(file, batch);
+  writeFileSync(join(out, "services.env"), [
+    `CHAIN_ID=${s.chainId}`, `ROUTER=${d.router}`, `ALARM_BOOK=${d.alarmBook}`, `ADAPTER_4626=${d.adapter}`, `START_BLOCK=${d.startBlock}`,
+    `PLAN_TOKEN=${s.stable}`, `WATCHERS=${s.watchers.join(",")}`, "",
+  ].join("\n"));
+  write("web-mainnet.json", { router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: s.planPayTo ?? null, apiUrl: s.apiUrl ?? "" });
+}
+
+if (import.meta.main) {
+  const [run, settings, out] = process.argv.slice(2);
+  if (!run || !settings || !out) throw new Error("usage: bun deploy/plan.ts <run-latest.json> <settings.json> <out dir>");
+  writePlan(readBroadcast(run), JSON.parse(readFileSync(settings, "utf8")) as Settings, out);
+  console.log(`wrote plan to ${out}`);
+}
