@@ -473,4 +473,41 @@ contract BaseForkV2Test {
         require(IERC20(v).balanceOf(address(router)) == 0 && USDC.balanceOf(address(router)) == 0, "no router residue");
         require(IERC20(v).balanceOf(address(adapter)) == 0 && USDC.balanceOf(address(adapter)) == 0, "no adapter residue");
     }
+
+    /// @dev The owner calling the vault directly, without Canopy, undone afterwards. Returns 0 if it reverted.
+    function _directRedeem(address v, address h, uint256 shares) internal returns (uint256 got) {
+        uint256 snap = vm.snapshotState();
+        vm.prank(h);
+        try IERC4626(v).redeem(shares, h, h) returns (uint256 a) {
+            got = a;
+        } catch {}
+        vm.revertToState(snap);
+    }
+
+    /// @dev The largest direct redeem that lands, found by bisection.
+    function _largestDirectRedeem(address v, address h) internal returns (uint256 shares, uint256 assets) {
+        uint256 hi = IERC20(v).balanceOf(h);
+        for (uint256 i; i < 24; ++i) {
+            uint256 mid = (shares + hi) / 2;
+            uint256 got = _directRedeem(v, h, mid);
+            if (got > 0) {
+                shares = mid;
+                assets = got;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+
+    /// @dev The curator submits clearing the gate, waits out the timelock, and the setter still refuses.
+    function _assertGateLockedOn(IVaultV2 vault, address gate) internal {
+        uint256 snap = vm.snapshotState();
+        bytes memory clear = abi.encodeCall(IVaultV2.setReceiveSharesGate, (address(0)));
+        vm.prank(vault.curator());
+        vault.submit(clear);
+        vm.warp(block.timestamp + vault.timelock(IVaultV2.setReceiveSharesGate.selector));
+        (bool cleared,) = address(vault).call(clear);
+        require(!cleared && vault.receiveSharesGate() == gate, "abdication locks the gate on");
+        vm.revertToState(snap);
+    }
 }
