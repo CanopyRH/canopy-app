@@ -510,4 +510,53 @@ contract BaseForkV2Test {
         require(!cleared && vault.receiveSharesGate() == gate, "abdication locks the gate on");
         vm.revertToState(snap);
     }
+
+    /// @dev No simulation here. A live vault with a real gate that refuses our adapter, on a vault that abdicated
+    /// the setter: arming succeeds, then every exit reverts at the first transfer. The owner can still redeem from the
+    /// vault directly, up to what its V1 vault can pay, and the curator cannot clear the gate. Control at the end:
+    /// the gate's own owner whitelists the adapter, nothing else changes, and the same size pays through the router.
+    function test_base_v2_realGateSetAndAbdicatedBlocksExit() public {
+        if (block.chainid != 8453) return;
+        address v = GATED_VAULT;
+        address h = GATED_HOLDER;
+        IVaultV2 vault = IVaultV2(v);
+        address gate = vault.receiveSharesGate();
+        bytes memory transferFromFailed = abi.encodeWithSelector(SafeTransferLib.TransferFromFailed.selector, v);
+        require(gate != address(0), "gate is set");
+        require(vault.abdicated(IVaultV2.setReceiveSharesGate.selector), "and abdicated");
+        require(vault.canReceiveShares(h), "gate lets the holder hold");
+        require(!vault.canReceiveShares(address(adapter)), "gate refuses the adapter");
+
+        bytes32 id = _arm(v, h);
+        require(router.isArmed(id), "arming does not read gates");
+        _fire();
+
+        _assertBlocked(v, h, id, KEEPER, key, transferFromFailed);
+        _assertBlocked(v, h, id, h, bytes32(0), transferFromFailed);
+
+        (uint256 liquidShares, uint256 direct) = _largestDirectRedeem(v, h);
+        require(direct > 0, "owner can still leave by calling the vault");
+
+        _assertGateLockedOn(vault, gate);
+
+        vm.prank(IAllowlistGate(gate).owner());
+        IAllowlistGate(gate).setIsWhitelisted(address(adapter), true);
+        uint256 got = _trial(id, h, liquidShares);
+        emit log_named_uint("position USDC", IERC4626(v).convertToAssets(IERC20(v).balanceOf(h)) / 1e6);
+        emit log_named_uint("router exit USDC", 0);
+        emit log_named_uint("direct redeem, largest USDC", direct / 1e6);
+        emit log_named_uint("router exit USDC, adapter whitelisted", got / 1e6);
+        require(got + 1e6 >= direct, "the gate was the only obstacle");
+    }
+
+    /// @dev SIMULATED GATES on a real vault. OPEN_VAULT has no gate set today and has abdicated none of them. We
+    /// impersonate its real curator and use the vault's own submit and setter, so there is no vm.etch and no storage
+    /// write. The curator's action and the RefusingGate contract are the only simulated parts. Those setters have a
+    /// timelock of 0 here, so the real curator could do this in one transaction, with no warning.
+    function _gate(IVaultV2 vault, bytes memory setter) internal {
+        vm.prank(vault.curator());
+        vault.submit(setter);
+        (bool ok,) = address(vault).call(setter);
+        require(ok, "gate setter ran");
+    }
 }
