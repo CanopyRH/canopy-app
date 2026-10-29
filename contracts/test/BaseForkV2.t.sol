@@ -343,4 +343,56 @@ contract BaseForkV2Test {
         require(USDC.balanceOf(address(router)) == 0, "no router residue");
         require(IERC20(v).balanceOf(address(adapter)) == 0, "no adapter residue");
     }
+
+    /// @dev Documents a keeper sizing bug, not a contract bug. liquidity.ts asks for free * 0.999 of each market, but
+    /// on Base the vault is usually a small lender in a big market, so that is more than the vault has there. Every
+    /// call reverts, allowFailure hides it, and the same vault and holder as above get no help from the bundle.
+    function test_base_v2_keeperSizingByMarketFreeLiquidityMovesNothing() public {
+        if (block.chainid != 8453) return;
+        address v = ZERO_PENALTY_VAULT;
+        IMulticall3.Call3[] memory d = _deallocateCalls(v, true);
+        uint256 idleBefore = USDC.balanceOf(v);
+        vm.prank(KEEPER);
+        IMulticall3.Result[] memory res = MC.aggregate3(d);
+        uint256 okD;
+        for (uint256 i; i < res.length; ++i) {
+            if (res[i].success) okD++;
+        }
+        emit log_named_uint("keeper-sized calls", d.length);
+        emit log_named_uint("keeper-sized calls ok", okD);
+        emit log_named_uint("idle moved USDC", (USDC.balanceOf(v) - idleBefore) / 1e6);
+        require(d.length > 0, "liquidity.ts would send calls");
+        require(okD == 0, "every call sized past the allocation reverts");
+        require(USDC.balanceOf(v) == idleBefore, "nothing reached idle");
+    }
+
+    /// @dev No V2 vault in the web config can run the keeper bundle. Each charges a penalty, taken as a withdrawal of
+    /// `onBehalf`'s shares, so a keeper with none underflows and reverts Panic(0x11). liquidity.ts skips these vaults
+    /// anyway, because it only acts on a penalty of exactly 0.
+    function test_base_v2_launchVaultsRefuseKeeperWithNoShares() public {
+        if (block.chainid != 8453) return;
+        bytes memory underflow = abi.encodeWithSignature("Panic(uint256)", uint256(0x11));
+        for (uint256 i; i < launchV2.length; ++i) {
+            IVaultV2 vault = IVaultV2(launchV2[i]);
+            address la = vault.liquidityAdapter();
+            uint256 penalty = vault.forceDeallocatePenalty(la);
+            bytes32 liquidityId = keccak256(vault.liquidityData());
+            (bytes32 best, uint256 bestReach, uint256 otherReach) = _otherMarkets(la, liquidityId);
+            emit log_named_uint("vault index", i);
+            emit log_named_uint("  totalAssets USDC", IERC4626(launchV2[i]).totalAssets() / 1e6);
+            emit log_named_uint("  penalty, parts per 1e18", penalty);
+            emit log_named_uint("  idle USDC", USDC.balanceOf(launchV2[i]) / 1e6);
+            emit log_named_uint("  liquidity market reach USDC", _reachable(la, liquidityId) / 1e6);
+            emit log_named_uint("  other markets reach USDC", otherReach / 1e6);
+            require(penalty > 0, "launch vault penalty is not 0");
+            if (bestReach < MIN_MOVE) (best, bestReach) = (liquidityId, _reachable(la, liquidityId)); // one-market vault
+            bytes memory data = _deallocateData(best);
+            vm.prank(KEEPER);
+            try vault.forceDeallocate(la, data, bestReach / 2, KEEPER) {
+                revert("keeper with no shares deallocated past a penalty");
+            } catch (bytes memory e) {
+                require(keccak256(e) == keccak256(underflow), "reverts on the share burn");
+            }
+        }
+    }
 }
