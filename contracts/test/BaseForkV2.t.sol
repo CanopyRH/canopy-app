@@ -395,4 +395,43 @@ contract BaseForkV2Test {
             }
         }
     }
+
+    /// @dev The same call as above works once the keeper owns real shares, so the share burn is the only obstacle.
+    /// The caller must be the holder of those shares: in the shape keeper.ts sends, Multicall3 is the caller and has
+    /// no allowance from the keeper, so it still reverts. Dust comes from a real holder by transfer. Nothing about the
+    /// vault's markets is altered.
+    function test_base_v2_launchVaultPenaltyPaidFromKeeperShares() public {
+        if (block.chainid != 8453) return;
+        address v = launchV2[0];
+        IVaultV2 vault = IVaultV2(v);
+        address la = vault.liquidityAdapter();
+        (bytes32 best, uint256 bestReach,) = _otherMarkets(la, keccak256(vault.liquidityData()));
+        require(bestReach >= MIN_MOVE, "a market can be deallocated");
+        uint256 amt = bestReach / 2;
+
+        uint256 penaltyAssets = (amt * vault.forceDeallocatePenalty(la)) / 1e18 + 1;
+        uint256 dust = (IERC20(v).balanceOf(LAUNCH_HOLDER) * (penaltyAssets * 2)) /
+            IERC4626(v).convertToAssets(IERC20(v).balanceOf(LAUNCH_HOLDER));
+        vm.prank(LAUNCH_HOLDER);
+        IERC20(v).transfer(KEEPER, dust);
+
+        uint256 idleBefore = USDC.balanceOf(v);
+        bytes memory data = _deallocateData(best);
+        IMulticall3.Call3[] memory viaMulticall = new IMulticall3.Call3[](1);
+        viaMulticall[0] = IMulticall3.Call3({
+            target: v,
+            allowFailure: true,
+            callData: abi.encodeCall(IVaultV2.forceDeallocate, (la, data, amt, KEEPER))
+        });
+        vm.prank(KEEPER);
+        require(!MC.aggregate3(viaMulticall)[0].success, "Multicall3 cannot spend the keeper's shares");
+
+        vm.prank(KEEPER);
+        uint256 burned = vault.forceDeallocate(la, data, amt, KEEPER);
+        emit log_named_uint("moved USDC", amt / 1e6);
+        emit log_named_uint("penalty, USDC micro", penaltyAssets);
+        emit log_named_uint("keeper shares burned", burned);
+        require(burned > 0 && IERC20(v).balanceOf(KEEPER) == dust - burned, "penalty came from the keeper");
+        require(USDC.balanceOf(v) == idleBefore + amt, "idle rose by the amount moved");
+    }
 }
