@@ -434,4 +434,43 @@ contract BaseForkV2Test {
         require(burned > 0 && IERC20(v).balanceOf(KEEPER) == dust - burned, "penalty came from the keeper");
         require(USDC.balanceOf(v) == idleBefore + amt, "idle rose by the amount moved");
     }
+
+    /// @dev Finds the market outside the liquidity market with the most reachable liquidity, and the total of them.
+    function _otherMarkets(address la, bytes32 liquidityId) internal view returns (bytes32 best, uint256 bestReach, uint256 total) {
+        uint256 n = IMarketAdapter(la).marketIdsLength();
+        for (uint256 i; i < n; ++i) {
+            bytes32 id = IMarketAdapter(la).marketIds(i);
+            if (id == liquidityId) continue;
+            uint256 r = _reachable(la, id);
+            total += r;
+            if (r > bestReach) {
+                best = id;
+                bestReach = r;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ share gates
+
+    /// @dev Asserts a blocked exit: the expected revert, and nothing moved or changed for the owner.
+    function _assertBlocked(address v, address h, bytes32 id, address caller, bytes32 k, bytes memory reason) internal {
+        uint256 shares = IERC20(v).balanceOf(h);
+        uint256 usdc = USDC.balanceOf(h);
+        uint256 approved = IERC20(v).allowance(h, address(router));
+        uint256 count = router.exitCount();
+        vm.prank(caller);
+        try router.exit(id, k, 0) {
+            revert("exit went through a refusing gate");
+        } catch (bytes memory e) {
+            require(keccak256(e) == keccak256(reason), "reverted for the expected reason");
+        }
+        require(IERC20(v).balanceOf(h) == shares, "owner's shares untouched");
+        require(USDC.balanceOf(h) == usdc, "owner's USDC untouched");
+        require(IERC20(v).allowance(h, address(router)) == approved, "approval untouched");
+        require(router.isArmed(id), "position stays armed");
+        require(router.exitCount() == count, "no exit recorded");
+        require(router.owed(h, v) == 0 && router.owed(h, address(USDC)) == 0, "nothing parked as owed");
+        require(IERC20(v).balanceOf(address(router)) == 0 && USDC.balanceOf(address(router)) == 0, "no router residue");
+        require(IERC20(v).balanceOf(address(adapter)) == 0 && USDC.balanceOf(address(adapter)) == 0, "no adapter residue");
+    }
 }
