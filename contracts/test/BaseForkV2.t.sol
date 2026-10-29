@@ -559,4 +559,30 @@ contract BaseForkV2Test {
         (bool ok,) = address(vault).call(setter);
         require(ok, "gate setter ran");
     }
+
+    function _simulatedCase(
+        string memory name,
+        bytes memory setGate,
+        bytes memory clearGate,
+        bytes memory reason,
+        bool directPays
+    ) internal {
+        address v = OPEN_VAULT;
+        address h = OPEN_HOLDER;
+        bytes32 id = router.positionId(h, address(adapter), v, 0);
+        uint256 snap = vm.snapshotState();
+        uint256 expected = IERC4626(v).convertToAssets(IERC20(v).balanceOf(h));
+
+        _gate(IVaultV2(v), setGate);
+        _assertBlocked(v, h, id, KEEPER, key, reason);
+        uint256 direct = _directRedeem(v, h, IERC20(v).balanceOf(h));
+        emit log_named_uint(string.concat(name, ", direct redeem USDC"), direct / 1e6);
+        require(directPays ? direct + 1e6 >= expected : direct == 0, "direct redeem as expected");
+
+        _gate(IVaultV2(v), clearGate);
+        vm.prank(KEEPER);
+        router.exit(id, key, 0);
+        require(IERC20(v).balanceOf(h) == 0, "same position exits once the gate is gone");
+        vm.revertToState(snap);
+    }
 }
