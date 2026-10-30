@@ -456,3 +456,18 @@ async function cmdHack() {
   if (errs) fail(`the services logged errors:\n${errs.slice(0, 500)}`);
   console.log(`hack test passed. Exit time: ${seconds.toFixed(1)}s`);
 }
+
+const [cmd, arg] = process.argv.slice(2);
+const commands: Record<string, () => Promise<void>> = {
+  keys: cmdKeys,
+  status: cmdStatus,
+  bridge: cmdBridge,
+  deploy: cmdDeploy,
+  finish: cmdFinish,
+  smoke: cmdSmoke,
+  hack: cmdHack,
+  give: () => (arg ? cmdGive(arg as Address) : Promise.reject(new Error("usage: testnet.ts give <address>"))),
+};
+if (!cmd || !commands[cmd]) fail(`commands: ${Object.keys(commands).join(", ")}`);
+await commands[cmd!]!();
+process.exit(0);
