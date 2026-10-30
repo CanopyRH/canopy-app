@@ -324,3 +324,135 @@ async function cmdSmoke() {
   if (errs) fail(`the services logged errors:\n${errs.slice(0, 500)}`);
   console.log(`smoke test passed. Exit time: ${seconds.toFixed(1)}s`);
 }
+
+/**
+ * A real drain on a fresh test vault, confirmed by a report. Two operators run as separate processes with their own databases.
+ * Everything on-chain is real. Telegram, the report and Claude's label are local stand-ins.
+ */
+async function cmdHack() {
+  const k = loadKeys();
+  const s = readState();
+  if (!s.finished) fail("not live yet. Run: testnet.ts finish");
+  await topUp(k);
+  const { router, adapter, alarmBook } = loadDeployment();
+  const user = addr(k.user);
+  const mint = (to: Address, amount: bigint) => encode(usdAbi as never, "mint", [to, amount]).then((data) => send(k.deployer, { to: s.usd!, data }));
+  const approve = (who: Hex, vault: Address, amount: bigint) => encode(erc20Abi as never, "approve", [vault, amount]).then((data) => send(who, { to: s.usd!, data }));
+  const deposit = (who: Hex, vault: Address, amount: bigint) => encode(vaultAbi as never, "deposit", [amount, addr(who)]).then((data) => send(who, { to: vault, data }));
+
+  const vault = await deployArtifact(k.deployer, "TestAssets.sol/TestVault.json", [s.usd]);
+  await mint(addr(k.deployer), 9_000_000_000n);
+  await approve(k.deployer, vault, 9_000_000_000n);
+  await deposit(k.deployer, vault, 9_000_000_000n);
+  await mint(user, 1_100_000_000n);
+  await approve(k.user, vault, 1_000_000_000n);
+  await deposit(k.user, vault, 1_000_000_000n);
+
+  const startBlock = await client.getBlockNumber();
+  // The real preset, except that a 4-minute drain window gives a baseline in 2 minutes instead of 30.
+  const drain: Detector = { kind: Kind.DRAIN, target: vault, threshold: 2500n, window: HACK_DRAIN_WINDOW, a: zero32, b: zero32 };
+  const quorum = presetsFor(vault).find((p) => p.detector.kind === Kind.QUORUM)!.detector;
+  const both: Detector = { kind: Kind.BOTH, target: vault, threshold: 0n, window: 86_400, a: keyOf(drain), b: keyOf(quorum) };
+  for (const d of [drain, quorum, both]) await send(k.deployer, registerTx(alarmBook, d));
+  await send(k.user, approveTx(vault, router));
+  await send(k.user, armTx(router, adapter, vault, [keyOf(both)]));
+  await send(k.user, planTx(s.usd!, addr(k.payTo), PLAN_AMOUNTS.months3));
+  console.log("test position armed on the drain alarm");
+
+  const db0 = postgres(`${PG}/postgres`);
+  const dbs: Db[] = [];
+  for (const name of ["canopy_hack_a", "canopy_hack_b"]) {
+    await db0.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => fail("Postgres isn't running. Run: tools/dev-db.sh start"));
+    await db0.exec(`CREATE DATABASE ${name}`);
+    const db = postgres(`${PG}/${name}`);
+    await migrate(db);
+    // The card loop runs less often, so this has the vault on its first pass.
+    await db.query(`INSERT INTO vault_follows (chat_id, target) VALUES (1,$1)`, [vault.toLowerCase()]);
+    dbs.push(db);
+  }
+  const [dbA, dbB] = dbs as [Db, Db];
+
+  let report = "Routine status update. All systems normal.";
+  const mock = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const u = new URL(req.url);
+      if (u.pathname === "/feed") return new Response(report);
+      if (u.pathname === "/v1/messages") {
+        const body = (await req.json()) as { messages: { content: string }[] };
+        const verdict = body.messages[0]!.content.includes("drained") ? { label: "EXPLOIT_CONFIRMED", protocol: "Canopy", confidence: 0.97 } : { label: "IRRELEVANT", protocol: "none", confidence: 0.9 };
+        return Response.json({ id: "m", type: "message", role: "assistant", model: "x", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(verdict) }], usage: { input_tokens: 1, output_tokens: 1 } });
+      }
+      if (u.pathname.endsWith("/sendMessage")) return Response.json({ ok: true, result: { message_id: 1, date: 0, chat: { id: 1, type: "private" } } });
+      return Response.json({ ok: true, result: { id: 1, is_bot: true, first_name: "t", username: "t" } });
+    },
+  });
+  const [portA, portB] = [18751, 18752];
+  const local = `http://127.0.0.1:${mock.port}`;
+  const launch = (name: string, port: number, db: string, extra: Record<string, string>) =>
+    spawn([BUN, "src/index.ts"], {
+      cwd: join(ROOT, "services"),
+      stdout: Bun.file(join(DIR, `${name}.log`)),
+      stderr: Bun.file(join(DIR, `${name}.err`)),
+      env: {
+        ...process.env, ROLE: "all", PORT: String(port), PUBLIC_URL: `http://127.0.0.1:${port}`, DATABASE_URL: `${PG}/${db}`, CHAIN_ID: String(SEPOLIA.chainId),
+        RPC_URL: RPC, RPC_URL_BACKUP: process.env.RPC_URL_BACKUP ?? RPC, ROUTER: router, ALARM_BOOK: alarmBook, ADAPTER_4626: adapter, START_BLOCK: startBlock.toString(),
+        PLAN_PAY_ADDRESS: addr(k.payTo), PLAN_TOKEN: s.usd, WATCHERS: [k.watcher1, k.watcher2, k.watcher3].map(addr).join(","), WATCHER_PEERS: `http://127.0.0.1:${portA},http://127.0.0.1:${portB}`,
+        FEED_URLS: `${local}/feed`, ANTHROPIC_API_KEY: "local", ANTHROPIC_BASE_URL: local, TELEGRAM_BOT_TOKEN: "1:local", TELEGRAM_API_ROOT: local, TELEGRAM_WEBHOOK_SECRET: "local-webhook-secret",
+        LOOP_SCALE: "0.25", ...extra,
+      },
+    });
+  const procs = [
+    launch("hack-a", portA, "canopy_hack_a", { KEEPER_PRIVATE_KEY: k.keeper, WATCHER_PRIVATE_KEY: k.watcher1 }),
+    launch("hack-b", portB, "canopy_hack_b", { WATCHER_PRIVATE_KEY: k.watcher2 }),
+  ];
+  const stop = async () => {
+    for (const p of procs) p.kill();
+    await Promise.all(procs.map((p) => p.exited));
+    mock.stop(true);
+  };
+  const until = async (what: string, fn: () => Promise<boolean>, ms = 180_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      try { if (await fn()) return; } catch { /* still starting */ }
+      await Bun.sleep(500);
+    }
+    await stop();
+    fail(`timed out waiting for ${what}. See ${join(DIR, "hack-a.err")} and ${join(DIR, "hack-a.log")}`);
+  };
+  const rows = async (db: Db, sql: string) => (await db.query(sql)).length;
+  const shares = () => client.readContract({ address: vault, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+
+  await until("both operators to see the position", async () => (await rows(dbA, `SELECT 1 FROM positions WHERE active`)) === 1 && (await rows(dbB, `SELECT 1 FROM positions WHERE active`)) === 1);
+  await until("the plan payment", async () => (await rows(dbA, `SELECT 1 FROM plans`)) === 1);
+  await until("the risk cards", async () => (await rows(dbA, `SELECT 1 FROM risk_cards`)) === 1 && (await rows(dbB, `SELECT 1 FROM risk_cards`)) === 1);
+  await until("a snapshot before the drain", async () => (await rows(dbA, `SELECT 1 FROM vault_snaps`)) >= 2 && (await rows(dbB, `SELECT 1 FROM vault_snaps`)) >= 2);
+  console.log("services are watching the vault");
+
+  const baselineDue = Number((await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "state", args: [keyOf(drain)] }))[2]) + HACK_DRAIN_WINDOW / 2;
+  await until("a drain baseline", async () => Number((await client.getBlock()).timestamp) > baselineDue);
+  await send(k.deployer, { to: alarmBook, data: await encode(alarmBookAbi as never, "checkpoint", [keyOf(drain)]) });
+  console.log("drain baseline set");
+
+  report = "Security alert: Canopy Test Vault drained by an attacker.";
+  await until("both operators to label the report", async () => (await rows(dbA, `SELECT 1 FROM feed_items WHERE label='EXPLOIT_CONFIRMED'`)) === 1 && (await rows(dbB, `SELECT 1 FROM feed_items WHERE label='EXPLOIT_CONFIRMED'`)) === 1);
+  await Bun.sleep(5_000);
+  if ((await rows(dbA, `SELECT 1 FROM attestations`)) !== 0 || (await shares()) === 0n) fail("a report alone moved something");
+  console.log("a report alone did nothing");
+
+  const before = await client.readContract({ address: s.usd!, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+  await send(k.deployer, { to: vault, data: await encode(redeemAbi as never, "redeem", [8_000_000_000n, addr(k.deployer), addr(k.deployer)]) });
+  const t0 = Date.now();
+  console.log("80% of the vault withdrawn");
+  await until("the exit", async () => (await shares()) === 0n);
+  const seconds = (Date.now() - t0) / 1000;
+  const after = await client.readContract({ address: s.usd!, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+  const signers = await dbA.query(`SELECT DISTINCT signer FROM attestations`);
+  await stop();
+  console.log(`exit paid ${(after - before) / 1_000_000n} tUSD, ${seconds.toFixed(1)}s after the drain was mined, with ${signers.length} watchers signing`);
+  if (after - before !== 1_000_000_000n) fail("the owner was not paid in full");
+  if (signers.length < 2) fail("the alarm fired without two watchers");
+  const errs = ["hack-a.err", "hack-b.err"].map((f) => readFileSync(join(DIR, f), "utf8").trim()).filter(Boolean).join("\n");
+  if (errs) fail(`the services logged errors:\n${errs.slice(0, 500)}`);
+  console.log(`hack test passed. Exit time: ${seconds.toFixed(1)}s`);
+}
