@@ -191,3 +191,30 @@ async function cmdDeploy() {
   saveState(s);
   console.log(`admin setup scheduled. Run testnet.ts finish after ${TIMELOCK_SECONDS} seconds.`);
 }
+
+async function cmdFinish() {
+  const k = loadKeys();
+  const s = readState();
+  if (!s.scheduledAt) fail("nothing scheduled yet. Run: testnet.ts deploy");
+  if (!s.finished) {
+    const now = Number((await client.getBlock()).timestamp);
+    const left = s.scheduledAt! + TIMELOCK_SECONDS - now;
+    if (left > 0) fail(`the timelock has ${left} seconds left`);
+    await topUp(k);
+    for (const c of calls("2-execute-after-delay.safe.json")) await send(k.proposer, c);
+    await runVerify("live");
+    // A drain alarm needs a non-empty vault to measure from.
+    await send(k.deployer, { to: s.usd!, data: await encode(usdAbi as never, "mint", [addr(k.deployer), 1_000_000_000n]) });
+    await send(k.deployer, { to: s.usd!, data: await encode(erc20Abi as never, "approve", [s.vault, 1_000_000_000n]) });
+    await send(k.deployer, { to: s.vault!, data: await encode(vaultAbi as never, "deposit", [1_000_000_000n, addr(k.deployer)]) });
+    for (const c of calls("3-register-alarms.safe.json")) await send(k.deployer, c);
+    s.finished = true;
+    saveState(s);
+  }
+  const { router, adapter, alarmBook } = loadDeployment();
+  writeFileSync(process.env.WEB_DEPLOYMENT_FILE ?? join(ROOT, "web/src/deployment.json"), `${JSON.stringify({
+    chainId: SEPOLIA.chainId, chainHex: "0x14a34", chainName: "Base Sepolia", rpcUrl: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org", router, adapter, alarmBook, planPayTo: addr(k.payTo), planToken: s.usd,
+    vaults: [{ address: s.vault, name: "Canopy Test Vault", asset: "tUSD" }],
+  }, null, 2)}\n`);
+  console.log("live on Base Sepolia. The web app now points at this deployment; rebuild it to use it.");
+}
