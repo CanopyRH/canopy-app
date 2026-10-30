@@ -80,3 +80,50 @@ async function deployArtifact(k: Hex, file: string, args: unknown[] = []) {
   if (r.status !== "success" || !r.contractAddress) fail(`deploy failed: ${file}`);
   return r.contractAddress as Address;
 }
+
+/** Keeps every role able to pay for its next step, so a run never stalls halfway. */
+async function topUp(k: Keys) {
+  for (const r of FUNDED_ROLES) {
+    if ((await client.getBalance({ address: addr(k[r]) })) < ROLE_FLOOR) await send(k.deployer, { to: addr(k[r]), value: ROLE_TOPUP });
+  }
+}
+
+/** Gas for the run, plus a top-up for each role that can't yet pay its own way. */
+async function neededFor(k: Keys) {
+  let total = RUN_GAS;
+  for (const r of FUNDED_ROLES) {
+    if ((await client.getBalance({ address: addr(k[r]) })) < ROLE_FLOOR) total += ROLE_TOPUP;
+  }
+  return total;
+}
+
+const settingsFor = (k: Keys, s: State, adminExpiry: number): Settings => ({
+  chainId: SEPOLIA.chainId, proposer: addr(k.proposer), guardian: addr(k.guardian), stable: s.usd!, weth: SEPOLIA.weth, swapRouter: SEPOLIA.swapRouter,
+  stableFeed: SEPOLIA.usdcFeed, heartbeat: 90_000, adminExpiry, watchers: [addr(k.watcher1), addr(k.watcher2), addr(k.watcher3)], vaults: [s.vault!],
+  allowEoaAdmin: true, testTimelockDelay: TIMELOCK_SECONDS,
+});
+
+const loadDeployment = () => JSON.parse(readFileSync(join(planDir, "deployment.json"), "utf8")) as Deployment & { settings: Settings };
+const calls = (f: string) => (JSON.parse(readFileSync(join(planDir, f), "utf8")) as { transactions: Call[] }).transactions;
+
+async function runVerify(stage: "deployed" | "live") {
+  const { settings, ...d } = loadDeployment();
+  const checks = await verifyDeployment(client, d, settings, stage);
+  const bad = checks.filter((c) => !c.ok);
+  for (const c of bad) console.error(`FAIL  ${c.name}  ${c.detail ?? ""}`);
+  if (bad.length) fail("verifier failed. Do not use this deployment.");
+  console.log(`verifier: all ${checks.length} checks passed (${stage})`);
+}
+
+async function cmdKeys() {
+  mkdirSync(DIR, { recursive: true });
+  if (!existsSync(keysFile)) {
+    const keys = Object.fromEntries(ROLES.map((r) => [r, generatePrivateKey()]));
+    writeFileSync(keysFile, JSON.stringify(keys, null, 2), { mode: 0o600 });
+    chmodSync(keysFile, 0o600);
+  }
+  const k = loadKeys();
+  console.log(`Test deployer address: ${addr(k.deployer)}`);
+  console.log(`Send it at least ${formatEther(await neededFor(k))} Base Sepolia ETH, then run: testnet.ts deploy`);
+  console.log(`These are throwaway test keys, in ${keysFile}. Never send real funds to them.`);
+}
