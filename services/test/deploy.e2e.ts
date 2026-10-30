@@ -38,3 +38,8 @@ const CHAINS: Record<number, Profile> = {
   },
 };
 const WATCHERS: Address[] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000a2", "0x00000000000000000000000000000000000000a3"];
+
+const results: boolean[] = [];
+const check = (n: string, ok: boolean, d = "") => { results.push(ok); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
+const work = mkdtempSync(join(tmpdir(), "canopy-deploy-"));
+const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--fork-url", FORK, "--port", String(PORT), "--silent", "--no-rate-limit"], { stdout: "ignore", stderr: "ignore" });
