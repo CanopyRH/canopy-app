@@ -156,3 +156,38 @@ async function cmdBridge() {
   if (r.status !== "success") fail(`bridge transaction reverted: ${hash}`);
   console.log(`bridged ${formatEther(bal - L1_GAS)} ETH to Base Sepolia. It arrives in a few minutes. Check with: testnet.ts status`);
 }
+
+async function cmdDeploy() {
+  const k = loadKeys();
+  const s = readState();
+  if (s.plan) fail("already deployed. Run: testnet.ts status");
+  if ((await client.getChainId()) !== SEPOLIA.chainId) fail("this RPC is not Base Sepolia");
+  const bal = await client.getBalance({ address: addr(k.deployer) });
+  const needed = await neededFor(k);
+  if (bal < needed) fail(`deployer holds ${formatEther(bal)} ETH and needs ${formatEther(needed)}`);
+
+  await topUp(k);
+  console.log("funded test roles");
+  s.usd = await deployArtifact(k.deployer, "TestAssets.sol/TestUSD.json");
+  s.vault = await deployArtifact(k.deployer, "TestAssets.sol/TestVault.json", [s.usd]);
+  saveState(s);
+  console.log(`test stablecoin ${s.usd}, test vault ${s.vault}`);
+
+  const startBlock = Number(await client.getBlockNumber());
+  const adminExpiry = Number((await client.getBlock()).timestamp) + 200 * 86_400;
+  const settings = settingsFor(k, s, adminExpiry);
+  const timelock = await deployArtifact(k.deployer, "TestAssets.sol/TestTimelock.json", [settings.proposer, TIMELOCK_SECONDS]);
+  const alarmBook = await deployArtifact(k.deployer, "AlarmBook.sol/AlarmBook.json", [timelock]);
+  const router = await deployArtifact(k.deployer, "ExitRouter.sol/ExitRouter.json", [
+    settings.stable, settings.weth, settings.swapRouter, alarmBook, timelock, settings.guardian, settings.stableFeed, settings.heartbeat, adminExpiry,
+  ]);
+  const adapter = await deployArtifact(k.deployer, "ERC4626Adapter.sol/ERC4626Adapter.json", [router]);
+  writePlan({ timelock, alarmBook, router, adapter, startBlock }, settings, planDir);
+  s.plan = true;
+  saveState(s);
+  await runVerify("deployed");
+  for (const c of calls("1-schedule.safe.json")) await send(k.proposer, c);
+  s.scheduledAt = Number((await client.getBlock()).timestamp);
+  saveState(s);
+  console.log(`admin setup scheduled. Run testnet.ts finish after ${TIMELOCK_SECONDS} seconds.`);
+}
