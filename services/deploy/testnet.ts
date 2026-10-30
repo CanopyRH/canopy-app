@@ -44,3 +44,39 @@ const ROLES = ["deployer", "proposer", "guardian", "keeper", "user", "payTo", "w
 type Role = (typeof ROLES)[number];
 type Keys = Record<Role, Hex>;
 interface State { usd?: Address; vault?: Address; plan?: boolean; scheduledAt?: number; finished?: boolean }
+
+const keysFile = join(DIR, "keys.json");
+const stateFile = join(DIR, "state.json");
+const planDir = join(DIR, "plan");
+const zero32 = `0x${"00".repeat(32)}` as Hex;
+
+const readState = (): State => (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {});
+const saveState = (s: State) => writeFileSync(stateFile, `${JSON.stringify(s, null, 2)}\n`);
+const addr = (k: Hex) => privateKeyToAccount(k).address;
+const fail = (m: string): never => {
+  console.error(`STOP: ${m}`);
+  process.exit(1);
+};
+
+function loadKeys(): Keys {
+  if (!existsSync(keysFile)) fail("no keys yet. Run: testnet.ts keys");
+  return JSON.parse(readFileSync(keysFile, "utf8"));
+}
+
+const client = createPublicClient({ chain: baseSepolia, transport: http(RPC), pollingInterval: 500, cacheTime: 0 }) as PublicClient;
+const wallet = (k: Hex) => createWalletClient({ chain: baseSepolia, transport: http(RPC), account: privateKeyToAccount(k), pollingInterval: 500 });
+
+async function send(k: Hex, tx: { to: Address; data?: Hex; value?: bigint | string }) {
+  const hash = await wallet(k).sendTransaction({ ...tx, value: tx.value === undefined ? undefined : BigInt(tx.value) } as never);
+  const r = await client.waitForTransactionReceipt({ hash });
+  if (r.status !== "success") fail(`transaction reverted: ${hash}`);
+  return hash;
+}
+
+async function deployArtifact(k: Hex, file: string, args: unknown[] = []) {
+  const a = JSON.parse(readFileSync(join(ROOT, "contracts/out", file), "utf8"));
+  const hash = await wallet(k).deployContract({ abi: a.abi, bytecode: a.bytecode.object, args: args as never });
+  const r = await client.waitForTransactionReceipt({ hash });
+  if (r.status !== "success" || !r.contractAddress) fail(`deploy failed: ${file}`);
+  return r.contractAddress as Address;
+}
