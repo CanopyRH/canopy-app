@@ -242,3 +242,85 @@ async function cmdGive(who: Address) {
   await send(k.deployer, { to: s.usd!, data: await encode(erc20Abi as never, "transfer", [who, 100_000_000n]) });
   console.log(`${who} now holds 1,000 test vault shares and 100 tUSD`);
 }
+
+/** The real services against the live chain: a real alarm fires, and the keeper exits a real test position. */
+async function cmdSmoke() {
+  const k = loadKeys();
+  const s = readState();
+  if (!s.finished) fail("not live yet. Run: testnet.ts finish");
+  await topUp(k);
+  const { router, adapter, alarmBook } = loadDeployment();
+  const user = addr(k.user);
+  const db0 = postgres(`${PG}/postgres`);
+  const name = "canopy_sepolia";
+  await db0.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => fail("Postgres isn't running. Run: tools/dev-db.sh start"));
+  await db0.exec(`CREATE DATABASE ${name}`);
+  const db = postgres(`${PG}/${name}`);
+  const startBlock = await client.getBlockNumber();
+
+  // A unique detector per run, because an alarm can only re-fire after 24 hours.
+  const detector: Detector = { kind: Kind.PAUSED, target: s.vault!, threshold: BigInt(Date.now()), window: 0, a: zero32, b: zero32 };
+  const key = keyOf(detector);
+  await send(k.deployer, registerTx(alarmBook, detector));
+  await send(k.deployer, { to: s.usd!, data: await encode(usdAbi as never, "mint", [user, 1_100_000_000n]) });
+  await send(k.user, { to: s.usd!, data: await encode(erc20Abi as never, "approve", [s.vault, 1_000_000_000n]) });
+  await send(k.user, { to: s.vault!, data: await encode(vaultAbi as never, "deposit", [1_000_000_000n, user]) });
+  await send(k.user, approveTx(s.vault!, router));
+  await send(k.user, armTx(router, adapter, s.vault!, [key]));
+  await send(k.user, planTx(s.usd!, addr(k.payTo), PLAN_AMOUNTS.months3));
+  console.log("test position armed and plan paid");
+
+  const telegram: string[] = [];
+  const mock = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const u = new URL(req.url);
+      if (u.pathname.endsWith("/sendMessage")) {
+        telegram.push(((await req.json()) as { text: string }).text);
+        return Response.json({ ok: true, result: { message_id: 1, date: 0, chat: { id: 1, type: "private" } } });
+      }
+      return Response.json({ ok: true, result: { id: 1, is_bot: true, first_name: "t", username: "t" } });
+    },
+  });
+  const apiPort = 18750;
+  const logDir = DIR;
+  const proc = spawn([BUN, "src/index.ts"], {
+    cwd: join(ROOT, "services"),
+    stdout: Bun.file(join(logDir, "smoke.log")),
+    stderr: Bun.file(join(logDir, "smoke.err")),
+    env: {
+      ...process.env, ROLE: "all", PORT: String(apiPort), PUBLIC_URL: `http://127.0.0.1:${apiPort}`, DATABASE_URL: `${PG}/${name}`, CHAIN_ID: String(SEPOLIA.chainId), RPC_URL: RPC, RPC_URL_BACKUP: RPC,
+      ROUTER: router, ALARM_BOOK: alarmBook, ADAPTER_4626: adapter, START_BLOCK: startBlock.toString(), PLAN_PAY_ADDRESS: addr(k.payTo), PLAN_TOKEN: s.usd, KEEPER_PRIVATE_KEY: k.keeper,
+      TELEGRAM_BOT_TOKEN: "1:local", TELEGRAM_API_ROOT: `http://127.0.0.1:${mock.port}`, TELEGRAM_WEBHOOK_SECRET: "local-webhook-secret",
+    },
+  });
+  const until = async (what: string, fn: () => Promise<boolean>, ms = 120_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      try { if (await fn()) return; } catch { /* still starting */ }
+      await Bun.sleep(200);
+    }
+    proc.kill();
+    mock.stop(true);
+    fail(`timed out waiting for ${what}. See ${join(logDir, "smoke.err")}`);
+  };
+  const shares = () => client.readContract({ address: s.vault!, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+  await until("the indexer", async () => (await db.query(`SELECT 1 FROM positions WHERE active`)).length === 1 && (await db.query(`SELECT 1 FROM plans`)).length === 1);
+  console.log("services indexed the position and the plan");
+
+  const before = await client.readContract({ address: s.usd!, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+  await send(k.deployer, { to: s.vault!, data: await encode(vaultAbi as never, "setPaused", [true]) });
+  const t0 = Date.now();
+  await until("the exit", async () => (await shares()) === 0n);
+  const seconds = (Date.now() - t0) / 1000;
+  const after = await client.readContract({ address: s.usd!, abi: erc20Abi, functionName: "balanceOf", args: [user] });
+  proc.kill();
+  await proc.exited;
+  mock.stop(true);
+  await send(k.deployer, { to: s.vault!, data: await encode(vaultAbi as never, "setPaused", [false]) });
+  const errs = readFileSync(join(logDir, "smoke.err"), "utf8").trim();
+  console.log(`exit paid ${(after - before) / 1_000_000n} tUSD, ${seconds.toFixed(1)}s after the pause was mined`);
+  if (after - before !== 1_000_000_000n) fail("the owner was not paid in full");
+  if (errs) fail(`the services logged errors:\n${errs.slice(0, 500)}`);
+  console.log(`smoke test passed. Exit time: ${seconds.toFixed(1)}s`);
+}
