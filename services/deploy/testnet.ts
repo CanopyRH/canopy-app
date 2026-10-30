@@ -218,3 +218,16 @@ async function cmdFinish() {
   }, null, 2)}\n`);
   console.log("live on Base Sepolia. The web app now points at this deployment; rebuild it to use it.");
 }
+
+const vaultAbi = parseAbi([
+  "function deposit(uint256,address) returns (uint256)",
+  "function setPaused(bool)",
+  "function paused() view returns (bool)",
+]);
+const HACK_DRAIN_WINDOW = 240;
+const usdAbi = parseAbi(["function mint(address,uint256)"]);
+const redeemAbi = parseAbi(["function redeem(uint256,address,address) returns (uint256)"]);
+const encode = async (abi: never, functionName: string, args: unknown[]) => {
+  const { encodeFunctionData } = await import("viem");
+  return encodeFunctionData({ abi, functionName, args } as never);
+};
