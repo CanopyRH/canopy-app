@@ -127,3 +127,32 @@ async function cmdKeys() {
   console.log(`Send it at least ${formatEther(await neededFor(k))} Base Sepolia ETH, then run: testnet.ts deploy`);
   console.log(`These are throwaway test keys, in ${keysFile}. Never send real funds to them.`);
 }
+
+async function cmdStatus() {
+  const k = loadKeys();
+  const s = readState();
+  const bal = await client.getBalance({ address: addr(k.deployer) });
+  console.log(`deployer ${addr(k.deployer)} holds ${formatEther(bal)} ETH (needs ${formatEther(await neededFor(k))})`);
+  if (s.scheduledAt && !s.finished) {
+    const now = Number((await client.getBlock()).timestamp);
+    const left = s.scheduledAt + TIMELOCK_SECONDS - now;
+    console.log(left > 0 ? `timelock: ${left} seconds left` : "timelock: ready. Run: testnet.ts finish");
+  }
+  console.log(s.finished ? "deployment: live" : s.plan ? "deployment: waiting on timelock" : "deployment: not started");
+}
+
+/** Moves test ETH to the same address on Base Sepolia, for faucets that only pay on Ethereum Sepolia. */
+async function cmdBridge() {
+  const k = loadKeys();
+  const l1 = createPublicClient({ chain: sepolia, transport: http(L1_RPC), cacheTime: 0 });
+  if ((await l1.getChainId()) !== sepolia.id) fail("this RPC is not Ethereum Sepolia");
+  const bal = await l1.getBalance({ address: addr(k.deployer) });
+  const needed = (await neededFor(k)) + L1_GAS;
+  if (bal <= needed) fail(`deployer holds ${formatEther(bal)} ETH on Ethereum Sepolia and needs over ${formatEther(needed)}`);
+  const hash = await createWalletClient({ chain: sepolia, transport: http(L1_RPC), account: privateKeyToAccount(k.deployer) }).writeContract({
+    address: L1_BRIDGE, abi: parseAbi(["function depositETH(uint32,bytes) payable"]), functionName: "depositETH", args: [200_000, "0x"], value: bal - L1_GAS,
+  });
+  const r = await l1.waitForTransactionReceipt({ hash });
+  if (r.status !== "success") fail(`bridge transaction reverted: ${hash}`);
+  console.log(`bridged ${formatEther(bal - L1_GAS)} ETH to Base Sepolia. It arrives in a few minutes. Check with: testnet.ts status`);
+}
