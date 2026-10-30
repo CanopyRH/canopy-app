@@ -231,3 +231,14 @@ const encode = async (abi: never, functionName: string, args: unknown[]) => {
   const { encodeFunctionData } = await import("viem");
   return encodeFunctionData({ abi, functionName, args } as never);
 };
+
+/** Gives an address test stablecoin and vault shares, so a person can try the web app with their own wallet. */
+async function cmdGive(who: Address) {
+  const k = loadKeys();
+  const s = readState();
+  await send(k.deployer, { to: s.usd!, data: await encode(usdAbi as never, "mint", [addr(k.deployer), 2_000_000_000n]) });
+  await send(k.deployer, { to: s.usd!, data: await encode(erc20Abi as never, "approve", [s.vault, 2_000_000_000n]) });
+  await send(k.deployer, { to: s.vault!, data: await encode(vaultAbi as never, "deposit", [1_000_000_000n, who]) });
+  await send(k.deployer, { to: s.usd!, data: await encode(erc20Abi as never, "transfer", [who, 100_000_000n]) });
+  console.log(`${who} now holds 1,000 test vault shares and 100 tUSD`);
+}
