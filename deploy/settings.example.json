@@ -1,0 +1,31 @@
+{
+  "chainId": 4663,
+  "proposer": "0xYOUR_PROPOSER_SAFE",
+  "guardian": "0xYOUR_GUARDIAN_SAFE",
+  "stable": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+  "weth": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+  "swapRouter": "0xCaf681a66D020601342297493863E78C959E5cb2",
+  "stableFeed": "0x8bEeE3503F6860D5dac4cE26b5eEe92982951c2e",
+  "heartbeat": 90000,
+  "adminExpiry": 0,
+  "timelockDelay": 0,
+  "watchers": [
+    "0xWATCHER_1",
+    "0xWATCHER_2",
+    "0xWATCHER_3"
+  ],
+  "vaults": [
+    "0xBeEff033F34C046626B8D0A041844C5d1A5409dd",
+    "0xBEEff039907422219Fb367e525954DDC092854d9",
+    "0xd0dACE70434fF7567b108B5a8c2a36C150C830FE",
+    "0x8c258F25fc6fBe3f01ccC828E2C3840A46a4a9A2",
+    "0x37788ff0c1d4e45A7FE06BC7e71e0cc00121d0A8"
+  ],
+  "planPayTo": "0xYOUR_PLAN_PAYMENT_SAFE",
+  "apiUrl": "https://api.YOUR_DOMAIN",
+  "keeper": "0xKEEPER",
+  "deployer": "0xDEPLOYER",
+  "auditReport": "",
+  "auditedCommit": "",
+  "termsApproved": false
+}
