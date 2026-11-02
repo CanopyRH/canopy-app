@@ -138,3 +138,33 @@ export async function preflight(client: PublicClient, l: Launch, now: number): P
   }
   return out;
 }
+
+const parseEnv = (file: string) => Object.fromEntries(
+  readFileSync(file, "utf8").split("\n").map((x) => x.trim()).filter((x) => x && !x.startsWith("#") && x.includes("="))
+    .map((x) => [x.slice(0, x.indexOf("=")), x.slice(x.indexOf("=") + 1)]),
+);
+
+if (import.meta.main) {
+  const [rpc, serviceFile] = process.argv.slice(2);
+  if (!rpc) throw new Error("usage: bun deploy/preflight.ts <rpc url> [services env file]");
+  const inDeploy = (f: string) => join(ROOT, "deploy", f);
+  const present = (f: string, example: string) => existsSync(inDeploy(f)) ? inDeploy(f) : inDeploy(example);
+  const settings = JSON.parse(readFileSync(present("settings.json", "settings.example.json"), "utf8")) as LaunchSettings;
+  const client = createPublicClient({ transport: http(rpc) }) as PublicClient;
+  const chainId = await client.getChainId();
+  if (chainId !== settings.chainId) throw new Error(`that RPC is on chain ${chainId}, but settings.json targets ${settings.chainId}`);
+  const checks = await preflight(client, {
+    settings,
+    deployEnv: parseEnv(present("launch.env", "launch.env.example")),
+    webChainId: CONFIG.chainId,
+    services: serviceFile ? parseEnv(serviceFile) : null,
+    webVaults: CONFIG.vaults.map((v) => v.address as Address),
+    testConfigInWeb: readFileSync(join(ROOT, "web/src/deployment.json"), "utf8").trim() !== "{}",
+    contractsMatchAudit: (c) => spawnSync(["git", "diff", "--quiet", c, "--", "contracts/src"], { cwd: ROOT }).exitCode === 0,
+  }, Math.floor(Date.now() / 1000));
+  for (const c of checks) console.log(`${c.ok ? "PASS" : c.reminder ? "NOTE" : "FAIL"}  ${c.name}${c.detail ? `  (${c.detail})` : ""}`);
+  const required = checks.filter((c) => !c.reminder);
+  const failed = required.filter((c) => !c.ok).length;
+  console.log(failed ? `\n${required.length - failed} of ${required.length} ready. ${failed} left before the mainnet deploy.` : `\nall ${required.length} checks passed. Ready for the runbook.`);
+  process.exit(failed ? 1 : 0);
+}
