@@ -34,3 +34,21 @@ const feedAbi = parseAbi([
   "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
 ]);
 const assetAbi = parseAbi(["function asset() view returns (address)", "function totalAssets() view returns (uint256)"]);
+
+export type LaunchSettings = Partial<Settings> & { auditReport?: string; auditedCommit?: string; termsApproved?: boolean; keeper?: Address; deployer?: Address };
+export type PreflightCheck = Check & { reminder?: boolean };
+export interface Launch {
+  settings: LaunchSettings;
+  /** deploy/launch.env, which the deploy command reads. */
+  deployEnv: Record<string, string>;
+  webChainId: number;
+  services: Record<string, string> | null;
+  webVaults: Address[];
+  testConfigInWeb: boolean;
+  /** True when contracts/src is unchanged since the audited commit. */
+  contractsMatchAudit: (commit: string) => boolean;
+}
+
+const isAddress = (a: unknown): a is Address => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
+const same = (a?: string, b?: string) => a?.toLowerCase() === b?.toLowerCase();
+const host = (url = "") => URL.canParse(url) ? new URL(url).hostname : "";
