@@ -48,3 +48,20 @@ const launch = (): Launch => ({
   },
   webVaults: [VAULT], testConfigInWeb: false, contractsMatchAudit: () => true,
 });
+
+const failures = async (l: Launch, c = chain()) => (await preflight(client(c), l, NOW)).filter((x) => !x.ok && !x.reminder).map((x) => x.name);
+const reminders = async (l: Launch) => (await preflight(client(chain()), l, NOW)).filter((x) => !x.ok && x.reminder).map((x) => x.name);
+
+describe("preflight", () => {
+  test("a complete launch passes every check", async () => {
+    expect(await failures(launch())).toEqual([]);
+  });
+
+  test("Base still passes as a launch chain", async () => {
+    const l = launch();
+    l.settings.chainId = 8453;
+    l.webChainId = 8453;
+    l.services!.CHAIN_ID = "8453";
+    expect(await failures(l)).toEqual([]);
+  });
+});
