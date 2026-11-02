@@ -64,4 +64,66 @@ describe("preflight", () => {
     l.services!.CHAIN_ID = "8453";
     expect(await failures(l)).toEqual([]);
   });
+
+  test("the audit and the lawyer's review are reminders, never failures", async () => {
+    const l = launch();
+    delete l.settings.auditReport;
+    delete l.settings.auditedCommit;
+    l.settings.termsApproved = false;
+    expect(await failures(l)).toEqual([]);
+    expect(await reminders(l)).toEqual(["External audit report is linked", "A lawyer approved the terms", "Contracts are unchanged since the audited commit"]);
+  });
+  test("contracts changed after an audit raise a reminder", async () => {
+    const l = launch();
+    l.contractsMatchAudit = () => false;
+    expect(await failures(l)).toEqual([]);
+    expect(await reminders(l)).toEqual(["Contracts are unchanged since the audited commit"]);
+  });
+
+  const broken: [string, string, (l: Launch) => void, Partial<Chain>?][] = [
+    ["the wrong chain", "Settings target a launch chain", (l) => { l.settings.chainId = 84532; }],
+    ["a web app on another chain", "Web app targets the same chain", (l) => { l.webChainId = 8453; }],
+    ["services on another chain", "Services run on the same chain", (l) => { l.services!.CHAIN_ID = "8453"; }],
+    ["plan payments in another token", "Plan payments use the launch stablecoin", (l) => { l.services!.PLAN_TOKEN = WETH; }],
+    ["a delay over 30 days", "Timelock delay is 0 to 30 days", (l) => { l.settings.timelockDelay = 31 * 86_400; }],
+    ["files that disagree on the delay", "launch.env and settings.json agree on TIMELOCK_DELAY", (l) => { l.deployEnv.TIMELOCK_DELAY = "3600"; }],
+    ["a test Timelock", "No test Timelock", (l) => { l.settings.testTimelockDelay = 60; }],
+    ["plain-wallet admins", "No plain-wallet admins", (l) => { l.settings.allowEoaAdmin = true; }],
+    ["an expiry too soon", "Admin expiry is 180 to 730 days away", (l) => { l.settings.adminExpiry = NOW + 86_400; }],
+    ["an expiry too far", "Admin expiry is 180 to 730 days away", (l) => { l.settings.adminExpiry = NOW + 800 * 86_400; }],
+    ["a heartbeat over two days", "Feed heartbeat is valid", (l) => { l.settings.heartbeat = 200_000; }],
+    ["files that disagree", "launch.env and settings.json agree on PROPOSER_MULTISIG", (l) => { l.deployEnv.PROPOSER_MULTISIG = GUARDIAN; }],
+    ["one Safe in both roles", "Proposer and guardian are different Safes", (l) => { l.settings.guardian = PROPOSER; }],
+    ["a one-signer Safe", "Guardian Safe needs 2 or more signers", () => {}, { thresholds: { [PROPOSER]: 2n, [GUARDIAN]: 1n } }],
+    ["a plain wallet as a Safe", "Proposer Safe needs 2 or more signers", () => {}, { thresholds: { [GUARDIAN]: 2n } }],
+    ["a repeated watcher", "Three different watchers", (l) => { l.settings.watchers = [A(11), A(11), A(13)]; }],
+    ["the keeper as a watcher", "Keeper is separate from the watchers", (l) => { l.settings.keeper = A(11); }],
+    ["a keeper with no gas", "Keeper holds gas", () => {}, { balance: 1n }],
+    ["a deployer with no gas", "Deployer holds gas", () => {}, { balance: 1n }],
+    ["a missing contract", "Swap router contract exists", () => {}, { code: [STABLE, WETH, FEED, PROPOSER, GUARDIAN, VAULT, PLAN] }],
+    ["a depegged feed", "Feed reads about $1", () => {}, { answer: 80_000_000n }],
+    ["a stale feed", "Feed is fresh", () => {}, { updatedAt: BigInt(NOW - 100_000) }],
+    ["a vault missing from settings", "settings.json lists exactly the web app's vaults", (l) => { l.webVaults = [VAULT, A(20)]; }],
+    ["a vault in another asset", `Vault ${VAULT.slice(0, 8)} holds the stablecoin`, () => {}, { asset: WETH }],
+    ["a test config in the web app", "Web app has no test deployment", (l) => { l.testConfigInWeb = true; }],
+    ["no service settings", "Service settings file was given", (l) => { l.services = null; }],
+    ["a blank secret", "Service secrets are set", (l) => { l.services!.HEALTH_TOKEN = ""; }],
+    ["a placeholder", "No placeholder values remain", (l) => { l.services!.PUBLIC_URL = "https://api.example.com"; }],
+    ["a placeholder RPC key", "No placeholder values remain", (l) => { l.services!.RPC_URL = "https://lb.drpc.live/robinhood/YOUR_KEY"; }],
+    ["a plain HTTP URL", "Public URL uses HTTPS", (l) => { l.services!.PUBLIC_URL = "http://api.canopy.test"; }],
+    ["a database without TLS", "Database requires TLS", (l) => { l.services!.DATABASE_URL = "postgres://u:p@db/canopy"; }],
+    ["a public RPC", "RPC is a private endpoint", (l) => { l.services!.RPC_URL = "https://mainnet.base.org"; }],
+    ["the public Robinhood RPC", "RPC is a private endpoint", (l) => { l.services!.RPC_URL = "https://rpc.mainnet.chain.robinhood.com"; }],
+    ["keyless dRPC", "RPC is a private endpoint", (l) => { l.services!.RPC_URL = "https://robinhood.drpc.org"; }],
+    ["one RPC twice", "Backup RPC is a different provider", (l) => { l.services!.RPC_URL_BACKUP = l.services!.RPC_URL!; }],
+    ["a vault with no card", "CARD_VAULTS covers every web vault", (l) => { l.services!.CARD_VAULTS = ""; }],
+    ["plan payments to a wallet", "Plan payments go to a multisig", (l) => { l.services!.PLAN_PAY_ADDRESS = A(30); }],
+  ];
+  for (const [what, name, breakIt, over] of broken) {
+    test(`stops on ${what}`, async () => {
+      const l = launch();
+      breakIt(l);
+      expect(await failures(l, chain(over))).toContain(name);
+    });
+  }
 });
