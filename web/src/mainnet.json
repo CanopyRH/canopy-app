@@ -1,0 +1,7 @@
+{
+  "router": "0xc867a4b38f7b9f7ccc121d61b2f8d200395a965c",
+  "adapter": "0x14e6f3a2cd259148f983e2b01fe778c5002c98bc",
+  "alarmBook": "0x550cc2ad4c2f095c37b8362bd19c475ab7576e4d",
+  "planPayTo": "0xb668d6822b09eA5D32606e78Ed81d10C34CB95ad",
+  "apiUrl": "https://api-production-c175.up.railway.app"
+}
