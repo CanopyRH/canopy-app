@@ -1,0 +1,22 @@
+Required Notice: Copyright 2026 Canopy (https://github.com/CanopyRH/canopy-protocol)
+
+Licensing
+
+- contracts/ is under the MIT License (contracts/LICENSE). Every contract source
+  file carries that SPDX line, and it is part of the deployed bytecode, so these
+  files stay exactly as deployed.
+- Everything else in this repository is under the PolyForm Noncommercial License
+  1.0.0 (LICENSE.md). Noncommercial use, study and running your own keeper for
+  your own positions are allowed. Commercial use needs a separate license.
+
+Third-party material
+
+- Geist font: SIL Open Font License 1.1 (web/public/fonts/Geist-OFL.txt).
+- Scenario photos in web/public/assets/scenario-*.jpg: Unsplash License.
+- Marks in web/public/assets/integrations/: the trademarks of their owners, used
+  only to name what Canopy works with. No endorsement is implied, and no license
+  to them is granted here.
+- See web/ASSETS.md for where each web asset comes from.
+- .github/assets/: made for Canopy. The banner and social preview use image-model
+  backgrounds and the Canopy mark; the diagrams are drawn by hand. Text is set in
+  Geist, which the SVGs embed under its SIL Open Font License 1.1.
