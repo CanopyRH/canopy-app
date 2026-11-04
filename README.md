@@ -45,3 +45,25 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 - The router's admin powers end on **2027-11-04** (`ADMIN_EXPIRY`). After that, the router's settings can't change.
 - A separate guardian Safe can pause **new arming only**. Exits always stay open.
 - The `AlarmBook` admin manages the approved watcher list, and that role doesn't expire.
+
+## Deployments
+
+Robinhood Chain (4663), deployed at block 106087816:
+
+| Contract | Address |
+|---|---|
+| Timelock | [`0xA37196aCb22146424C1984001c18F49877B10D9b`](https://robinhoodchain.blockscout.com/address/0xA37196aCb22146424C1984001c18F49877B10D9b) |
+| AlarmBook | [`0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d`](https://robinhoodchain.blockscout.com/address/0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d) |
+| ExitRouter | [`0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C`](https://robinhoodchain.blockscout.com/address/0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C) |
+| ERC4626Adapter | [`0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC`](https://robinhoodchain.blockscout.com/address/0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC) |
+
+The broadcast record is in `contracts/broadcast/`, and `services/deploy/verify.ts` checks that the deployed bytecode matches this source.
+
+## Repository
+
+| Folder | What it holds |
+|---|---|
+| `contracts/` | Solidity contracts, tests and the deploy script (Foundry, solc 0.8.28) |
+| `services/` | Keeper, indexer, watcher, risk-card detector and Telegram bot (Bun, TypeScript, Postgres). One image runs every role. |
+| `web/` | The web app and landing page, a static build |
+| `tools/` | The reproducible web build and small helpers |
