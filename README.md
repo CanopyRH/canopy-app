@@ -41,6 +41,10 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
 ### Admin limits
 
+<p align="center">
+  <img src=".github/assets/admin-limits.svg" alt="What the admin can't do: it can't redirect payouts, its router powers end on 2027-11-04, pausing stops new arming only, and every change needs 2 of 3 signers." width="100%">
+</p>
+
 - The admin can't redirect any payout. A position keeps its adapter, and a feed or route change applies only when the owner re-arms.
 - The router's admin powers end on **2027-11-04** (`ADMIN_EXPIRY`). After that, the router's settings can't change.
 - A separate guardian Safe can pause **new arming only**. Exits always stay open.
@@ -67,3 +71,27 @@ The broadcast record is in `contracts/broadcast/`, and `services/deploy/verify.t
 | `services/` | Keeper, indexer, watcher, risk-card detector and Telegram bot (Bun, TypeScript, Postgres). One image runs every role. |
 | `web/` | The web app and landing page, a static build |
 | `tools/` | The reproducible web build and small helpers |
+
+## Build and test
+
+You need [Foundry](https://getfoundry.sh) 1.8.6, [Bun](https://bun.sh) 1.4.4 and Postgres for the service tests.
+
+```bash
+cd contracts && forge build && forge test
+```
+
+```bash
+cd services && bun install && bun test && bunx tsc --noEmit
+```
+
+```bash
+cd web && bun install && bun test
+```
+
+### Check the web build
+
+`tools/build-web.sh` builds the web app and prints a hash of every file it outputs. Anyone can rebuild from the same commit and compare.
+
+```bash
+tools/build-web.sh
+```
