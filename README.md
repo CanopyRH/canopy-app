@@ -95,3 +95,20 @@ cd web && bun install && bun test
 ```bash
 tools/build-web.sh
 ```
+
+## Run your own keeper
+
+Anyone can run the services against the deployed contracts. Copy `deploy/services.env.example`, set `ROLE=keeper`, your own RPC, a Postgres URL and a keeper key that holds a little ETH for gas, and set `KEEPER_PAID_ONLY=false` to exit every armed position. `services/Dockerfile` builds the image.
+
+## Security
+
+Report a vulnerability privately through this repository's **Security** tab ("Report a vulnerability"). Please don't open a public issue for it.
+
+## License
+
+- `contracts/`: MIT. The license line is part of the deployed bytecode, so these files stay exactly as deployed.
+- Everything else: [PolyForm Noncommercial 1.0.0](LICENSE.md). Noncommercial use and study are free. Commercial use needs a separate license.
+
+See [NOTICE](NOTICE) for third-party material.
+
+Canopy is software. It doesn't promise any outcome and doesn't cover losses.
