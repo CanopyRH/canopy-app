@@ -1,0 +1,35 @@
+/** Words for the several-wallets view. Kept here so the shared copy file stays untouched; the tests run the banned-word check on it. */
+export const WALLETS_COPY = {
+  title: "Several wallets, one view",
+  help: "Save wallet addresses to see their vault positions and risk facts together. Only the connected wallet can arm or exit.",
+  privacy: "Saved wallets stay in this browser and are never sent to Canopy. The app only reads the chain for them.",
+  addPlaceholder: "Wallet address (0x...)",
+  labelPlaceholder: "Label (optional)",
+  add: "Add wallet",
+  clear: "Clear list",
+  clearConfirm: "Remove all saved wallets from this browser?",
+  refresh: "Read again",
+  totalLabel: "Total across wallets",
+  connectedTag: "Connected: can arm and exit",
+  readOnlyTag: "Read-only: connect this wallet to act",
+  save: "Save",
+  unsaved: "Not saved",
+  remove: "Remove",
+  rename: "Rename",
+  open: "Show in list above",
+  riskFacts: "Risk facts",
+  reading: "Reading…",
+  none: "No supported vault positions found.",
+  failed: "Some reads failed, so this wallet may be missing positions.",
+  incomplete: "Some reads failed, so the total may be missing positions.",
+  empty: "No wallets yet. Connect one, or add an address.",
+  noStorage: "This browser is not keeping the list, so it will be gone when you close the page.",
+  errors: {
+    bad: "Enter a valid wallet address.",
+    blocked: "This address can't use Canopy.",
+    duplicate: "That wallet is already in the list.",
+    full: "The list is full. Remove a wallet to add another.",
+  },
+} as const;
+
+export const capNote = (max: number) => `Up to ${max} saved wallets.`;
