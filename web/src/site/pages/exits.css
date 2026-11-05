@@ -1,0 +1,45 @@
+/* Live exit log. Same palette and radii as the roadmap cards. */
+.ex-head{padding-bottom:20px}
+.ex-stats{max-width:1180px;margin:10px auto 0;padding:0 30px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.ex-stat{background:#fff;border-radius:22px;padding:22px 24px;box-shadow:0 4px 20px #00000005}
+.ex-stat dt{font-size:11px;letter-spacing:.12em;color:#888;text-transform:uppercase;margin:0 0 10px}
+.ex-stat dd{margin:0;font-size:34px;font-weight:500;letter-spacing:-.045em;color:#242424;font-variant-numeric:tabular-nums}
+.ex-stat small{display:block;margin-top:6px;font-size:13px;color:#888}
+.ex-main{max-width:1180px;margin:34px auto 0;padding:0 30px}
+.ex-note{font-size:14px;line-height:1.6;color:#777;margin:0 0 18px;max-width:760px}
+.ex-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.ex-row{background:#fff;border-radius:20px;padding:18px 22px;box-shadow:0 4px 20px #00000005;display:grid;grid-template-columns:110px minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) auto;gap:8px 22px;align-items:center}
+.ex-row h3{font-size:16px;font-weight:550;letter-spacing:-.02em;margin:0 0 4px;line-height:1.3;overflow-wrap:anywhere}
+.ex-row p{margin:0;font-size:13px;line-height:1.5;color:#6a6a6a}
+.ex-when{font-size:14px;color:#555}
+.ex-k{display:block;font-size:10px;letter-spacing:.12em;color:#999;text-transform:uppercase;margin-bottom:4px}
+.ex-v{font-size:15px;color:#242424;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ex-v small{font-size:13px;color:#777}
+.ex-links{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.ex-links a{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;border:1px solid #ddd;border-radius:30px;padding:8px 14px;font-size:13px;color:#242424;background:#fff}
+.ex-links a:hover{border-color:#bbb}
+.ex-state{background:#f0f0f0;border-radius:22px;padding:34px 28px;text-align:center;color:#666}
+.ex-state h2{font-size:20px;font-weight:550;letter-spacing:-.03em;margin:0 0 8px;color:#242424}
+.ex-state p{margin:0 auto;max-width:520px;font-size:15px;line-height:1.6}
+.ex-state button,.ex-more{margin-top:18px;font:inherit;font-size:14px;border:1px solid #ddd;border-radius:30px;padding:11px 20px;background:#fff;color:#242424;cursor:pointer}
+.ex-state button:hover,.ex-more:hover{border-color:#bbb}
+.ex-more{display:block;margin:20px auto 0}
+.ex-more:disabled{opacity:.6;cursor:default}
+.ex-skel{height:76px;border-radius:20px;background:#ececec}
+@media(prefers-reduced-motion:no-preference){.ex-skel{animation:ex-pulse 1.4s ease-in-out infinite}}
+@keyframes ex-pulse{50%{opacity:.55}}
+.ex-end{max-width:1180px;margin:60px auto 80px;padding:32px 30px 0;border-top:1px solid #ddd}
+.ex-end p{font-size:16px;line-height:1.6;color:#656565;margin:0;max-width:760px}
+
+@media(max-width:1000px){
+  .ex-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);padding:18px}
+  .ex-row>.ex-who{grid-column:1/-1;order:-1}
+  .ex-links{grid-column:1/-1;justify-content:flex-start}
+}
+@media(max-width:800px){
+  .ex-stats{grid-template-columns:1fr;padding:0 20px;gap:10px}
+  .ex-stat{padding:18px 20px}
+  .ex-stat dd{font-size:28px}
+  .ex-main{padding:0 20px;margin-top:26px}
+  .ex-end{margin:40px 20px 60px;padding:28px 0 0}
+}
