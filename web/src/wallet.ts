@@ -21,11 +21,17 @@ export function watchWallets(page: EventTarget, onChange: (all: FoundWallet[]) =
   page.dispatchEvent(new Event("eip6963:requestProvider"));
 }
 
-/** One wallet connects straight away, several need a choice, and a wallet too old to announce itself still works. */
-export function walletChoice(found: FoundWallet[], legacy?: Eip1193): { use: Eip1193 } | { pick: FoundWallet[] } | null {
-  if (found.length > 1) return { pick: found };
-  const only = found[0]?.provider ?? legacy;
-  return only ? { use: only } : null;
+export type WalletChoice = { use: Eip1193 } | { pick: FoundWallet[]; phone: boolean } | { phoneOnly: true } | null;
+
+/**
+ * One wallet connects straight away, several need a choice, and a wallet too old to announce itself still works.
+ * With WalletConnect on (`phone`), a phone wallet is always one of the choices, and the only one when nothing is installed.
+ */
+export function walletChoice(found: FoundWallet[], legacy?: Eip1193, phone = false): WalletChoice {
+  const list = found.length || !legacy ? found : [{ info: { uuid: "legacy", name: COPY.browserWallet, icon: "" }, provider: legacy }];
+  if (phone) return list.length ? { pick: list, phone } : { phoneOnly: true };
+  if (list.length > 1) return { pick: list, phone };
+  return list[0] ? { use: list[0].provider } : null;
 }
 
 /** A wallet supplies its own icon. Only an inline image is shown, so listing wallets contacts no outside server. */

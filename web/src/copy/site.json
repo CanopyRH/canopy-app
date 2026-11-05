@@ -5,7 +5,7 @@
     "descriptor": "DeFi auto-exit",
     "title": "Canopy | Your DeFi exit plan",
     "description": "Canopy watches the DeFi vaults you hold and exits them to your own wallet when an alarm you chose fires. Free wallet check, risk cards and alerts.",
-    "status": "Auto-exit launches on Robinhood Chain",
+    "status": "Auto-exit is live on Robinhood Chain",
     "ticker": null
   },
   "navigation": {
@@ -26,8 +26,8 @@
     "description": "Canopy watches the vaults you hold. When an alarm you chose fires, it moves your money out to your own wallet.",
     "primaryCta": { "label": "Check your wallet", "href": "app.html" },
     "secondaryCta": { "label": "How it works", "href": "#process" },
-    "status": "Auto-exit launches on Robinhood Chain",
-    "note": "Not live on mainnet yet. The wallet check works today."
+    "status": "Auto-exit is live on Robinhood Chain",
+    "note": "Live since November 4, 2026. Checking a wallet is free and needs no connection."
   },
   "about": {
     "id": "about",
@@ -40,7 +40,7 @@
       { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can redirect a payout, and the exit contract's settings lock after 12 months." },
       { "value": "Free", "label": "Scan and alerts", "detail": "Wallet check, risk cards and vault alerts." }
     ],
-    "note": "An exit can only take what the vault can pay out at that moment. Auto-exit is not live on mainnet yet."
+    "note": "An exit can only take what the vault can pay out at that moment."
   },
   "value": {
     "id": "value",
@@ -174,7 +174,7 @@
     "number": "006",
     "eyebrow": "INTEGRATIONS",
     "title": "Built on public contracts.",
-    "description": "Auto-exit launches on Robinhood Chain, for ERC-4626 vaults such as Morpho's USDG vaults. Base support and Uniswap LP exits are planned updates.",
+    "description": "Auto-exit runs on Robinhood Chain, for ERC-4626 vaults such as Morpho's USDG vaults. Base support and Uniswap LP exits are planned updates.",
     "centerLabel": "Canopy",
     "items": [
             { "name": "Morpho", "status": "Launch scope", "role": "ERC-4626 vault positions", "image": "assets/integrations/morpho.svg", "imageAlt": "Morpho logo" },
@@ -266,7 +266,7 @@
     "items": [
       {
         "question": "What does Canopy do, and what is live now?",
-        "answer": "Canopy watches the DeFi vaults you hold and tries to exit them to your own wallet when an alarm you chose fires. Auto-exit launches on Robinhood Chain for ERC-4626 vaults. It is not live on mainnet yet. The wallet check works now."
+        "answer": "Canopy watches the DeFi vaults you hold and tries to exit them to your own wallet when an alarm you chose fires. Auto-exit is live on Robinhood Chain for ERC-4626 vaults. Checking a wallet is free and needs no connection."
       },
       {
         "question": "Can AI or a keeper choose where my funds go?",

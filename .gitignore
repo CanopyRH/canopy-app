@@ -15,3 +15,8 @@ deploy/*.env
 **/.claude/
 *.pdf
 deploy/mainnet/
+web/public/wc.js
+web/public/wc.css
+.DS_Store
+contracts/broadcast/**/dry-run/
+*.recovery.lock

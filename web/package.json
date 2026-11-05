@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/site/site.jsx src/app/main.tsx --outdir public --target browser --format iife --production --entry-naming [name].[ext]"
+    "build": "bun build src/site/site.jsx src/app/main.tsx --outdir public --target browser --format iife --production --entry-naming [name].[ext] && bun build src/walletconnect/wc.ts --outdir public --target browser --format esm --production --entry-naming [name].[ext]"
   },
   "dependencies": {
+    "@walletconnect/ethereum-provider": "2.26.0",
     "lucide-react": "0.468.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",

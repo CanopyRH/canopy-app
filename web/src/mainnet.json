@@ -3,5 +3,6 @@
   "adapter": "0x14e6f3a2cd259148f983e2b01fe778c5002c98bc",
   "alarmBook": "0x550cc2ad4c2f095c37b8362bd19c475ab7576e4d",
   "planPayTo": "0xb668d6822b09eA5D32606e78Ed81d10C34CB95ad",
-  "apiUrl": "https://api-production-c175.up.railway.app"
+  "apiUrl": "https://api-production-c175.up.railway.app",
+  "walletConnectProjectId": "1dd8c1799b3b51b454c2cdbb6656439d"
 }

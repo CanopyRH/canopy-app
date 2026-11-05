@@ -2,8 +2,8 @@
 .canopy-mark{position:relative;display:inline-block;overflow:hidden;aspect-ratio:1.19;height:auto;flex-shrink:0;vertical-align:middle;isolation:isolate;background:transparent}
 .canopy-mark>img{position:absolute;max-width:none!important;width:116.2%!important;height:auto!important;left:-7.4%;top:-24.2%;display:block}
 .canopy-site .canopy-mark{filter:none;height:auto;padding:0}
-.canopy-site .nav-brand{background:none;box-shadow:none;border:0;border-radius:0;backdrop-filter:none;-webkit-backdrop-filter:none}
-.canopy-site .nav-brand .canopy-mark{width:42px}
+.canopy-site .nav-brand{background:#4449;box-shadow:inset 0 1px 1px #ffffff20;border:0;border-radius:50%;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+.canopy-site .nav-brand .canopy-mark{width:32px}
 .canopy-site .hero-tag .canopy-mark{width:18px}
 .canopy-site .case-brand .canopy-mark{width:28px}
 .canopy-site .eco-center .canopy-mark{width:58px}
@@ -88,7 +88,7 @@
 .canopy-site .case-image-label{color:#727a87;background:#ffffffb8;border:1px solid #ffffffd0;border-radius:20px;padding:8px 12px;left:50%;right:auto;transform:translateX(-50%);white-space:nowrap;font-size:9px;backdrop-filter:blur(12px)}
 .canopy-site .case-image>img{object-position:center}
 @media(max-width:1199px){.canopy-site .bento-grid{grid-template-columns:1fr 1fr;grid-template-rows:540px 340px 340px}.canopy-site .bento-0{grid-row:auto;grid-column:span 2}.canopy-site .bento-0>.capability-art{grid-column:2;grid-row:1 / span 2;height:440px;margin-top:0}.canopy-site .bento-card{border-radius:64px}.capability-art{margin-top:20px}.capability-art-0{min-height:330px}}
-@media(max-width:767px){.canopy-site .nav-brand .canopy-mark{width:38px}.canopy-site .hero{background:#f5f6f9}.canopy-site .hero-shade{background:linear-gradient(#ffffffb3,#ffffff30 75%,#f9fafc99)}.canopy-site .hero-actions .action{min-width:198px}.canopy-site .bento-grid{display:flex;gap:8px}.canopy-site .bento-card{padding:32px;border-radius:64px;min-height:320px}.canopy-site .bento-0{display:flex;min-height:640px}.canopy-site .bento-0>.capability-art{min-height:370px;height:auto;margin-top:12px}.workflow-core{width:116px;height:116px}.workflow-core:before{width:94px;height:94px}.workflow-core .canopy-mark{width:60px}.workflow-nodes>span{width:60px;height:60px;border-radius:20px}.workflow-stem{height:40px}.workflow-rails{height:42px}.canopy-site .bento-4{min-height:340px}.canopy-site .footer-brand .canopy-mark{width:50px;height:43px}}
+@media(max-width:767px){.canopy-site .nav-brand .canopy-mark{width:30px}.canopy-site .hero{background:#f5f6f9}.canopy-site .hero-shade{background:linear-gradient(#ffffffb3,#ffffff30 75%,#f9fafc99)}.canopy-site .hero-actions .action{min-width:198px}.canopy-site .bento-grid{display:flex;gap:8px}.canopy-site .bento-card{padding:32px;border-radius:64px;min-height:320px}.canopy-site .bento-0{display:flex;min-height:640px}.canopy-site .bento-0>.capability-art{min-height:370px;height:auto;margin-top:12px}.workflow-core{width:116px;height:116px}.workflow-core:before{width:94px;height:94px}.workflow-core .canopy-mark{width:60px}.workflow-nodes>span{width:60px;height:60px;border-radius:20px}.workflow-stem{height:40px}.workflow-rails{height:42px}.canopy-site .bento-4{min-height:340px}.canopy-site .footer-brand .canopy-mark{width:50px;height:43px}}
 @media(prefers-contrast:more){.canopy-site .hero h1{background:none;-webkit-text-fill-color:#20242c;filter:none;-webkit-text-stroke:0}}
 
 .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;clip:rect(0,0,0,0);clip-path:inset(50%);overflow:hidden;white-space:nowrap}
@@ -169,3 +169,10 @@
 
 
 
+
+/* UI pass 2026-11-05. The logo sits in a frosted circle like the menu pill, so page text never runs into it.
+   The footer gets a dark gradient under its links and small print, which sat on a light video. */
+.canopy-site .site-footer::after{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;background:linear-gradient(180deg,#00000024 0%,#00000038 40%,#0000008c 72%,#000000b3 100%)}
+.canopy-site .site-footer>:not(.footer-video){z-index:1}
+.canopy-site .footer-links a{color:#f2f2f2}
+.canopy-site .footer-bottom small,.canopy-site .footer-notice{color:#d6d6d6}

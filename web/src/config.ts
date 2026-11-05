@@ -18,6 +18,8 @@ const DEFAULTS = {
   alarmBook: null as Address | null,
   planPayTo: null as Address | null,
   planToken: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168" as Address, // USDG
+  // Reown project ID. It is public by design; with none set, the app offers browser wallets only.
+  walletConnectProjectId: null as string | null,
   // USDG vaults whose curators gave up every share gate, with none set. Checked on-chain 2026-11-03.
   vaults: [
     { address: "0xBeEff033F34C046626B8D0A041844C5d1A5409dd", name: "Steakhouse USDG", asset: "USDG" },

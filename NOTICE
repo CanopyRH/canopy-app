@@ -17,6 +17,10 @@ Third-party material
   only to name what Canopy works with. No endorsement is implied, and no license
   to them is granted here.
 - See web/ASSETS.md for where each web asset comes from.
+- WalletConnect (web/src/walletconnect/, built into wc.js): Portions © 2025 Reown,
+  Inc. All Rights Reserved. Used under the WalletConnect Community License and the
+  Reown Community License, both in web/public/licenses/walletconnect.md. These
+  packages are not covered by this repository's licenses.
 - .github/assets/: made for Canopy. The banner and social preview use image-model
   backgrounds and the Canopy mark; the diagrams are drawn by hand. Text is set in
   Geist, which the SVGs embed under its SIL Open Font License 1.1.

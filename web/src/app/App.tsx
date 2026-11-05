@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpRight, Bell, Check, CircleHelp, CreditCard, ExternalLink, Eye, LayoutGrid, Layers3, LockKeyhole, Search, ShieldCheck, TriangleAlert, Wallet, Waves, X } from "lucide-react";
+import { ArrowUpRight, Bell, Check, CircleHelp, CreditCard, ExternalLink, Eye, LayoutGrid, Layers3, LockKeyhole, Search, ShieldCheck, Smartphone, TriangleAlert, Wallet, Waves, X } from "lucide-react";
 import { formatUnits, type Address, type Hex } from "viem";
 import { COPY, SIGNALS, TERMS } from "../copy/text";
 import { CONFIG } from "../config";
 import { arm, armState, disarmAll, exitNow, gatesBlock, live, payPlan, presetViews, riskCard, scanWallet, type Position, type PresetView, type Signer } from "../chain";
 import { friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
+import { loadWalletConnect } from "../walletconnect/load";
 import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
 
 declare global { interface Window { ethereum?: Eip1193 } }
@@ -71,12 +72,12 @@ function Allocation({ rows }: { rows: Row[] }) {
   const share = (r: Row) => (total ? Number((r.assets * 10_000n) / total) / 10_000 : 0);
   let offset = 0;
   return <div className="cd-allocation">
-    <div className="cd-donut-wrap"><svg viewBox="0 0 180 180" className="cd-donut" role="img" aria-label={`Allocation across ${rows.length} positions`}><circle cx="90" cy="90" r="70" fill="none" stroke="#e9eae5" strokeWidth="13" />{rows.map((r, i) => {
+    <div className="cd-donut-wrap"><svg viewBox="0 0 180 180" className="cd-donut" role="img" aria-label={`Allocation across ${rows.length} ${rows.length === 1 ? "position" : "positions"}`}><circle cx="90" cy="90" r="70" fill="none" stroke="#e9eae5" strokeWidth="13" />{rows.map((r, i) => {
       const dash = share(r) * 439.82;
       const at = offset;
       offset += dash;
       return <circle key={r.vault.address} cx="90" cy="90" r="70" fill="none" stroke={colors[i % colors.length]} strokeWidth="13" strokeDasharray={`${Math.max(0, dash - 5)} ${439.82 - Math.max(0, dash - 5)}`} strokeDashoffset={-at} transform="rotate(-90 90 90)" strokeLinecap="round" className="cd-donut-segment" />;
-    })}</svg><div className="cd-donut-label"><strong>{rows.length}</strong><span>positions</span></div></div>
+    })}</svg><div className="cd-donut-label"><strong>{rows.length}</strong><span>{rows.length === 1 ? "position" : "positions"}</span></div></div>
     <div className="cd-allocation-legend">{rows.map((r, i) => <div key={r.vault.address} className="cd-legend-item"><i style={{ background: colors[i % colors.length] }} /><span>{r.vault.name}</span><strong>{Math.round(share(r) * 100)}%</strong></div>)}</div>
   </div>;
 }
@@ -136,7 +137,7 @@ function PositionDialog({ row, owner, signer, busy, note, onClose, act }: { row:
   </Modal>;
 }
 
-const NAV = [{ id: "overview", label: "Overview", icon: LayoutGrid }, { id: "positions", label: "Positions", icon: Layers3 }, { id: "plan", label: "Plan and controls", icon: CreditCard }] as const;
+const NAV = [{ id: "overview", label: "Overview", icon: LayoutGrid }, { id: "positions", label: "Positions", icon: Layers3 }, { id: "plan", label: "Plan and controls", short: "Plan", icon: CreditCard }] as const;
 function Dock({ active, onNavigate }: { active: Screen; onNavigate: (s: Screen) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const items = () => ref.current?.querySelectorAll<HTMLElement>(".cd-dock-item") ?? [];
@@ -150,7 +151,7 @@ function Dock({ active, onNavigate }: { active: Screen; onNavigate: (s: Screen) 
       i.style.setProperty("--cd-dock-rise", `${-pull * 8}px`);
     });
   };
-  return <nav className="cd-dock-wrap" aria-label="App"><div className="cd-dock" ref={ref} onPointerMove={magnify} onPointerLeave={reset}>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={`cd-dock-item ${active === id ? "is-active" : ""}`} onClick={() => (reset(), onNavigate(id))} aria-current={active === id ? "page" : undefined} aria-label={label}><span className="cd-dock-tooltip">{label}</span><span className="cd-dock-icon"><Icon size={24} strokeWidth={1.5} /></span><span className="cd-dock-mobile-label">{label}</span><i /></button>)}</div><span className="cd-dock-caption">YOUR EXIT. YOUR RULES.</span></nav>;
+  return <nav className="cd-dock-wrap" aria-label="App"><div className="cd-dock" ref={ref} onPointerMove={magnify} onPointerLeave={reset}>{NAV.map(({ id, label, icon: Icon, ...n }) => <button key={id} className={`cd-dock-item ${active === id ? "is-active" : ""}`} onClick={() => (reset(), onNavigate(id))} aria-current={active === id ? "page" : undefined} aria-label={label}><span className="cd-dock-tooltip">{label}</span><span className="cd-dock-icon"><Icon size={24} strokeWidth={1.5} /></span><span className="cd-dock-mobile-label">{"short" in n ? n.short : label}</span><i /></button>)}</div><span className="cd-dock-caption">YOUR EXIT. YOUR RULES.</span></nav>;
 }
 
 export default function App() {
@@ -160,7 +161,7 @@ export default function App() {
   const [failed, setFailed] = useState(false);
   const [signer, setSigner] = useState<Signer | null>(null);
   const [installed, setInstalled] = useState<FoundWallet[]>([]);
-  const [picking, setPicking] = useState<FoundWallet[] | null>(null);
+  const [picking, setPicking] = useState<{ pick: FoundWallet[]; phone: boolean } | null>(null);
   const [screen, setScreen] = useState<Screen>("overview");
   const [review, setReview] = useState<Address | null>(null);
   const [confirmDisarm, setConfirmDisarm] = useState(false);
@@ -213,11 +214,27 @@ export default function App() {
     }
   }
 
+  /** WalletConnect loads only now, the first time someone picks a phone wallet. */
+  async function connectPhone() {
+    setPicking(null);
+    try {
+      setNote({ text: COPY.phoneWalletOpening });
+      const open = await loadWalletConnect();
+      const w = await open({ projectId: CONFIG.walletConnectProjectId!, chainId: CONFIG.chainId, rpcUrl: CONFIG.rpcUrl, description: COPY.tagline });
+      w.on?.("disconnect", () => (setSigner(null), setNote({ text: COPY.phoneWalletEnded })));
+      setNote(null);
+      await chooseWallet(w);
+    } catch (e) {
+      setNote({ text: friendly(e), error: true });
+    }
+  }
+
   function connect() {
-    const choice = walletChoice(installed, window.ethereum);
+    const choice = walletChoice(installed, window.ethereum, Boolean(CONFIG.walletConnectProjectId));
     if (!choice) return setNote({ text: COPY.noWallet, error: true });
     if ("use" in choice) return void chooseWallet(choice.use);
-    setPicking(choice.pick);
+    if ("phoneOnly" in choice) return void connectPhone();
+    setPicking(choice);
   }
 
   const submit = (e: FormEvent) => (e.preventDefault(), void scan(input));
@@ -234,7 +251,7 @@ export default function App() {
     <div className="cd-studio-light cd-studio-light-one" aria-hidden="true" /><div className="cd-studio-light cd-studio-light-two" aria-hidden="true" />
     <header className="cd-app-header"><a className="cd-brand" href="./" aria-label="Canopy website"><Brand /><span>Canopy<span className="cd-brand-dot">.</span></span></a><span className="cd-header-divider" /><span className="cd-workspace-name">{CONFIG.chainName}</span>
       <div className="cd-header-actions"><span className="cd-demo-badge"><Eye size={13} /><span>{live() ? COPY.autoExit : COPY.scanOnly}</span></span><a className="cd-back-link" href="./"><ArrowUpRight size={16} /><span>{COPY.website}</span></a><button className="cd-button cd-button-dark cd-connect" onClick={connect} disabled={busy}><Wallet size={15} />{signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.connectButton}</button>
-        {picking && <div className="cd-wallet-picker" role="dialog" aria-label={COPY.pickWallet}><p>{COPY.pickWallet}</p>{picking.map((w) => { const icon = safeIcon(w.info.icon); return <button key={w.info.uuid} onClick={() => void chooseWallet(w.provider)}>{icon && <img src={icon} alt="" />}{w.info.name}</button>; })}</div>}
+        {picking && <div className="cd-wallet-picker" role="dialog" aria-label={COPY.pickWallet}><p>{COPY.pickWallet}</p>{picking.pick.map((w) => { const icon = safeIcon(w.info.icon); return <button key={w.info.uuid} onClick={() => void chooseWallet(w.provider)}>{icon && <img src={icon} alt="" />}{w.info.name}</button>; })}{picking.phone && <button onClick={() => void connectPhone()}><Smartphone size={18} />{COPY.phoneWallet}</button>}</div>}
       </div></header>
     <main className="cd-main"><div className="cd-workspace" key={screen}>
       {screen === "overview" && <>
@@ -263,7 +280,7 @@ export default function App() {
           <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.disarmButton}</h2><p className="cd-caption">{COPY.disarmHelp}</p></div><ShieldCheck size={19} /></div><div className="cd-dialog-actions"><button className="cd-button cd-button-dark" disabled={busy || !mine} onClick={() => setConfirmDisarm(true)}>{COPY.disarmButton}</button></div></GlassCard>
         </div>
       </>}
-      <footer className="cd-workspace-footer"><span><span className="cd-footer-dot" /> {signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.disconnected}</span><span>{COPY.footer}</span></footer>
+      <footer className="cd-workspace-footer"><span><span className="cd-footer-dot" /> {signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.disconnected}</span><span>{COPY.footer}</span>{CONFIG.walletConnectProjectId && <a className="cd-footer-notice" href="licenses/walletconnect.md">{COPY.reownNotice}</a>}</footer>
     </div></main>
     <Dock active={screen} onNavigate={(s) => (setScreen(s), scrollTo({ top: 0 }))} />
     <div className="cd-toast-region" aria-live="polite" aria-atomic="true">{note && <div className={`cd-toast ${note.error ? "cd-toast-error" : ""}`}>{note.error ? <TriangleAlert size={15} /> : <Check size={15} />}<span>{note.text}{note.link && <> <a href={note.link} target="_blank" rel="noreferrer">{COPY.viewTx}<ExternalLink size={12} /></a></>}</span><button aria-label="Dismiss" onClick={() => setNote(null)}><X size={14} /></button></div>}</div>

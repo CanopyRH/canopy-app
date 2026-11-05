@@ -78,13 +78,20 @@ describe("finding wallets", () => {
   });
 
   test("two wallets ask for a choice, however window.ethereum is set", () => {
-    expect(walletChoice([found("a"), found("b")], provider)).toEqual({ pick: [found("a"), found("b")] });
+    expect(walletChoice([found("a"), found("b")], provider)).toEqual({ pick: [found("a"), found("b")], phone: false });
   });
 
   test("one wallet connects straight away, and an older wallet still works", () => {
     expect(walletChoice([found("a")])).toEqual({ use: provider });
     expect(walletChoice([], provider)).toEqual({ use: provider });
     expect(walletChoice([])).toBeNull();
+  });
+
+  test("with WalletConnect on, a phone wallet is always offered, and is the only route with nothing installed", () => {
+    expect(walletChoice([found("a")], undefined, true)).toEqual({ pick: [found("a")], phone: true });
+    expect(walletChoice([], undefined, true)).toEqual({ phoneOnly: true });
+    const legacy = walletChoice([], provider, true);
+    expect(legacy && "pick" in legacy && legacy.pick.map((w) => [w.info.name, w.provider])).toEqual([[COPY.browserWallet, provider]]);
   });
 
   test("only an inline icon is shown", () => {
