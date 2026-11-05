@@ -7,6 +7,7 @@ import { presetsFor } from "./presets";
 import type { Db } from "../store/db";
 import type { Repo } from "../store/repo";
 import { acceptAttestation } from "../watcher/watcher";
+import { PLUGINS, type Plugin } from "../plugins";
 
 const AttestBody = z.strictObject({
   key: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
@@ -32,6 +33,8 @@ export interface ApiDeps {
   telegramSecret?: string;
   health?: () => Promise<unknown>;
   healthToken?: string;
+  /** Feature routes. Defaults to the files in src/plugins/. */
+  plugins?: Plugin[];
 }
 
 /** Read-only API. No route accepts a wallet or a wallet list, and none sets a user cookie. */
@@ -82,5 +85,6 @@ export function createApi(d: ApiDeps) {
     await d.telegram(await c.req.json());
     return c.json({ ok: true });
   });
+  for (const p of d.plugins ?? PLUGINS) p.api?.(app, d);
   return app;
 }

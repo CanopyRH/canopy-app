@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface Db {
@@ -8,7 +8,14 @@ export interface Db {
   locked?(sql: string): Promise<void>;
 }
 
-export const SCHEMA = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
+/** The core tables, then each feature's own file from schema.d/ in name order. */
+export function loadSchema(dir = import.meta.dir) {
+  const extra = join(dir, "schema.d");
+  const files = existsSync(extra) ? readdirSync(extra).filter((f) => f.endsWith(".sql")).sort() : [];
+  return [join(dir, "schema.sql"), ...files.map((f) => join(extra, f))].map((f) => readFileSync(f, "utf8")).join("\n");
+}
+
+export const SCHEMA = loadSchema();
 
 /** Roles start together, and two processes creating the same table at once fail, so migrations take turns. */
 export async function migrate(db: Db) {

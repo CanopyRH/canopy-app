@@ -20,3 +20,4 @@ web/public/wc.css
 .DS_Store
 contracts/broadcast/**/dry-run/
 *.recovery.lock
+web/src/site/pages.gen.js

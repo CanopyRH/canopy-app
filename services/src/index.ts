@@ -52,7 +52,7 @@ await migrate(db);
 const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
 // Bot buttons open the web app, which is a different host from this service's webhook address.
 const appUrl = env.APP_URL ?? env.PUBLIC_URL;
-const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed);
+const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db);
 const sendAlert = (chat: number, text: string) => bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
 const vaultName = async (vault: string) => ((await r.card(vault)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? vault;
 

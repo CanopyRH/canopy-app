@@ -2,16 +2,21 @@ import { Bot, InlineKeyboard } from "grammy";
 import { isAddress } from "viem";
 import { alarmAlert, WELCOME, type AlertInput } from "../copy/alerts";
 import type { Repo } from "../store/repo";
+import type { Db } from "../store/db";
+import { PLUGINS, type Plugin } from "../plugins";
 
 export interface Reply { text: string; keyboard?: InlineKeyboard }
 
 const MAX_FOLLOWS = 20;
 const MAX_MESSAGE = 4000; // Telegram's limit is 4096.
+const BUILT_IN = ["start", "vaults", "watch", "unwatch", "list", "card"];
 
 export const appKeyboard = (url: string) => new InlineKeyboard().url("Open Canopy", url);
 
 /** Command logic, kept apart from Telegram so it can be tested. It stores chats and vaults, never wallets. */
-export async function handle(r: Repo, publicUrl: string, chatId: number, cmd: string, arg: string, listed: string[] = []): Promise<Reply> {
+export async function handle(
+  r: Repo, publicUrl: string, chatId: number, cmd: string, arg: string, listed: string[] = [], db?: Db, plugins: Plugin[] = PLUGINS,
+): Promise<Reply> {
   const vault = arg.trim().toLowerCase();
   switch (cmd) {
     case "start":
@@ -38,16 +43,22 @@ export async function handle(r: Repo, publicUrl: string, chatId: number, cmd: st
       const c = await r.card(vault);
       return { text: (c?.text ?? "No card for that vault yet.").slice(0, MAX_MESSAGE) };
     }
-    default:
-      return { text: WELCOME };
+    default: {
+      // Feature commands come from src/plugins/ and need the database for their own tables.
+      const run = plugins.find((p) => p.commands?.[cmd])?.commands?.[cmd];
+      if (!db || !run) return { text: WELCOME };
+      const reply = await run({ db, repo: r, chatId, arg, appUrl: publicUrl });
+      return { ...reply, text: reply.text.slice(0, MAX_MESSAGE) };
+    }
   }
 }
 
-export function createBot(token: string, r: Repo, publicUrl: string, apiRoot?: string, listed: string[] = []) {
+export function createBot(token: string, r: Repo, publicUrl: string, apiRoot?: string, listed: string[] = [], db?: Db, plugins: Plugin[] = PLUGINS) {
   const bot = new Bot(token, apiRoot ? { client: { apiRoot } } : {});
-  for (const cmd of ["start", "vaults", "watch", "unwatch", "list", "card"]) {
+  const extra = db ? plugins.flatMap((p) => Object.keys(p.commands ?? {})).filter((c) => !BUILT_IN.includes(c)) : [];
+  for (const cmd of [...BUILT_IN, ...extra]) {
     bot.command(cmd, async (ctx) => {
-      const reply = await handle(r, publicUrl, ctx.chat.id, cmd, ctx.match?.toString() ?? "", listed);
+      const reply = await handle(r, publicUrl, ctx.chat.id, cmd, ctx.match?.toString() ?? "", listed, db, plugins);
       await ctx.reply(reply.text, reply.keyboard ? { reply_markup: reply.keyboard } : {});
     });
   }
