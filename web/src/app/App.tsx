@@ -8,6 +8,7 @@ import { network, type Net, type Position, type PresetView, type Signer } from "
 import { ensureChain, friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
 import { loadWalletConnect, phoneOptions } from "../walletconnect/load";
 import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
+import { receiptLink } from "../receipt";
 import WalletsPanel from "./wallets/WalletsPanel";
 
 declare global { interface Window { ethereum?: Eip1193 } }
@@ -110,7 +111,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   const exitIt = () => act(async () => {
     const { hash, complete } = await net.exitNow(signer!, row.vault.address, row.state!.posId);
     onClose();
-    return { text: complete ? COPY.exitDone : COPY.exitPartial, link: `${net.chain.explorer}/tx/${hash}` };
+    return { text: complete ? COPY.exitDone : COPY.exitPartial, link: receiptLink(net.chain, hash) };
   });
 
   return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${net.chain.chainName}`} onClose={onClose} wide>
