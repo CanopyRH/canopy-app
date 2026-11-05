@@ -62,7 +62,7 @@
       "items": [
         {
           "title": "Base",
-          "body": "A second auto-exit chain for Base's USDC vaults, with its own contracts, the same rules and one app for both chains.",
+          "body": "Auto-exit for Base's USDC vaults, with the same rules and one app for both chains.",
           "tags": [
             "Contracts",
             "App"
@@ -70,9 +70,32 @@
         },
         {
           "title": "Uniswap v3 LP exits",
-          "body": "Exit liquidity positions back to your wallet as their two tokens.",
+          "body": "Arm a liquidity position and get both tokens and your unclaimed fees back in your wallet when an alarm fires.",
           "tags": [
-            "Adapter"
+            "Adapter",
+            "App"
+          ]
+        },
+        {
+          "title": "Alerts in the app",
+          "body": "Phone and browser notifications from the installed app, for anyone who doesn't use Telegram. Still no email and no account.",
+          "tags": [
+            "App"
+          ]
+        },
+        {
+          "title": "Run your own keeper",
+          "body": "The open-source keeper runs on its own, so exits never depend on Canopy staying online.",
+          "tags": [
+            "Keeper"
+          ]
+        },
+        {
+          "title": "More vaults, on request",
+          "body": "Every Robinhood Chain vault that passes the safety checks, and a way to ask for the one you use.",
+          "tags": [
+            "App",
+            "Bot"
           ]
         }
       ]
@@ -83,17 +106,31 @@
       "status": "later",
       "items": [
         {
-          "title": "Optional exit to stablecoin",
-          "body": "For vaults that pay out a non-stable asset, such as ETH, choose to receive USDC or USDG instead, with oracle-checked limits and a 1% cap when a keeper runs it.",
+          "title": "Exit to stablecoin",
+          "body": "For vaults that pay out ETH or another non-stable asset, choose to get USDC or USDG instead, with oracle-checked limits and a 1% cap when a keeper runs it.",
           "tags": [
             "App"
           ]
         },
         {
-          "title": "Uniswap v4 LP exits",
-          "body": "The same exit for v4 positions.",
+          "title": "Live exit log",
+          "body": "A public page of every exit: what fired, how fast it ran and the transaction.",
           "tags": [
-            "Adapter"
+            "App"
+          ]
+        },
+        {
+          "title": "Exit receipts",
+          "body": "A shareable record after each exit with what fired, how fast and what came back.",
+          "tags": [
+            "App"
+          ]
+        },
+        {
+          "title": "Several wallets, one view",
+          "body": "Follow and arm positions across all your wallets from one screen.",
+          "tags": [
+            "App"
           ]
         },
         {
@@ -104,10 +141,10 @@
           ]
         },
         {
-          "title": "Robinhood Earn wallets",
-          "body": "Auto-exit for positions held in the Robinhood app, if real-account testing shows those wallets can sign.",
+          "title": "Uniswap v4 LP exits",
+          "body": "The same exit for v4 positions.",
           "tags": [
-            "App"
+            "Adapter"
           ]
         }
       ]
@@ -119,16 +156,20 @@
       "note": "If users ask for them",
       "items": [
         {
-          "title": "Exit receipts",
-          "body": "A shareable record of each exit."
+          "title": "Your own alarm levels",
+          "body": "Set your own loss threshold or window instead of a preset."
         },
         {
-          "title": "EIP-7702 wallets",
-          "body": "Arming from wallets that delegate to smart-account code."
+          "title": "Robinhood Earn wallets",
+          "body": "Auto-exit for positions held in the Robinhood app, if those wallets can sign."
         },
         {
           "title": "Aave positions",
           "body": "Exits for lending positions beyond ERC-4626 vaults."
+        },
+        {
+          "title": "EIP-7702 wallets",
+          "body": "Arming from wallets that delegate to smart-account code."
         },
         {
           "title": "Canopy Index",
