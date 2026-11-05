@@ -218,15 +218,15 @@ contract BaseForkV2Test {
     }
 
     /// @dev Calls in the shape keeper.ts sends: Multicall3 is the caller, the keeper wallet is `onBehalf`, failures
-    /// allowed. `asKeeperSizes` uses the amount liquidity.ts computes today, free * 0.999.
-    function _deallocateCalls(address v, bool asKeeperSizes) internal view returns (IMulticall3.Call3[] memory out) {
+    /// allowed, each sized as liquidity.ts sizes it: 0.999 of what the vault can reach in that market.
+    function _deallocateCalls(address v) internal view returns (IMulticall3.Call3[] memory out) {
         address la = IVaultV2(v).liquidityAdapter();
         uint256 n = IMarketAdapter(la).marketIdsLength();
         IMulticall3.Call3[] memory calls = new IMulticall3.Call3[](n);
         uint256 k;
         for (uint256 i; i < n; ++i) {
             bytes32 id = IMarketAdapter(la).marketIds(i);
-            uint256 size = asKeeperSizes ? _free(id) : _reachable(la, id);
+            uint256 size = _reachable(la, id);
             if (size < MIN_MOVE) continue;
             bytes memory call_ = abi.encodeCall(
                 IVaultV2.forceDeallocate, (la, _deallocateData(id), (size * 999) / 1000, KEEPER)
@@ -279,7 +279,7 @@ contract BaseForkV2Test {
 
     /// @dev [forceDeallocate..., exit] as one Multicall3 transaction from the keeper. The exit must land.
     function _runBundle(address v, address h, bytes32 id) internal returns (uint256 got, uint256 calls, uint256 okCalls) {
-        IMulticall3.Call3[] memory d = _deallocateCalls(v, false);
+        IMulticall3.Call3[] memory d = _deallocateCalls(v);
         IMulticall3.Call3[] memory all = new IMulticall3.Call3[](d.length + 1);
         for (uint256 i; i < d.length; ++i) {
             all[i] = d[i];
@@ -342,28 +342,6 @@ contract BaseForkV2Test {
         require(IERC20(v).balanceOf(h) == 0, "all shares redeemed");
         require(USDC.balanceOf(address(router)) == 0, "no router residue");
         require(IERC20(v).balanceOf(address(adapter)) == 0, "no adapter residue");
-    }
-
-    /// @dev Documents a keeper sizing bug, not a contract bug. liquidity.ts asks for free * 0.999 of each market, but
-    /// on Base the vault is usually a small lender in a big market, so that is more than the vault has there. Every
-    /// call reverts, allowFailure hides it, and the same vault and holder as above get no help from the bundle.
-    function test_base_v2_keeperSizingByMarketFreeLiquidityMovesNothing() public {
-        if (block.chainid != 8453) return;
-        address v = ZERO_PENALTY_VAULT;
-        IMulticall3.Call3[] memory d = _deallocateCalls(v, true);
-        uint256 idleBefore = USDC.balanceOf(v);
-        vm.prank(KEEPER);
-        IMulticall3.Result[] memory res = MC.aggregate3(d);
-        uint256 okD;
-        for (uint256 i; i < res.length; ++i) {
-            if (res[i].success) okD++;
-        }
-        emit log_named_uint("keeper-sized calls", d.length);
-        emit log_named_uint("keeper-sized calls ok", okD);
-        emit log_named_uint("idle moved USDC", (USDC.balanceOf(v) - idleBefore) / 1e6);
-        require(d.length > 0, "liquidity.ts would send calls");
-        require(okD == 0, "every call sized past the allocation reverts");
-        require(USDC.balanceOf(v) == idleBefore, "nothing reached idle");
     }
 
     /// @dev No V2 vault in the web config can run the keeper bundle. Each charges a penalty, taken as a withdrawal of

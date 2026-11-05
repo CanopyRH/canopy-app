@@ -197,11 +197,19 @@ contract BaseForkTest {
         vm.prank(KEEPER);
         router.exit(id, key, 0);
         uint256 got = USDC.balanceOf(h) - before;
+        uint256 raw = IERC20(WETH).balanceOf(h) - wBefore;
         emit log_named_uint("WETH milli out", wethOut / 1e15);
         emit log_named_uint("USDC received", got / 1e6);
+        emit log_named_uint("raw WETH milli received", raw / 1e15);
         emit log_named_uint("oracle floor at 1%", minOut / 1e6);
-        require(got >= minOut, "at or above the 1% floor");
-        require(IERC20(WETH).balanceOf(h) == wBefore, "no raw WETH");
+        // A position this size (~$350K) sits near the pool's 1% depth, so which branch runs depends on the block.
+        // Either the swap clears the floor, or it is skipped and the owner gets the WETH itself. Never anything less.
+        if (got > 0) {
+            require(got >= minOut, "a swap fills at or above the 1% floor");
+            require(raw == 0, "no raw WETH after a swap");
+        } else {
+            require(raw * 1000 >= wethOut * 999, "a skipped swap delivers the WETH raw");
+        }
         require(USDC.balanceOf(address(router)) == 0 && IERC20(WETH).balanceOf(address(router)) == 0, "no residue");
         require(IERC20(WETH).allowance(address(router), SWAP) == 0, "approval cleared");
     }
