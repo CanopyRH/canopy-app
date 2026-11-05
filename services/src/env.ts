@@ -2,10 +2,15 @@ import { z } from "zod";
 
 const addr = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 
+const ROLES = ["all", "api", "bot", "indexer", "detector", "watcher", "keeper"] as const;
+export type Role = (typeof ROLES)[number];
+export const hasRole = (roles: readonly Role[], role: Role) => roles.includes("all") || roles.includes(role);
+
 export const Env = z.object({
-  ROLE: z.enum(["all", "api", "bot", "indexer", "detector", "watcher", "keeper"]).default("all"),
+  // One role, several joined by commas (an independent keeper runs "indexer,keeper"), or "all".
+  ROLE: z.string().default("all").transform((s) => s.split(",").map((x) => x.trim()).filter(Boolean)).pipe(z.array(z.enum(ROLES)).min(1)),
   PORT: z.coerce.number().default(8443), // Telegram webhooks: 443/80/88/8443 only, TLS 1.2+, IPv4
-  PUBLIC_URL: z.url(), // this service's own address, for the Telegram webhook
+  PUBLIC_URL: z.url().optional(), // this service's own address, for the Telegram webhook; needed by the api and bot roles
   APP_URL: z.url().optional(), // the web app that bot buttons open; off means PUBLIC_URL
   DATABASE_URL: z.string(),
   DB_POOL: z.coerce.number().int().min(1).max(50).default(4), // connections per process; 7 services × 4, doubled during a deploy, stays under 100
@@ -43,8 +48,8 @@ export const Env = z.object({
   ANTHROPIC_API_KEY: z.string().optional(), // classification only
   ANTHROPIC_BASE_URL: z.url().optional(), // a compatible service such as PPQ; off means Anthropic directly
   CLASSIFIER_MODEL: z.string().min(1).optional(), // that service's model name
-  TELEGRAM_BOT_TOKEN: z.string(),
-  TELEGRAM_WEBHOOK_SECRET: z.string().min(16),
+  TELEGRAM_BOT_TOKEN: z.string().optional(), // off means no alerts; needed by the api and bot roles
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
   BOT_MODE: z.enum(["webhook", "polling"]).default("webhook"),
   TELEGRAM_API_ROOT: z.url().optional(), // local test server only
   LOOP_SCALE: z.coerce.number().positive().default(1), // shortens loop intervals in local runs
@@ -60,9 +65,19 @@ export const Env = z.object({
   for (const [k, v] of [["V1_ROUTER", e.ROUTER], ["V1_ALARM_BOOK", e.ALARM_BOOK]] as const) {
     if (e[k] && v && e[k]!.toLowerCase() === v.toLowerCase()) c.addIssue({ code: "custom", path: [k], message: "must be the v1 contract, not the one this service runs on" });
   }
-  if (e.ALERTS_ONLY) return;
-  for (const k of ["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"] as const) {
-    if (!e[k]) c.addIssue({ code: "custom", path: [k], message: "required unless ALERTS_ONLY is on" });
+  const need = (k: keyof typeof e, message: string) => {
+    if (e[k] === undefined) c.addIssue({ code: "custom", path: [k], message });
+  };
+  if (!e.ALERTS_ONLY) {
+    for (const k of ["ROUTER", "ALARM_BOOK", "ADAPTER_4626"] as const) need(k, "required unless ALERTS_ONLY is on");
+    // Payments only matter to a keeper that serves paid wallets. An independent keeper serving everyone skips them.
+    if (e.KEEPER_PAID_ONLY) for (const k of ["PLAN_PAY_ADDRESS", "PLAN_TOKEN"] as const) need(k, "required while KEEPER_PAID_ONLY is on");
+  }
+  if (hasRole(e.ROLE, "api") || hasRole(e.ROLE, "bot")) {
+    for (const k of ["PUBLIC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"] as const) need(k, "required by the api and bot roles");
+  }
+  if (e.TELEGRAM_BOT_TOKEN !== undefined && e.APP_URL === undefined && e.PUBLIC_URL === undefined) {
+    need("APP_URL", "the bot needs APP_URL or PUBLIC_URL for its Open Canopy button");
   }
 });
 export type Env = z.infer<typeof Env>;

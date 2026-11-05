@@ -11,7 +11,7 @@ import { ALARM_NAMES, alarmAlert, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
 import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
 import { classifierFor } from "./engine/classifier";
-import { loadEnv } from "./env";
+import { hasRole, loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
 import { outflowThreshold, type OutflowWatch } from "./indexer/outflow";
 import { applyV1AlarmLog, applyV1RouterLog, v1AlarmsCursor, v1RouterCursor } from "./indexer/v1";
@@ -39,7 +39,7 @@ const db = postgres(env.DATABASE_URL, env.DB_POOL);
 const r = repo(db);
 const router = (env.ROUTER ?? "0x") as Address;
 const alarmBook = (env.ALARM_BOOK ?? "0x") as Address;
-const run = (role: string) => env.ROLE === "all" || env.ROLE === role;
+const run = (role: Parameters<typeof hasRole>[1]) => hasRole(env.ROLE, role);
 const contracts = !env.ALERTS_ONLY;
 const onRobinhood = env.CHAIN_ID === ROBINHOOD.chainId;
 const parts = chainParts(env.CHAIN_ID);
@@ -74,8 +74,18 @@ export function stop() {
 
 const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
 // Bot buttons open the web app, which is a different host from this service's webhook address.
-const appUrl = env.APP_URL ?? env.PUBLIC_URL;
-const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db);
+const appUrl = env.APP_URL ?? env.PUBLIC_URL ?? "";
+// No token means no alerts: an independent keeper needs no Telegram bot. The env check requires one for the api and bot roles.
+const bot = env.TELEGRAM_BOT_TOKEN ? createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db) : null;
+if (!bot && (run("indexer") || run("detector"))) console.warn("TELEGRAM_BOT_TOKEN is not set, so no alerts will be sent");
+const sendOps = async (chat: number, text: string) => {
+  if (bot) await bot.api.sendMessage(chat, text);
+};
+const sendAlert = async (chat: number, text: string) => {
+  if (bot) await bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
+};
+// Without a bot there is no one to tell, so nothing is queued.
+const queueAlert = (vault: string, text: string) => (bot ? enqueueAlert(r, vault, text, now()) : Promise.resolve());
 
 await migrate(db);
 // Every service checks, before it touches anything, that the configured contracts are v2. A service started on v1 addresses
@@ -87,7 +97,7 @@ if (contracts) {
     if (!(e instanceof ContractVersionError)) throw e;
     console.error("contract version check failed:", e.message);
     const chat = env.OPS_CHAT_ID;
-    await announceRefusal(r, e, { router, alarmBook }, chat === undefined ? undefined : (text) => bot.api.sendMessage(chat, text), now).catch(() => {});
+    await announceRefusal(r, e, { router, alarmBook }, chat === undefined ? undefined : (text) => sendOps(chat, text), now).catch(() => {});
     process.exit(1);
   }
 }
@@ -111,8 +121,6 @@ if (contracts) {
 /** Every writer calls this at the start of a pass: the stored addresses must still be this process's. */
 const fence = contracts ? contractFence(db, { router, alarmBook }) : undefined;
 const routerName = routerCursor(router), alarmsName = alarmsCursor(alarmBook);
-const sendAlert = (chat: number, text: string) => bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
-const queueAlert = (vault: string, text: string) => enqueueAlert(r, vault, text, now());
 const vaultName = async (vault: string) => ((await r.card(vault)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? vault;
 
 const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
@@ -272,10 +280,10 @@ if (run("indexer") && contracts) {
   // Arms are applied at the tip, so exits stay fast. Each is checked against the chain once it is deep enough to be settled.
   every(5_000, "confirm arms", () => confirmArms(client, r, router, confirmations));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
-  every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
   const opsChat = env.OPS_CHAT_ID;
-  if (opsChat !== undefined) every(1_000, "ops alerts", () => sendQueuedOps(r, (text) => bot.api.sendMessage(opsChat, text), now));
-  every(30_000, "payments", () =>
+  if (bot && opsChat !== undefined) every(1_000, "ops alerts", () => sendQueuedOps(r, (text) => sendOps(opsChat, text), now));
+  if (env.PLAN_TOKEN && env.PLAN_PAY_ADDRESS) every(30_000, "payments", () =>
     syncLogs(client, r, {
       name: "payments",
       onStuck: stuckAlert,
@@ -339,13 +347,13 @@ if (run("keeper") && keeper) {
   every(60_000, "ops", async () => {
     const gasWei = await client.getBalance({ address: keeper.account });
     await r.setCounter("keeper_gas_wei", gasWei);
-    if (env.OPS_CHAT_ID === undefined) return;
+    if (env.OPS_CHAT_ID === undefined || !bot) return;
     const tip = await client.getBlockNumber();
     const seen = await Promise.all([routerName, alarmsName].map((c) => r.cursor(c)));
     const cursor = seen.reduce<bigint>((low, c) => (c !== null && c < low ? c : low), tip);
     const { oldestJobSec } = await r.health(now());
     for (const p of opsProblems({ lagBlocks: tip > cursor ? tip - cursor : 0n, gasWei, minGasWei: env.KEEPER_MIN_GAS_WEI, oldestJobSec, maxLagBlocks: parts.maxLagBlocks })) {
-      if (await r.claimAlert("ops", p.code, now(), 3600)) await bot.api.sendMessage(env.OPS_CHAT_ID, p.text);
+      if (await r.claimAlert("ops", p.code, now(), 3600)) await sendOps(env.OPS_CHAT_ID, p.text);
     }
   });
 }
@@ -430,7 +438,7 @@ const answersPaused = async (vault: Address) => {
   return yes;
 };
 
-if (run("api") || run("bot")) {
+if ((run("api") || run("bot")) && bot) {
   // grammY refuses polling once a webhook handler exists, so polling mode never creates one.
   const hook = env.BOT_MODE === "webhook" ? webhookCallback(bot, "std/http") : null;
   const app = createApi({

@@ -296,6 +296,39 @@ describe("settings", () => {
     expect(r.success).toBe(false);
     expect(r.error?.issues.map((i) => i.path[0])).toEqual(["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
   });
+
+  const contracts = { ROUTER: V, ALARM_BOOK: V, ADAPTER_4626: V };
+  const independent = { DATABASE_URL: "postgres://x", CHAIN_ID: "4663", RPC_URL: "https://a.example", RPC_URL_BACKUP: "https://b.example", ...contracts };
+
+  test("an independent keeper runs with no Telegram, no public URL and no plan settings", () => {
+    const e = loadEnv({ ...independent, ROLE: "indexer, keeper", KEEPER_PAID_ONLY: "false" });
+    expect(e.ROLE).toEqual(["indexer", "keeper"]);
+    expect(e.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(e.PLAN_TOKEN).toBeUndefined();
+  });
+
+  test("a keeper serving paid wallets still needs the plan settings", () => {
+    const r = Env.safeParse({ ...independent, ROLE: "indexer,keeper" });
+    expect(r.error?.issues.map((i) => i.path[0])).toEqual(["PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
+  });
+
+  test("the api and bot roles still need Telegram and a public URL", () => {
+    for (const ROLE of ["api", "bot", "all", "keeper,api"]) {
+      const r = Env.safeParse({ ...independent, ROLE, KEEPER_PAID_ONLY: "false" });
+      expect(r.error?.issues.map((i) => i.path[0])).toEqual(["PUBLIC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]);
+    }
+  });
+
+  test("a bot token needs somewhere for its Open Canopy button to point", () => {
+    const r = Env.safeParse({ ...independent, ROLE: "detector", KEEPER_PAID_ONLY: "false", TELEGRAM_BOT_TOKEN: "1:a" });
+    expect(r.error?.issues.map((i) => i.path[0])).toEqual(["APP_URL"]);
+    expect(Env.safeParse({ ...independent, ROLE: "detector", KEEPER_PAID_ONLY: "false", TELEGRAM_BOT_TOKEN: "1:a", APP_URL: "https://app.example" }).success).toBe(true);
+  });
+
+  test("an unknown or empty role is refused", () => {
+    expect(Env.safeParse({ ...base, ALERTS_ONLY: "true", ROLE: "keeper,miner" }).success).toBe(false);
+    expect(Env.safeParse({ ...base, ALERTS_ONLY: "true", ROLE: " , " }).success).toBe(false);
+  });
 });
 
 describe("keeper sending", () => {
