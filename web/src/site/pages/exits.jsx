@@ -5,6 +5,9 @@ import {Shell} from '../Shell.jsx';
 import {ago,alarmTitle,duration,paidText,shortAddress} from '../exitsFormat.js';
 import './exits.css';
 
+// The app's own vault list names a vault when the server has no risk card for it yet.
+const listedName=(a)=>CONFIG.vaults.find((v)=>v.address.toLowerCase()===a.toLowerCase())?.name;
+
 const PAGE=20;
 // Tokens the page can name even when the API does not.
 const KNOWN={[CONFIG.planToken.toLowerCase()]:{symbol:'USDG',decimals:6}};
@@ -38,7 +41,7 @@ function Row({e,now}) {
   return <li className="ex-row">
     <div className="ex-when">{e.ranAt===null?'Time not available':<time dateTime={new Date(e.ranAt*1000).toISOString()} title={new Date(e.ranAt*1000).toUTCString()}>{when}</time>}</div>
     <div className="ex-who">
-      <h3>{e.vault?(e.vault.name||'Unnamed vault'):'Unknown vault'}</h3>
+      <h3>{e.vault?(e.vault.name||listedName(e.vault.address)||'Unnamed vault'):'Unknown vault'}</h3>
       <p>{e.vault&&<>{shortAddress(e.vault.address)} · </>}{e.alarm?alarmTitle(e.alarm.name):'Exit without an alarm'}</p>
     </div>
     <div><span className="ex-k">Alarm to exit</span><span className="ex-v">{speed||'Not available'}</span></div>
