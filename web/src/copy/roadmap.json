@@ -1,0 +1,140 @@
+{
+  "eyebrow": "Roadmap",
+  "title": "What's live, and what's next.",
+  "intro": "Canopy ships in small, separate updates. The contracts can't be upgraded, so each update adds an adapter, new alarms or a new deployment, and positions armed today keep working.",
+  "draft": false,
+  "phases": [
+    {
+      "id": "live",
+      "label": "Live",
+      "status": "live",
+      "note": "November 2026",
+      "items": [
+        {
+          "title": "Auto-exit on Robinhood Chain",
+          "body": "Arm ERC-4626 vault positions, such as Morpho's USDG vaults, with the alarms you choose.",
+          "tags": [
+            "Contracts",
+            "App"
+          ]
+        },
+        {
+          "title": "Free wallet check and risk cards",
+          "body": "Paste any address to see its vault positions and plain-words risk facts. No connection needed.",
+          "tags": [
+            "App"
+          ]
+        },
+        {
+          "title": "Free Telegram alerts",
+          "body": "Follow any vault in @CanopyAlerts_Bot and hear when an alarm fires.",
+          "tags": [
+            "Bot"
+          ]
+        },
+        {
+          "title": "Five alarm presets and 2-of-3 watchers",
+          "body": "Vault loss, pause, exploit confirmed, and drain or curator change with confirmation.",
+          "tags": [
+            "Alarms"
+          ]
+        },
+        {
+          "title": "Phone wallets",
+          "body": "Connect a phone wallet by QR code through WalletConnect.",
+          "tags": [
+            "App"
+          ]
+        },
+        {
+          "title": "Verified source",
+          "body": "Every contract verified on Blockscout and Sourcify with an exact match.",
+          "tags": [
+            "Contracts"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "next",
+      "label": "Next",
+      "status": "next",
+      "items": [
+        {
+          "title": "Base",
+          "body": "A second auto-exit chain for Base's USDC vaults, with its own contracts, the same rules and one app for both chains.",
+          "tags": [
+            "Contracts",
+            "App"
+          ]
+        },
+        {
+          "title": "Uniswap v3 LP exits",
+          "body": "Exit liquidity positions back to your wallet as their two tokens.",
+          "tags": [
+            "Adapter"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "later",
+      "label": "Later",
+      "status": "later",
+      "items": [
+        {
+          "title": "Optional exit to stablecoin",
+          "body": "For vaults that pay out a non-stable asset, such as ETH, choose to receive USDC or USDG instead, with oracle-checked limits and a 1% cap when a keeper runs it.",
+          "tags": [
+            "App"
+          ]
+        },
+        {
+          "title": "Uniswap v4 LP exits",
+          "body": "The same exit for v4 positions.",
+          "tags": [
+            "Adapter"
+          ]
+        },
+        {
+          "title": "Outside watchers and challenges",
+          "body": "Independent watchers beyond Canopy's own, and a way to challenge a wrong watcher alarm on-chain.",
+          "tags": [
+            "Alarms"
+          ]
+        },
+        {
+          "title": "Robinhood Earn wallets",
+          "body": "Auto-exit for positions held in the Robinhood app, if real-account testing shows those wallets can sign.",
+          "tags": [
+            "App"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exploring",
+      "label": "Exploring",
+      "status": "exploring",
+      "note": "If users ask for them",
+      "items": [
+        {
+          "title": "Exit receipts",
+          "body": "A shareable record of each exit."
+        },
+        {
+          "title": "EIP-7702 wallets",
+          "body": "Arming from wallets that delegate to smart-account code."
+        },
+        {
+          "title": "Aave positions",
+          "body": "Exits for lending positions beyond ERC-4626 vaults."
+        },
+        {
+          "title": "Canopy Index",
+          "body": "A public, live view of vault risk across chains."
+        }
+      ]
+    }
+  ]
+}

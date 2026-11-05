@@ -1,0 +1,88 @@
+{
+  "eyebrow": "Whitepaper",
+  "title": "Owner-only auto-exit for DeFi vaults",
+  "version": "Version 1.0 · November 5, 2026",
+  "abstract": "Canopy watches the DeFi vaults a person holds and exits them to that person's own wallet when an alarm they chose fires. The design rests on one narrow permission: an exit can only ever pay the position's owner, and only a public, on-chain alarm the owner armed can let someone else run it. This paper describes the problem, the contracts, the alarm system, the off-chain services, measured performance and the limits of the approach.",
+  "links": [
+    {
+      "label": "Source code",
+      "href": "https://github.com/CanopyRH/canopy-app"
+    },
+    {
+      "label": "Contracts",
+      "href": "docs.html#contracts"
+    }
+  ],
+  "sections": [
+    {
+      "id": "problem",
+      "title": "The problem",
+      "body": "DeFi losses now arrive faster than people can react, and protocols increasingly freeze withdrawals once they are hit.\n\n- **Losses arrive in bursts.** More than $600M was lost in the first 18 days of April 2026. Drift lost about $280M on April 2 and Kelp about $293M on April 19 [1].\n- **Protocols freeze when they are hit.** After the Kelp incident Aave froze rsETH markets, and Flying Tulip added a breaker that queues withdrawals [1]. Once a freeze starts, the people who left first are the ones who got out.\n- **Vault failures spread.** Stream Finance lost $93M in November 2025. Its xUSD fell 77% and withdrawals were frozen [2], with about $285M of related debt across other lending curators [3].\n- **Attackers move in minutes.** Resupply was drained about 1.5 hours after a new market went live [4]. Sonne's attacker struck the moment a public timelock expired [5].\n- **Forgotten positions get hit years later.** A deprecated Aztec Connect contract was exploited for about $2.1M three years after it was retired [6].\n\nMost people can't watch every vault they hold around the clock. The ones who can, and who can act within seconds, are the ones who get out. At the same time, people are rightly unwilling to hand an app their keys: in an October 2026 survey, 79% of US adults said they would refuse to share credentials with an AI tool, and 76% wanted agents to prove their security protections [7].\n\nCanopy closes that gap with a narrow, on-chain permission: one that lets software exit a position quickly, but only back to the person who owns it."
+    },
+    {
+      "id": "goals",
+      "title": "Design goals",
+      "body": "Five rules shaped every part of the system. Each one is enforced by a contract, not by a server, a bot or a prompt.\n\n1. **The owner is the only destination.** An exit pays the position owner and nobody else. There is no recipient field to get wrong or to attack.\n2. **Evidence before execution.** Only a public alarm the owner chose can let someone else run an exit, and it must fire after the owner armed.\n3. **Exits are never gated.** No pause, fee, subscription check or oracle can block an exit.\n4. **Control stays with the owner.** Disarming is one transaction, the token approval can be revoked at any time, and the owner can always exit or withdraw directly.\n5. **No custody, no keys.** Canopy never holds user funds or keys. The browser builds every transaction, and the user's own wallet signs it.\n\nThe worst a rogue keeper or a false alarm can do is take an owner out early, back to their own wallet."
+    },
+    {
+      "id": "overview",
+      "title": "System overview",
+      "body": "Canopy has three on-chain parts and a set of off-chain services that anyone can run.\n\n| Part | Role |\n|---|---|\n| ExitRouter | Records which alarms each owner armed for each position, checks who may exit, and pays the owner |\n| AlarmBook | A public registry of alarms. Anyone can register one, and anyone can trigger the check that fires it |\n| Adapters | Turn a position into its underlying asset. The launch adapter redeems ERC-4626 vault shares |\n| Detectors and keepers | Services that watch alarms, fire them when their condition holds, and run exits |\n| Watchers | Services that read public security reports and co-sign exploit alarms |\n| Web app and bot | Show positions and risk, help the user arm, and send free alerts |\n\nA position moves through four states:\n\n1. **Check.** The browser reads the user's vault positions straight from the chain and shows a risk card for each.\n2. **Arm.** The user approves their vault shares to the router and arms the position with the alarms they chose.\n3. **Fire.** When an alarm's condition holds, anyone can call the alarm book to record it as fired. It stays live for 24 hours.\n4. **Exit.** While an alarm the owner armed is live, any keeper can call the router's exit. The router pulls the shares, redeems them through the adapter and pays the owner.\n\nBecause the contract treats every caller the same, the system doesn't depend on Canopy staying online. Canopy's keepers are one option. The owner, a friend or anyone running the open-source keeper is another."
+    },
+    {
+      "id": "router",
+      "title": "The exit contract",
+      "body": "ExitRouter is about 500 lines of Solidity with no proxy, no upgrade path and no fee logic.\n\n### Arming\n\nThe owner calls arm with an adapter, a target such as a vault, and up to 8 alarm keys. The position ID is a hash of the owner, adapter, target and token ID, so it can't be armed by anyone else. Arming again replaces the previous alarm list. disarm drops one position, and disarmAll drops every position the owner has by moving them to a new epoch, in one transaction.\n\n### Who may exit\n\nexit takes a position ID, an alarm key and an amount. The router lets it through in exactly two cases:\n\n- The caller is the owner. The alarm key is ignored, so Exit Now always works.\n- The position is armed, the key is one the owner armed for it, and that alarm is live in the alarm book. The alarm must also have fired after the position was armed, so an old alarm can't be used against a new position.\n\n### Paying out\n\nThe router pulls the owner's shares, has the adapter redeem them, measures what actually arrived and sends it to the owner. If the vault can only pay part of the amount, the router takes what is liquid, and the alarm stays live for further attempts. If a transfer to the owner fails, the amount is recorded as owed and the owner can claim it later. If an owner's wallet can't receive ETH, it gets WETH.\n\n### The optional swap\n\nThe router can swap the exit into the stablecoin, but only under strict limits: never below an oracle-bounded minimum, never when the stablecoin's price is under $0.985 or the oracle is stale, at most 1% slippage when a third party runs the exit, and at most 10% when the owner does. If any check fails, the swap is skipped and the owner gets the vault's own asset. The app doesn't offer the swap at launch."
+    },
+    {
+      "id": "alarms",
+      "title": "Alarms",
+      "body": "AlarmBook is a permissionless registry. An alarm is defined by its kind, a target, a threshold, a window and two parameters, and its key is the hash of those fields. Two people registering the same rule get the same key, so popular alarms are shared.\n\n| Kind | Fires when |\n|---|---|\n| SHARE_DROP | An ERC-4626 share price falls a set number of basis points below its high-water mark |\n| PAUSED | The target's paused flag reads true |\n| ADDRESS_CHANGE | A role on the target, such as a curator, differs from the registered value |\n| DRAIN | Total assets fall a set share below a recent snapshot |\n| QUORUM | A set number of approved watchers sign the same evidence |\n| BOTH | Two other alarms have both fired within a window |\n| PRICE_BELOW | A price feed falls below a floor while still fresh |\n\npoke checks the condition and records the alarm as fired. Anyone can call it, and Canopy's detectors call it within seconds of a block. checkpoint rolls baselines forward. A vault's high-water mark only ever rises, so a loss can't be hidden by resetting it.\n\n### Hard and soft signals\n\nSome signals are hard: a share-price loss or a pause can't happen in normal operation, so they fire on their own. Others are soft: a large withdrawal looks like a drain, and a curator change can be routine. The app pairs every soft signal with a watcher confirmation using BOTH, with a 24-hour window, so a soft signal on its own never exits anyone.\n\n### Launch presets\n\n| Preset | Built from |\n|---|---|\n| Vault loss | SHARE_DROP at 0.5% |\n| Pause | PAUSED, offered only where the vault has a pause switch |\n| Exploit confirmed | QUORUM with 2 of 3 watchers |\n| Vault drain + confirmation | BOTH of DRAIN (25% within an hour) and QUORUM |\n| Curator change + confirmation | BOTH of ADDRESS_CHANGE on curator() and QUORUM |\n\nThe app works these presets out in the browser rather than fetching them, so a compromised server can't swap in different alarm keys."
+    },
+    {
+      "id": "watchers",
+      "title": "Watchers and the AI labeller",
+      "body": "Some failures show up in public reports before they show up on-chain. Watchers turn those reports into a signal without giving any single party, or any model, the power to exit people.\n\n- **Sources are allowlisted.** Watchers read a fixed list of public feeds with editors, such as security news and stablecoin and network status pages. Redirects are refused, so a source can't lead off the list. Open forums are excluded.\n- **The AI only labels.** Each new post is sent to a language model as quoted data with the instruction to classify it, for example as a confirmed exploit, a rumour or irrelevant. It can't fire an alarm, choose an amount or pick a destination. A refusal, an outage or a malformed reply produces no signal.\n- **Signatures, not opinions.** A watcher that sees a confirmed exploit signs an EIP-712 attestation naming the alarm, the evidence hash and a deadline. Watchers share signatures with each other, and the alarm fires on-chain only when 2 of the 3 approved watchers have signed the same evidence.\n- **Watchers stay removable.** The approved list is held by the admin with no end date, so a watcher that misbehaves can be removed. At launch Canopy runs all three watchers. Adding outside watchers and on-chain challenges is on the roadmap."
+    },
+    {
+      "id": "keepers",
+      "title": "Keepers and speed",
+      "body": "Keepers watch for live alarms and run exits. Canopy's own keepers run positions whose owners are on the Armed plan, check every armed alarm in one batched call, and pay the gas. The contract doesn't know about plans: anyone can run the open-source keeper for every armed position.\n\n### Measured on mainnet\n\nOn November 4, 2026, a test position of 10 USDG in a launch vault was armed with a test alarm on Robinhood Chain. Canopy's keeper fired the alarm 2 seconds after arming and completed the exit 4 seconds after arming. All 10 USDG arrived in the owner's wallet.\n\n### Measured under load\n\nIn a rehearsal on a fork of Robinhood Chain, 300 positions armed on the same vault all exited after one alarm. The first exit landed 21 seconds after the alarm, the median at 59 seconds and the last at 93 seconds, in 14 transactions with no keeper errors. These times include the fork's own overhead, which hasn't been separated out."
+    },
+    {
+      "id": "limits",
+      "title": "Limits",
+      "body": "Canopy narrows the time between a failure and an exit. It can't remove the risk of the vault itself.\n\n- **Liquidity can run out.** A lending vault may have most of its money lent out. If nothing is idle, nobody can withdraw. In a simulation against a large live USDG vault on October 31, 2026, redemptions stopped after $37.8M. Moving idle funds from other markets first raised that to $53.1M.\n- **Crowded exits race each other.** If many people arm the same vault, they compete for the same liquidity.\n- **Share gates can block exits.** A curator who turns on share-transfer gates can stop the standard exit. The launch vaults have permanently given up that power. The app reads each vault's gates and won't arm one that would block the exit.\n- **False alarms cost something.** An unneeded exit gives up a position. Pairing soft signals with watcher confirmation reduces false fires but can't remove them.\n- **The exit pays the vault's own asset.** If a stablecoin is itself failing, an exit from a vault in that stablecoin doesn't help, so the app doesn't offer a price alarm on those vaults.\n- **The code is new.** See the next section."
+    },
+    {
+      "id": "security",
+      "title": "Security and governance",
+      "body": "The contracts can't be upgraded. The admin is a Timelock controlled by a 2-of-3 Safe, launched with no delay. Until November 4, 2027, it can allow or disallow adapters, set price feeds and swap routes, and change the guardian. It can't move funds, change who is paid, disarm a position or block an exit. Disallowing an adapter doesn't affect positions already armed with it. After November 4, 2027 the router has no admin.\n\nA separate 2-of-3 guardian Safe can pause new arming until the same date. Exits, disarming and claims keep working while arming is paused.\n\nThe alarm book's watcher list stays with the admin permanently, so a bad watcher can always be removed. Anyone can register an alarm, and no one can remove one.\n\nThe team launched with no admin delay. A delay gives users time to leave before an admin change, but here no admin change can reach funds or payouts, and every owner can disarm in one transaction.\n\nThe contracts have unit, fuzz and fork tests against live vaults, and their source is verified on Blockscout and Sourcify with an exact match. They haven't had an external audit yet. Users should treat them as new code."
+    },
+    {
+      "id": "privacy",
+      "title": "Privacy",
+      "body": "Canopy has no accounts, no logins and no analytics. Wallet checks run in the browser against a public Robinhood Chain node, so the address a user checks is never sent to Canopy. When the app needs risk cards, it fetches the card for every listed vault at once, so the server can't tell which vaults a wallet holds. The Telegram bot stores a chat and the vaults it follows, never a wallet."
+    },
+    {
+      "id": "economics",
+      "title": "Fees",
+      "body": "The wallet check, risk cards, alerts, Exit Now and Disarm All are free. The Armed plan, where Canopy's keepers run exits and pay the gas, costs $15 for 3 months or $60 a year per wallet, paid in USDG as one transfer. There is no per-exit fee.\n\nFees never touch an exit. The router has no fee logic, doesn't check whether anyone paid, and lets anyone run an armed exit. Paying only decides whether Canopy's own keepers act for a wallet.\n\nCanopy has no token."
+    },
+    {
+      "id": "updates",
+      "title": "How updates ship",
+      "body": "Because the contracts can't be upgraded, every update takes one of three forms:\n\n- **A new adapter.** Until November 4, 2027 the admin can allow new adapters, such as one for Uniswap LP positions. The router already supports NFT positions.\n- **New alarms.** Any alarm of a known kind can be registered by anyone, at any time.\n- **A new deployment.** A new chain, or a feature the router can't support, means new contracts that users choose to arm with. Existing positions keep working where they are.\n\nThe [roadmap](roadmap.html) lists what is planned."
+    },
+    {
+      "id": "disclaimer",
+      "title": "Disclaimer",
+      "body": "Canopy is software. It tries to exit a position when an alarm the owner chose fires. It promises no outcome, doesn't cover losses and isn't financial advice. Third-party names identify networks and protocols Canopy works with. They don't imply endorsement or partnership."
+    },
+    {
+      "id": "references",
+      "title": "References",
+      "body": "1. [Cointelegraph, April 23, 2026: April losses, the Aave freeze and the Flying Tulip breaker](https://cointelegraph.com/news/flying-tulip-withdrawal-circuit-breaker-defi-hacks)\n2. [Decrypt: Stream Finance loses $93M](https://decrypt.co/347285/stream-finance-stablecoin-plunges-77-protocol-fund-manager-loses-93-million)\n3. [Forklog: Stream Finance collateral damage of about $285M](https://forklog.com/en/collateral-damage-from-stream-finance-hack-estimated-at-285-million/)\n4. [QuillAudits: Resupply hack analysis](https://www.quillaudits.com/blog/hack-analysis/resupply-hack-analysis)\n5. [The Block, May 15, 2024: Sonne Finance exploit](https://www.theblock.co/post/294508/lending-protocol-sonne-finance-faces-20-million-exploit-pauses-markets-on-optimism)\n6. [The Defiant, June 15, 2026: Aztec Connect deprecated contract exploit](https://thedefiant.io/news/hacks/aztec-connect-deprecated-contract-exploit-2-1m-zk-proof)\n7. [ABA and Morning Consult, October 27, 2026: consumers and AI agents](https://www.aba.com/about-us/press-room/press-releases/oct-2026-morning-consult-survey-us-consumers-are-wary-of-ai-agents--handling-their-money)"
+    }
+  ]
+}

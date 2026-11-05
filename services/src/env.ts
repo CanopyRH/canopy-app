@@ -5,7 +5,8 @@ const addr = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 export const Env = z.object({
   ROLE: z.enum(["all", "api", "bot", "indexer", "detector", "watcher", "keeper"]).default("all"),
   PORT: z.coerce.number().default(8443), // Telegram webhooks: 443/80/88/8443 only, TLS 1.2+, IPv4
-  PUBLIC_URL: z.url(),
+  PUBLIC_URL: z.url(), // this service's own address, for the Telegram webhook
+  APP_URL: z.url().optional(), // the web app that bot buttons open; off means PUBLIC_URL
   DATABASE_URL: z.string(),
   CHAIN_ID: z.coerce.number(),
   RPC_URL: z.url(),

@@ -15,7 +15,8 @@
       { "label": "Capabilities", "href": "#capabilities" },
       { "label": "How it works", "href": "#process" },
       { "label": "Fees", "href": "#pricing" },
-      { "label": "Questions", "href": "#faq" }
+      { "label": "Questions", "href": "#faq" },
+      { "label": "Docs", "href": "docs.html" }
     ],
     "cta": { "label": "Open app", "href": "app.html" }
   },
@@ -134,7 +135,7 @@
           { "value": "Direct", "label": "No confirmation", "detail": "The contract checks the share price itself." },
           { "value": "24h", "label": "Alarm stays live", "detail": "Keepers keep trying while liquidity returns." }
         ],
-        "cta": { "label": "Read the mechanics", "href": "guide.html#how-it-works" },
+        "cta": { "label": "Read the mechanics", "href": "docs.html#how-it-works" },
         "landscapeImage": "assets/scenario-depeg-landscape.jpg",
         "landscapeAlt": "Fog rolls over a rocky coastline."
       },
@@ -148,7 +149,7 @@
           { "value": "1h", "label": "Drain window", "detail": "The preset measures over 3,600 seconds." },
           { "value": "24h", "label": "Confirmation window", "detail": "The drain and a watcher confirmation must both land within 24 hours." }
         ],
-        "cta": { "label": "Understand the limits", "href": "guide.html#exit-limits" },
+        "cta": { "label": "Understand the limits", "href": "docs.html#exit-limits" },
         "landscapeImage": "assets/scenario-vault-landscape.jpg",
         "landscapeAlt": "Snowy mountain valley and glacial stream."
       },
@@ -162,7 +163,7 @@
           { "value": "0", "label": "AI votes", "detail": "The AI labels reports. Your alarm rules and the contracts decide." },
           { "value": "Owner", "label": "Payout", "detail": "Exits pay only the position owner." }
         ],
-        "cta": { "label": "Review permissions", "href": "guide.html#how-it-works" },
+        "cta": { "label": "Review permissions", "href": "docs.html#how-it-works" },
         "landscapeImage": "assets/scenario-quorum-landscape.jpg",
         "landscapeAlt": "Misty forest under low cloud."
       }
@@ -183,7 +184,7 @@
       { "name": "Base", "status": "Planned update", "role": "Second auto-exit network", "image": "assets/integrations/base.svg", "imageAlt": "Base logo" },
       { "name": "Uniswap", "status": "Planned update", "role": "LP position exits", "image": "assets/integrations/uniswap.svg", "imageAlt": "Uniswap logo" }
     ],
-    "cta": { "label": "View launch scope", "href": "guide.html#how-it-works" },
+    "cta": { "label": "View launch scope", "href": "docs.html#how-it-works" },
     "note": "Names identify the networks and protocols Canopy works with. They do not imply endorsement or partnership."
   },
   "scenarios": {
@@ -239,7 +240,7 @@
     "callout": {
       "title": "Know what you would sign.",
       "description": "Read how the vault approval, the arming and the plan payment differ.",
-      "cta": { "label": "Read the fee guide", "href": "guide.html#fees" }
+      "cta": { "label": "Read the fee guide", "href": "docs.html#fees" }
     }
   },
   "controls": {
@@ -290,7 +291,7 @@
       }
     ],
     "helpLabel": "Want the full mechanics?",
-    "helpCta": { "label": "Read the guides", "href": "guide.html#how-it-works" }
+    "helpCta": { "label": "Read the docs", "href": "docs.html#how-it-works" }
   },
   "contact": {
     "id": "start",
@@ -306,12 +307,14 @@
     "brand": "Canopy",
     "descriptor": "DeFi auto-exit",
     "links": [
-      { "label": "Exit scenarios", "href": "#exit-stories" },
       { "label": "App", "href": "app.html" },
-      { "label": "How it works", "href": "guide.html#how-it-works" },
-      { "label": "Fees", "href": "guide.html#fees" },
-      { "label": "Exit limits", "href": "guide.html#exit-limits" },
-      { "label": "Privacy", "href": "guide.html#privacy" }
+      { "label": "Docs", "href": "docs.html" },
+      { "label": "Whitepaper", "href": "whitepaper.html" },
+      { "label": "Roadmap", "href": "roadmap.html" },
+      { "label": "Fees", "href": "docs.html#fees" },
+      { "label": "Exit limits", "href": "docs.html#exit-limits" },
+      { "label": "Privacy", "href": "docs.html#privacy" },
+      { "label": "Telegram alerts", "href": "https://t.me/CanopyAlerts_Bot" }
     ],
     "copyright": "© 2026 Canopy",
     "note": "Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not cover losses.",
