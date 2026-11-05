@@ -47,3 +47,16 @@ a.cd-brand{color:inherit;text-decoration:none}
   .cd-legend-item{align-items:start}
   .cd-legend-item>i{margin-top:6px}
 }
+
+/* The network switch in the header. It appears only once a second network has contracts. */
+.cd-chain-switch{display:inline-flex;gap:2px;padding:3px;border-radius:999px;border:1px solid rgba(105,105,109,.18);background:rgba(255,255,255,.35)}
+.cd-chain-switch button{border:0;background:none;font:inherit;font-size:12px;color:#62626b;padding:5px 11px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.cd-chain-switch button.is-active{background:#2f2f33;color:#fff}
+.cd-chain-switch button:disabled{cursor:default;opacity:.6}
+.cd-chain-switch button:focus-visible{outline:2px solid #2f2f33;outline-offset:1px}
+/* On a phone the switch takes its own row under the logo and the wallet button. */
+@media(max-width:680px){
+  .cd-app-header:has(.cd-chain-switch){flex-wrap:wrap;height:auto;padding-top:14px;padding-bottom:6px;row-gap:10px}
+  .cd-chain-switch{order:3;width:100%}
+  .cd-chain-switch button{flex:1}
+}

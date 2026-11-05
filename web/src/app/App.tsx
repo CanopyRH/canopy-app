@@ -3,10 +3,10 @@ import { createPortal } from "react-dom";
 import { ArrowUpRight, Bell, Check, CircleHelp, CreditCard, ExternalLink, Eye, LayoutGrid, Layers3, LockKeyhole, Search, ShieldCheck, Smartphone, TriangleAlert, Wallet, Waves, X } from "lucide-react";
 import { formatUnits, type Address, type Hex } from "viem";
 import { COPY, SIGNALS, TERMS } from "../copy/text";
-import { CONFIG } from "../config";
-import { arm, armState, disarmAll, exitNow, gatesBlock, live, payPlan, presetViews, riskCard, scanWallet, type Position, type PresetView, type Signer } from "../chain";
-import { friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
-import { loadWalletConnect } from "../walletconnect/load";
+import { CHAINS, offered, pick, planScope, saveChain, savedChain, type Chain } from "../config";
+import { network, type Net, type Position, type PresetView, type Signer } from "../chain";
+import { ensureChain, friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
+import { loadWalletConnect, phoneOptions } from "../walletconnect/load";
 import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
 import WalletsPanel from "./wallets/WalletsPanel";
 
@@ -15,6 +15,9 @@ declare global { interface Window { ethereum?: Eip1193 } }
 type Row = Position & { state: { posId: Hex; armed: boolean } | null };
 type Screen = "overview" | "positions" | "plan";
 type Note = { text: string; error?: boolean; link?: string };
+
+/** Networks with no contracts are left out. With only one left, the header shows its name and no switch, as before Base. */
+const OFFERED = offered(CHAINS);
 
 const usd = (v: bigint) => Number(formatUnits(v, 6)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const same = (a: Address | null, b: Address | null) => Boolean(a && b && a.toLowerCase() === b.toLowerCase());
@@ -84,39 +87,39 @@ function Allocation({ rows }: { rows: Row[] }) {
 }
 
 /** Alarms and the risk card for one position. Arming and Exit Now appear only for the connected owner on a live deployment. */
-function PositionDialog({ row, owner, signer, busy, note, onClose, act }: { row: Row; owner: Address; signer: Signer | null; busy: boolean; note: Note | null; onClose: () => void; act: (fn: () => Promise<Note>) => void }) {
+function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: { net: Net; row: Row; owner: Address; signer: Signer | null; busy: boolean; note: Note | null; onClose: () => void; act: (fn: () => Promise<Note>) => void }) {
   const [tab, setTab] = useState<"alarms" | "risk">("alarms");
   const [risk, setRisk] = useState<string | null | undefined>(undefined);
   const [views, setViews] = useState<PresetView[] | null>(null);
   const [picked, setPicked] = useState<Hex[]>([]);
   const [accepted, setAccepted] = useState(false);
   const [gated, setGated] = useState(false);
-  const mine = live() && signer !== null && same(signer.account, owner);
-  useEffect(() => void riskCard(row.vault.address).then(setRisk), [row.vault.address]);
+  const mine = net.live && signer !== null && same(signer.account, owner);
+  useEffect(() => void net.riskCard(row.vault.address).then(setRisk), [net, row.vault.address]);
   useEffect(() => {
     if (!mine) return;
-    void presetViews(row.vault.address).then(setViews);
-    void gatesBlock(row.vault.address, owner).then(setGated);
-  }, [mine, row.vault.address, owner]);
+    void net.presetViews(row.vault.address).then(setViews);
+    void net.gatesBlock(row.vault.address, owner).then(setGated);
+  }, [net, mine, row.vault.address, owner]);
   const toggle = (key: Hex, on: boolean) => setPicked((p) => (on ? [...p, key] : p.filter((k) => k !== key)));
   const armIt = () => act(async () => {
-    await arm(signer!, row.vault.address, picked);
+    await net.arm(signer!, row.vault.address, picked);
     onClose();
     return { text: COPY.armedDone };
   });
   const exitIt = () => act(async () => {
-    const { hash, complete } = await exitNow(signer!, row.vault.address, row.state!.posId);
+    const { hash, complete } = await net.exitNow(signer!, row.vault.address, row.state!.posId);
     onClose();
-    return { text: complete ? COPY.exitDone : COPY.exitPartial, link: `${CONFIG.explorer}/tx/${hash}` };
+    return { text: complete ? COPY.exitDone : COPY.exitPartial, link: `${net.chain.explorer}/tx/${hash}` };
   });
 
-  return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${CONFIG.chainName}`} onClose={onClose} wide>
+  return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${net.chain.chainName}`} onClose={onClose} wide>
     <div className="cd-position-dialog-summary"><div><span className="cd-asset-icon cd-asset-vault" aria-hidden="true"><Layers3 size={21} strokeWidth={1.5} /></span><div><strong>{usd(row.assets)} {row.vault.asset}</strong><span>Read from the chain just now</span></div></div><Status row={row} /></div>
     <div className="cd-dialog-tabs" role="tablist" aria-label="Position details">{([["alarms", COPY.alarmsTab], ["risk", COPY.riskTab]] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={tab === id ? "is-active" : ""}>{label}</button>)}</div>
     {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3></div><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre></div>}
     {tab === "alarms" && <div className="cd-dialog-content">
-      {!live() && <p className="cd-inline-note"><CircleHelp size={15} />{COPY.notDeployed}</p>}
-      {live() && !mine && <p className="cd-inline-note"><Wallet size={15} />{COPY.connectToAct}</p>}
+      {!net.live && <p className="cd-inline-note"><CircleHelp size={15} />{COPY.notDeployed}</p>}
+      {net.live && !mine && <p className="cd-inline-note"><Wallet size={15} />{COPY.connectToAct}</p>}
       {mine && gated && <p className="cd-inline-note"><TriangleAlert size={15} />{COPY.gateBlocked}</p>}
       {mine && !gated && <>
         <div className="cd-section-heading"><h3>{COPY.armTitle}</h3><span>{picked.length} selected</span></div>
@@ -156,6 +159,11 @@ function Dock({ active, onNavigate }: { active: Screen; onNavigate: (s: Screen) 
   return <nav className="cd-dock-wrap" aria-label="App"><div className="cd-dock" ref={ref} onPointerMove={magnify} onPointerLeave={reset}>{NAV.map(({ id, label, icon: Icon, ...n }) => <button key={id} className={`cd-dock-item ${active === id ? "is-active" : ""}`} onClick={() => (reset(), onNavigate(id))} aria-current={active === id ? "page" : undefined} aria-label={label}><span className="cd-dock-tooltip">{label}</span><span className="cd-dock-icon"><Icon size={24} strokeWidth={1.5} /></span><span className="cd-dock-mobile-label">{"short" in n ? n.short : label}</span><i /></button>)}</div><span className="cd-dock-caption">YOUR EXIT. YOUR RULES.</span></nav>;
 }
 
+/** Robinhood Chain / Base. Shown only when more than one network is offered. */
+function ChainSwitch({ chains, active, disabled, onPick }: { chains: Chain[]; active: Chain; disabled: boolean; onPick: (c: Chain) => void }) {
+  return <div className="cd-chain-switch" role="group" aria-label={COPY.network}>{chains.map((c) => <button key={c.key} type="button" aria-pressed={c.key === active.key} className={c.key === active.key ? "is-active" : ""} disabled={disabled} onClick={() => onPick(c)}>{c.chainName}</button>)}</div>;
+}
+
 export default function App() {
   const [input, setInput] = useState(() => decodeURIComponent(location.hash.slice(1)));
   const [owner, setOwner] = useState<Address | null>(null);
@@ -169,20 +177,26 @@ export default function App() {
   const [confirmDisarm, setConfirmDisarm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
+  const [chain, setChain] = useState(() => pick(OFFERED, savedChain()));
   const busyRef = useRef(false);
+  const scans = useRef(0);
+  const net = network(chain);
 
   useEffect(() => watchWallets(window, setInstalled), []);
   useEffect(() => void (input && scan(input)), []); // A wallet handed over from the landing page in the URL fragment.
 
-  async function scan(value: string) {
+  /** Reads a wallet on one network. A newer scan, or a switch to another network, makes this one's results stale. */
+  async function scan(value: string, n: Net = net) {
+    const id = ++scans.current;
     const who = parseWallet(value);
     setNote(null);
     if (!who) return setNote({ text: COPY.badAddress, error: true });
     if (isBlocked(who)) return setNote({ text: COPY.blocked, error: true });
     setNote({ text: COPY.reading });
     setOwner(who);
-    const { found, failed } = await scanWallet(who);
-    const withState = await Promise.all(found.map(async (p) => ({ ...p, state: await armState(who, p.vault.address).catch(() => null) })));
+    const { found, failed } = await n.scanWallet(who);
+    const withState = await Promise.all(found.map(async (p) => ({ ...p, state: await n.armState(who, p.vault.address).catch(() => null) })));
+    if (id !== scans.current) return;
     setRows(withState);
     setFailed(failed);
     setNote(failed ? { text: COPY.readFailed, error: true } : null);
@@ -222,7 +236,7 @@ export default function App() {
     try {
       setNote({ text: COPY.phoneWalletOpening });
       const open = await loadWalletConnect();
-      const w = await open({ projectId: CONFIG.walletConnectProjectId!, chainId: CONFIG.chainId, rpcUrl: CONFIG.rpcUrl, description: COPY.tagline });
+      const w = await open(phoneOptions(chain, OFFERED, COPY.tagline));
       w.on?.("disconnect", () => (setSigner(null), setNote({ text: COPY.phoneWalletEnded })));
       setNote(null);
       await chooseWallet(w);
@@ -232,34 +246,53 @@ export default function App() {
   }
 
   function connect() {
-    const choice = walletChoice(installed, window.ethereum, Boolean(CONFIG.walletConnectProjectId));
+    const choice = walletChoice(installed, window.ethereum, Boolean(chain.walletConnectProjectId));
     if (!choice) return setNote({ text: COPY.noWallet, error: true });
     if ("use" in choice) return void chooseWallet(choice.use);
     if ("phoneOnly" in choice) return void connectPhone();
     setPicking(choice);
   }
 
+  /** Remembers the choice, reads the wallet again on the new network, and asks a connected wallet to follow. */
+  function switchChain(next: Chain) {
+    if (next.key === chain.key || busyRef.current) return;
+    saveChain(next.key);
+    setChain(next);
+    setRows(null);
+    setFailed(false);
+    setReview(null);
+    setPicking(null);
+    if (owner) void scan(owner, network(next));
+    else {
+      scans.current++;
+      setNote(null);
+    }
+    // Declining is fine: every transaction checks the network again first.
+    if (signer) void ensureChain(signer.provider, next).catch(() => {});
+  }
+
   const submit = (e: FormEvent) => (e.preventDefault(), void scan(input));
   const list = rows ?? [];
   const total = list.reduce((s, r) => s + r.assets, 0n);
   const armedTotal = list.filter((r) => r.state?.armed).reduce((s, r) => s + r.assets, 0n);
-  const mine = live() && signer !== null && same(signer.account, owner);
+  const mine = net.live && signer !== null && same(signer.account, owner);
+  const scope = planScope(chain, OFFERED);
   const current = list.find((r) => same(r.vault.address, review)) ?? null;
-  const pay = (amount: bigint) => act(async () => ((await payPlan(signer!, amount)), { text: COPY.paidDone }));
+  const pay = (amount: bigint) => act(async () => ((await net.payPlan(signer!, amount)), { text: COPY.paidDone }));
   const empty = <div className="cd-empty"><span className="cd-empty-icon"><Search size={25} strokeWidth={1.4} /></span><h3>{rows ? COPY.noPositions : COPY.noScan}</h3></div>;
   const positionsCard = (compact: boolean) => <GlassCard className={compact ? "cd-overview-positions" : "cd-positions-table"}><div className="cd-card-top"><div><h2>{COPY.positionsTitle}</h2><p className="cd-caption">{list.filter((r) => r.state?.armed).length} armed · {list.length} found</p></div>{compact && <button className="cd-icon-button" onClick={() => setScreen("positions")} aria-label="View all positions"><ArrowUpRight size={19} /></button>}</div>{list.length ? <PositionRows rows={list} compact={compact} onReview={(r) => setReview(r.vault.address)} /> : empty}</GlassCard>;
 
   return <div className="canopy-dashboard">
     <div className="cd-studio-light cd-studio-light-one" aria-hidden="true" /><div className="cd-studio-light cd-studio-light-two" aria-hidden="true" />
-    <header className="cd-app-header"><a className="cd-brand" href="./" aria-label="Canopy website"><Brand /><span>Canopy<span className="cd-brand-dot">.</span></span></a><span className="cd-header-divider" /><span className="cd-workspace-name">{CONFIG.chainName}</span>
-      <div className="cd-header-actions"><span className="cd-demo-badge"><Eye size={13} /><span>{live() ? COPY.autoExit : COPY.scanOnly}</span></span><a className="cd-back-link" href="./"><ArrowUpRight size={16} /><span>{COPY.website}</span></a><button className="cd-button cd-button-dark cd-connect" onClick={connect} disabled={busy}><Wallet size={15} />{signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.connectButton}</button>
+    <header className="cd-app-header"><a className="cd-brand" href="./" aria-label="Canopy website"><Brand /><span>Canopy<span className="cd-brand-dot">.</span></span></a><span className="cd-header-divider" />{OFFERED.length > 1 ? <ChainSwitch chains={OFFERED} active={chain} disabled={busy} onPick={switchChain} /> : <span className="cd-workspace-name">{chain.chainName}</span>}
+      <div className="cd-header-actions"><span className="cd-demo-badge"><Eye size={13} /><span>{net.live ? COPY.autoExit : COPY.scanOnly}</span></span><a className="cd-back-link" href="./"><ArrowUpRight size={16} /><span>{COPY.website}</span></a><button className="cd-button cd-button-dark cd-connect" onClick={connect} disabled={busy}><Wallet size={15} />{signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.connectButton}</button>
         {picking && <div className="cd-wallet-picker" role="dialog" aria-label={COPY.pickWallet}><p>{COPY.pickWallet}</p>{picking.pick.map((w) => { const icon = safeIcon(w.info.icon); return <button key={w.info.uuid} onClick={() => void chooseWallet(w.provider)}>{icon && <img src={icon} alt="" />}{w.info.name}</button>; })}{picking.phone && <button onClick={() => void connectPhone()}><Smartphone size={18} />{COPY.phoneWallet}</button>}</div>}
       </div></header>
     <main className="cd-main"><div className="cd-workspace" key={screen}>
       {screen === "overview" && <>
-        <div className="cd-page-heading"><div><span className="cd-eyebrow">YOUR WALLET</span><h1>{COPY.heading}</h1><p>{COPY.subheading}</p></div><div className="cd-network-label"><span />{CONFIG.chainName}<small>{live() ? COPY.autoExit : COPY.scanOnly}</small></div></div>
+        <div className="cd-page-heading"><div><span className="cd-eyebrow">YOUR WALLET</span><h1>{COPY.heading}</h1><p>{COPY.subheading}</p></div><div className="cd-network-label"><span />{chain.chainName}<small>{net.live ? COPY.autoExit : COPY.scanOnly}</small></div></div>
         <form className="cd-scan" onSubmit={submit}><label className="cd-search"><Search size={17} /><input value={input} onChange={(e) => setInput(e.target.value)} placeholder={COPY.scanPlaceholder} aria-label="Wallet address" autoComplete="off" spellCheck={false} /></label><button className="cd-button cd-button-dark" type="submit">{COPY.scanButton}<ArrowUpRight size={15} /></button></form>
-        {!live() && <div className="cd-context-note"><CircleHelp size={15} /><p>{COPY.notDeployed}</p></div>}
+        {!net.live && <div className="cd-context-note"><CircleHelp size={15} /><p>{COPY.notDeployed}</p></div>}
         <div className="cd-overview-grid">
           <GlassCard className="cd-portfolio-card"><div className="cd-card-top"><span className="cd-card-label">{COPY.positionsLabel}</span><span className="cd-tiny-pill"><Eye size={12} /> Read-only values</span></div><div className="cd-portfolio-amount">{usd(total).split(".")[0]}<span>.{usd(total).split(".")[1]}</span></div><p className="cd-caption">{rows ? COPY.positionsHelp : COPY.noScan}</p>
             <div className="cd-portfolio-body"><div className="cd-portfolio-stats"><div><span><i className="cd-swatch cd-swatch-armed" />{COPY.armedValue}</span><strong>{usd(armedTotal)}</strong></div><div><span><i className="cd-swatch cd-swatch-idle" />{COPY.idleValue}</span><strong>{usd(total - armedTotal)}</strong></div><button className="cd-text-button" onClick={() => setScreen("positions")}>Manage positions<ArrowUpRight size={14} /></button></div><div className="cd-chart-area">{list.length > 0 && <Allocation rows={list} />}</div></div>
@@ -279,15 +312,15 @@ export default function App() {
       {screen === "plan" && <>
         <div className="cd-page-heading"><div><span className="cd-eyebrow">PLAN AND CONTROLS</span><h1>{COPY.planScreen}</h1><p>{COPY.planScreenHelp}</p></div></div>
         <div className="cd-settings-grid">
-          <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.planTitle}</h2><p className="cd-caption">{COPY.planHelp}</p></div><CreditCard size={19} /></div><div className="cd-dialog-actions"><button className="cd-button cd-button-light" disabled={busy || !mine || !CONFIG.planPayTo} onClick={() => pay(PLAN_AMOUNTS.months3)}>{COPY.plan3}</button><button className="cd-button cd-button-dark" disabled={busy || !mine || !CONFIG.planPayTo} onClick={() => pay(PLAN_AMOUNTS.year)}>{COPY.plan12}</button></div>{!mine && <p className="cd-inline-note"><Wallet size={15} />{live() ? COPY.connectToAct : COPY.notDeployed}</p>}</GlassCard>
+          <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.planTitle}</h2><p className="cd-caption">{COPY.planHelp}</p></div><CreditCard size={19} /></div>{scope && <p className="cd-inline-note"><CircleHelp size={15} />{scope}</p>}<div className="cd-dialog-actions"><button className="cd-button cd-button-light" disabled={busy || !mine || !chain.planPayTo} onClick={() => pay(PLAN_AMOUNTS.months3)}>{COPY.plan3}</button><button className="cd-button cd-button-dark" disabled={busy || !mine || !chain.planPayTo} onClick={() => pay(PLAN_AMOUNTS.year)}>{COPY.plan12}</button></div>{!mine && <p className="cd-inline-note"><Wallet size={15} />{net.live ? COPY.connectToAct : COPY.notDeployed}</p>}</GlassCard>
           <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.disarmButton}</h2><p className="cd-caption">{COPY.disarmHelp}</p></div><ShieldCheck size={19} /></div><div className="cd-dialog-actions"><button className="cd-button cd-button-dark" disabled={busy || !mine} onClick={() => setConfirmDisarm(true)}>{COPY.disarmButton}</button></div></GlassCard>
         </div>
       </>}
-      <footer className="cd-workspace-footer"><span><span className="cd-footer-dot" /> {signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.disconnected}</span><span>{COPY.footer}</span>{CONFIG.walletConnectProjectId && <a className="cd-footer-notice" href="licenses/walletconnect.md">{COPY.reownNotice}</a>}</footer>
+      <footer className="cd-workspace-footer"><span><span className="cd-footer-dot" /> {signer ? `${signer.account.slice(0, 6)}…${signer.account.slice(-4)}` : COPY.disconnected}</span><span>{COPY.footer}</span>{chain.walletConnectProjectId && <a className="cd-footer-notice" href="licenses/walletconnect.md">{COPY.reownNotice}</a>}</footer>
     </div></main>
     <Dock active={screen} onNavigate={(s) => (setScreen(s), scrollTo({ top: 0 }))} />
     <div className="cd-toast-region" aria-live="polite" aria-atomic="true">{note && <div className={`cd-toast ${note.error ? "cd-toast-error" : ""}`}>{note.error ? <TriangleAlert size={15} /> : <Check size={15} />}<span>{note.text}{note.link && <> <a href={note.link} target="_blank" rel="noreferrer">{COPY.viewTx}<ExternalLink size={12} /></a></>}</span><button aria-label="Dismiss" onClick={() => setNote(null)}><X size={14} /></button></div>}</div>
-    {current && owner && <PositionDialog key={current.vault.address} row={current} owner={owner} signer={signer} busy={busy} note={note} act={act} onClose={() => setReview(null)} />}
-    {confirmDisarm && <Modal title={COPY.disarmTitle} eyebrow="YOUR CONTROLS" onClose={() => setConfirmDisarm(false)}><div className="cd-dialog-content"><p className="cd-confirm-copy">{COPY.disarmHelp}</p><div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={() => setConfirmDisarm(false)}>{COPY.keep}</button><button className="cd-button cd-button-dark" disabled={busy} onClick={() => { setConfirmDisarm(false); act(async () => ((await disarmAll(signer!)), { text: COPY.disarmDone })); }}>{COPY.disarmButton}</button></div></div></Modal>}
+    {current && owner && <PositionDialog key={`${chain.key}:${current.vault.address}`} net={net} row={current} owner={owner} signer={signer} busy={busy} note={note} act={act} onClose={() => setReview(null)} />}
+    {confirmDisarm && <Modal title={COPY.disarmTitle} eyebrow="YOUR CONTROLS" onClose={() => setConfirmDisarm(false)}><div className="cd-dialog-content"><p className="cd-confirm-copy">{COPY.disarmHelp}</p><div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={() => setConfirmDisarm(false)}>{COPY.keep}</button><button className="cd-button cd-button-dark" disabled={busy} onClick={() => { setConfirmDisarm(false); act(async () => ((await net.disarmAll(signer!)), { text: COPY.disarmDone })); }}>{COPY.disarmButton}</button></div></div></Modal>}
   </div>;
 }

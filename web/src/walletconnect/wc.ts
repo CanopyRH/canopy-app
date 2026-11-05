@@ -12,11 +12,13 @@ import type { OpenWalletConnect } from "./load";
 const ROBINHOOD_WALLET = "8837dd9413b1d9b585ee937d27a816590248386d9dbf59f5cd3422dbbb65683e";
 
 const open: OpenWalletConnect = async (o) => {
+  const chains = [{ chainId: o.chainId, rpcUrl: o.rpcUrl }, ...(o.more ?? [])];
   const provider = await EthereumProvider.init({
     projectId: o.projectId,
     // optionalChains, not chains: smart-contract wallets refuse a session that demands a chain up front.
-    optionalChains: [o.chainId],
-    rpcMap: { [o.chainId]: o.rpcUrl },
+    // The selected network comes first, so the session starts there. The others let the wallet switch later.
+    optionalChains: chains.map((c) => c.chainId) as [number, ...number[]],
+    rpcMap: Object.fromEntries(chains.map((c) => [c.chainId, c.rpcUrl])),
     showQrModal: true,
     qrModalOptions: { explorerRecommendedWalletIds: [ROBINHOOD_WALLET] },
     metadata: { name: "Canopy", description: o.description, url: location.origin, icons: [new URL("icon-192.png", location.href).href] },

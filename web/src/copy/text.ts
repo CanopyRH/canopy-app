@@ -62,6 +62,8 @@ export const COPY = {
   planHelp: "Canopy's keepers run automatic exits for paid wallets. Exit now and Disarm are always free.",
   plan3: "$15 for 3 months",
   plan12: "$60 a year",
+  planPerChain: "Plans are per network. This plan is paid in {token} on {chain} and covers {chain} only. A plan on {other} is paid for separately.",
+  network: "Network",
   footer: "Canopy is software. It does not promise any outcome and does not cover losses.",
   heading: "A clear view. An exit plan.",
   subheading: "Every position, every alarm, and one destination: your wallet.",
