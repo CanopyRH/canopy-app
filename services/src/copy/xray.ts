@@ -51,11 +51,11 @@ export function changeLines(f: XrayFacts): string[] {
   const lines = [f.curatorSet ? "Curator can change settings." : "No curator set."];
   if (f.version !== "v2") return [...lines, "Share gates are checked on v2 vaults only."];
   const n = (s: GateState) => f.gates.filter((g) => g.state === s).length;
-  const total = f.gates.length;
-  if (n("on") > 0) lines.push(`Gates on now: ${n("on")} of ${total}.`, "An exit may be blocked.");
-  if (n("open") > 0) lines.push(`Gates curator can still set: ${n("open")}.`);
-  if (n("given up") > 0) lines.push(`Gates given up for good: ${n("given up")}.`);
-  if (n("unknown") > 0) lines.push(`Gates that could not be read: ${n("unknown")}.`);
+  // A gate that is set can block an exit. Unset gates are off; once the curator gives up setting them they stay off.
+  if (n("on") > 0) lines.push("Withdrawal gates: ON. Exits can be blocked.");
+  else if (n("open") > 0) lines.push("Withdrawal gates: off, but the curator can turn them on.");
+  else if (n("unknown") > 0) lines.push("Withdrawal gates: could not be read.");
+  else lines.push("Withdrawal gates: off, and locked off for good.");
   if (f.penaltyZero === true) lines.push("Forced exit penalty: zero.");
   if (f.penaltyZero === false) lines.push("Forced exit penalty: above zero.");
   return lines;

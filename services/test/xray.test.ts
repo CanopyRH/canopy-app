@@ -46,15 +46,16 @@ describe("card numbers", () => {
     const f = factsFrom(LAUNCH_CARD, { positions: 3, presets: ["Vault loss"] });
     expect(f).toMatchObject({ vault: V, name: "Steakhouse USDG", asset: "USDG", version: "v2", held: "4,210,377", idle: "1,052,594", liquidTenths: 249, curatorSet: true, penaltyZero: true, armed: 3 });
     expect(f.gates.map((g) => g.state)).toEqual(["given up", "given up", "given up"]);
-    expect(changeLines(f)).toEqual(["Curator can change settings.", "Gates given up for good: 3.", "Forced exit penalty: zero."]);
+    expect(changeLines(f)).toEqual(["Curator can change settings.", "Withdrawal gates: off, and locked off for good.", "Forced exit penalty: zero."]);
     expect(armedLines(f)).toEqual(["3 positions armed", "Alarms in use: Vault loss."]);
   });
 
   test("a gate that is on, one still open and one given up are told apart", () => {
     const f = factsFrom(GATED_CARD, NONE);
     expect(f.gates.map((g) => g.state)).toEqual(["on", "open", "given up"]);
-    expect(changeLines(f)).toContain("Gates on now: 1 of 3.");
-    expect(changeLines(f)).toContain("An exit may be blocked.");
+    expect(changeLines(f)).toContain("Withdrawal gates: ON. Exits can be blocked.");
+    const open = factsFrom({ ...GATED_CARD, gates: GATED_CARD.gates.slice(1) as never }, NONE);
+    expect(changeLines(open)).toContain("Withdrawal gates: off, but the curator can turn them on.");
     expect(f.liquidTenths).toBe(0);
     expect(armedLines(f)).toEqual(["No positions armed on this vault yet."]);
   });
@@ -64,7 +65,7 @@ describe("card numbers", () => {
     expect(f.held).toBeNull();
     expect(f.liquidTenths).toBeNull();
     expect(summary(f)).toContain("Liquid now: unknown");
-    expect(changeLines(f)).toContain("Gates that could not be read: 3.");
+    expect(changeLines(f)).toContain("Withdrawal gates: could not be read.");
   });
 
   test("a v1 vault has no gate lines", () => {
