@@ -54,6 +54,8 @@ const LOGS: RpcLog[] = [
   logOf(BOOK, alarmBookAbi as Abi, "WatcherSet", { watcher: PAYER, since: 1_000n, until: 2_000n }, 994n, TX(3)),
   logOf(BOOK, alarmBookAbi as Abi, "Registered", { key: KEY, kind: PRESET.detector.kind, target: VAULT, threshold: PRESET.detector.threshold, window: PRESET.detector.window, a: PRESET.detector.a, b: PRESET.detector.b }, 995n, TX(4)),
   logOf(BOOK, alarmBookAbi as Abi, "Fired", { key: KEY, kind: PRESET.detector.kind, target: VAULT, by: OWNER, evidence: TX(8) }, 997n, TX(5)),
+  // A payout over the 50,000 limit, in the stablecoin (the stand-in router does not answer STABLE(), so PLAN_TOKEN stands in).
+  logOf(ROUTER, routerAbi as Abi, "Paid", { exitId: 77n, owner: OWNER, token: TOKEN, amount: 60_000_000_000n, swapped: false }, 996n, TX(10)),
   // While v1 is live: an admin event, a new arm and a watcher change on the old contracts.
   logOf(V1_ROUTER, v1RouterAbi as unknown as Abi, "FeedSet", { token: TOKEN, feed: PAY, heartbeat: 3600, tokenDecimals: 18 }, 993n, TX(11)),
   logOf(V1_ROUTER, v1RouterAbi as unknown as Abi, "Armed", { posId: V1_POS, owner: OWNER, adapter: ADAPTER, target: VAULT, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: TX(9), keys: [KEY] }, 994n, TX(12)),
@@ -233,6 +235,14 @@ describe("src/index.ts, every role on", () => {
     await until(() => sent.some((m) => String(m.body.text).includes("WatcherSet on AlarmBook in")), "the watcher message");
     const texts = sent.filter((m) => m.method === "sendMessage" && String(m.body.text).includes("WatcherSet on AlarmBook in"));
     expect(texts).toHaveLength(1); // read again on every pass, told once
+  });
+
+  test("a payout over the outflow limit reaches the operator chat once", async () => {
+    await until(() => sent.some((m) => String(m.body.text).includes("one exit paid out")), "the outflow message");
+    const texts = sent.filter((m) => m.method === "sendMessage" && String(m.body.text).includes("one exit paid out"));
+    expect(texts).toHaveLength(1);
+    expect(String(texts[0]!.body.text)).toContain("60,000.00");
+    expect(String(texts[0]!.body.text)).toContain(`https://robinhoodchain.blockscout.com/tx/${TX(10)}`);
   });
 
   test("v1 admin events and arms are reported, on cursors of their own, and write no positions", async () => {

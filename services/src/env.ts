@@ -25,6 +25,9 @@ export const Env = z.object({
   V1_ROUTER: addr.optional(),
   V1_ALARM_BOOK: addr.optional(),
   V1_START_BLOCK: z.coerce.bigint().min(0n).optional(), // where to start reading the v1 contracts; off means START_BLOCK
+  // One exit paying out more than this much of the stablecoin, or one vault's exits adding up to more within an hour, tells
+  // the ops chat. Whole stablecoin units (6 decimals on the router), so 50000 is 50,000 USDG. 0 turns it off.
+  OUTFLOW_ALERT: z.coerce.number().min(0).default(50_000),
   PLAN_PAY_ADDRESS: addr.optional(), // receives prepaid plan payments; a multisig
   PLAN_TOKEN: addr.optional(),
   KEEPER_PRIVATE_KEY: z.string().optional(), // pays gas only; holds no user funds

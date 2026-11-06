@@ -458,12 +458,30 @@ export const repo = (db: Db) => ({
     const r = await db.query<{ kind: number }>(`SELECT kind FROM detectors WHERE key=$1`, [key]);
     return r[0] ? Number(r[0].kind) : null;
   },
-  async recordExit(e: { exitId: bigint; posId: string; owner: string; caller: string; alarmKey: string; viaAlarm: boolean; tx: string; block: bigint }) {
+  async recordExit(e: { exitId: bigint; posId: string; owner: string; caller: string; alarmKey: string; viaAlarm: boolean; tx: string; block: bigint; at?: number }) {
     await db.query(
-      `INSERT INTO exits (exit_id, pos_id, owner, caller, alarm_key, via_alarm, tx, block) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (exit_id) DO UPDATE SET pos_id=$2, owner=$3, caller=$4, alarm_key=$5, via_alarm=$6, tx=$7, block=$8`,
-      [e.exitId.toString(), e.posId, e.owner, e.caller, e.alarmKey, e.viaAlarm, e.tx, e.block.toString()],
+      `INSERT INTO exits (exit_id, pos_id, owner, caller, alarm_key, via_alarm, tx, block, at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (exit_id) DO UPDATE SET pos_id=$2, owner=$3, caller=$4, alarm_key=$5, via_alarm=$6, tx=$7, block=$8, at=COALESCE($9, exits.at)`,
+      [e.exitId.toString(), e.posId, e.owner, e.caller, e.alarmKey, e.viaAlarm, e.tx, e.block.toString(), e.at ?? null],
     );
+  },
+  /** The vault (or pool) a position was armed on. */
+  async targetOf(posId: string): Promise<string | null> {
+    return (await db.query<{ target: string }>(`SELECT target FROM positions WHERE pos_id=$1`, [posId]))[0]?.target ?? null;
+  },
+  /** What one exit has paid out so far in one token, in the token's smallest units. */
+  async stablePaidForExit(exitId: bigint, token: string): Promise<bigint> {
+    const rows = await db.query<{ n: string }>(`SELECT COALESCE(SUM(amount),0)::text AS n FROM exit_payouts WHERE exit_id=$1 AND token=$2`, [exitId.toString(), token.toLowerCase()]);
+    return BigInt(rows[0]?.n ?? "0");
+  },
+  /** What the exits of positions on one vault paid out in one token since a time (seconds), in the token's smallest units. */
+  async stablePaidByVaultSince(vault: string, token: string, since: number): Promise<bigint> {
+    const rows = await db.query<{ n: string }>(
+      `SELECT COALESCE(SUM(p.amount),0)::text AS n FROM exits e JOIN positions pos ON pos.pos_id=e.pos_id JOIN exit_payouts p ON p.exit_id=e.exit_id
+       WHERE pos.target=$1 AND p.token=$2 AND e.at>=$3`,
+      [vault.toLowerCase(), token.toLowerCase(), since],
+    );
+    return BigInt(rows[0]?.n ?? "0");
   },
   async recordPayout(p: { exitId: bigint; tx: string; logIndex: number; token: string; amount: bigint; swapped: boolean; block?: bigint | null }) {
     await db.query(

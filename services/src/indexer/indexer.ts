@@ -4,6 +4,7 @@ import { daysFor, extendPlan } from "../billing/prepaid";
 import type { Db } from "../store/db";
 import type { Repo } from "../store/repo";
 import { adminEventOf, type AdminEvent } from "./admin";
+import { checkExitOutflow, checkVaultOutflow, type OutflowWatch } from "./outflow";
 import { backoffSec, cleanError, fromStored, RETRY_BASE_SEC, RETRY_MAX_SEC, STUCK_AFTER_SEC, subjectOf, toStored, type RetryTuning, type StuckLog } from "./retry";
 
 const lc = (a: string) => a.toLowerCase();
@@ -22,8 +23,9 @@ export interface Log {
 /**
  * Applies one router log. Safe to replay: every write is an upsert.
  * `onAdmin` hears about admin and guardian changes. It should only queue work, so reading logs never waits on a message.
+ * `outflow` turns on the large-outflow alert: a payout or an exit that takes a total over the limit queues an operator message.
  */
-export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent) => Promise<unknown>) {
+export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent) => Promise<unknown>, outflow?: OutflowWatch) {
   const admin = onAdmin ? adminEventOf("ExitRouter", log) : null;
   if (admin) return void (await onAdmin!(admin));
   const ev = decodeEventLog({ abi: routerAbi, data: log.data, topics: log.topics as never, strict: false });
@@ -49,14 +51,18 @@ export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent
     case "DisarmedAll":
       await r.disarmAll(lc(a.owner as string), BigInt(a.newEpoch));
       break;
-    case "Exited":
+    case "Exited": {
+      const at = outflow && log.blockNumber != null ? await outflow.blockTime(log.blockNumber) : undefined;
       await r.recordExit({
         exitId: a.exitId, posId: a.posId, owner: lc(a.owner as string), caller: lc(a.caller as string), alarmKey: a.alarmKey, viaAlarm: a.viaAlarm,
-        tx: log.transactionHash!, block: log.blockNumber ?? 0n,
+        tx: log.transactionHash!, block: log.blockNumber ?? 0n, at,
       });
+      if (outflow && at !== undefined) await checkVaultOutflow(r, outflow, { posId: a.posId, tx: log.transactionHash!, at });
       break;
+    }
     case "Paid":
       await r.recordPayout({ exitId: a.exitId, tx: log.transactionHash!, logIndex: log.logIndex!, token: lc(a.token as string), amount: a.amount, swapped: a.swapped, block: log.blockNumber });
+      if (outflow && lc(a.token as string) === outflow.stable) await checkExitOutflow(r, outflow, { exitId: a.exitId, tx: log.transactionHash! });
       break;
     case "Owed":
       await r.addOwed(log.transactionHash!, log.logIndex!, lc(a.owner as string), lc(a.token as string), a.amount, log.blockNumber);

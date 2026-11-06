@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, fallback, getAbiItem, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { webhookCallback } from "grammy";
-import { alarmBookAbi, erc20Abi, vaultAbi } from "./chain/abi";
+import { alarmBookAbi, erc20Abi, routerAbi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
@@ -13,6 +13,7 @@ import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
+import { outflowThreshold, type OutflowWatch } from "./indexer/outflow";
 import { applyV1AlarmLog, applyV1RouterLog, v1AlarmsCursor, v1RouterCursor } from "./indexer/v1";
 import { announceRefusal, ContractVersionError, requireV2 } from "./chain/version";
 import { deepReorgText, stuckLogText, type StuckLog } from "./indexer/retry";
@@ -166,6 +167,20 @@ const opsNote = async (id: string, text: string) => {
   await queueOps(r, id, text, now());
 };
 
+// The stablecoin the router pays out, for the large-outflow alert. PLAN_TOKEN is the same token on every deploy so far.
+const stableToken = contracts
+  ? String(await client.readContract({ address: router, abi: routerAbi, functionName: "STABLE" }).catch(() => env.PLAN_TOKEN)).toLowerCase()
+  : "";
+const outflow: OutflowWatch | undefined = contracts && env.OUTFLOW_ALERT > 0
+  ? {
+      chainId: env.CHAIN_ID,
+      stable: stableToken,
+      threshold: outflowThreshold(env.OUTFLOW_ALERT),
+      blockTime: async (blockNumber) => Number((await client.getBlock({ blockNumber })).timestamp),
+      alert: opsNote,
+    }
+  : undefined;
+
 /** A log that has been failing for a while goes to the operator chat. It keeps being retried either way. */
 const stuckAlert = async (s: StuckLog) => {
   if (env.OPS_CHAT_ID === undefined) return void console.error("log stuck", s.source, s.tx, s.error);
@@ -186,7 +201,7 @@ if (run("indexer") && contracts) {
       address: router,
       startBlock: env.START_BLOCK,
       onStuck: stuckAlert,
-      onLog: (l) => applyRouterLog(r, l, adminAlert),
+      onLog: (l) => applyRouterLog(r, l, adminAlert, outflow),
       onRewind: (from) => r.undoRouter(from),
       recheck: (subjects, at) => recheckRouter(client, r, router, subjects, at),
       onDeepReorg: reorgAlert,

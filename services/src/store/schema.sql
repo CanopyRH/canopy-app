@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS alarms_seq ON alarms (seq);
 CREATE INDEX IF NOT EXISTS alarms_fired_at ON alarms (fired_at);
 CREATE TABLE IF NOT EXISTS attestations (key TEXT, evidence_hash TEXT, deadline BIGINT, signer TEXT, sig TEXT, PRIMARY KEY (key, evidence_hash, deadline, signer));
 CREATE TABLE IF NOT EXISTS exits (exit_id BIGINT PRIMARY KEY, pos_id TEXT, owner TEXT, caller TEXT, alarm_key TEXT, via_alarm BOOLEAN, tx TEXT, block BIGINT);
+ALTER TABLE exits ADD COLUMN IF NOT EXISTS at BIGINT; -- the block's time, for the hourly outflow check
 CREATE TABLE IF NOT EXISTS exit_payouts (exit_id BIGINT, tx TEXT, log_index INT, token TEXT, amount NUMERIC, swapped BOOLEAN, PRIMARY KEY (tx, log_index));
 CREATE TABLE IF NOT EXISTS risk_cards (target TEXT PRIMARY KEY, numbers JSONB, text TEXT, updated_at BIGINT);
 CREATE TABLE IF NOT EXISTS jobs (id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, dedupe TEXT UNIQUE NOT NULL, payload JSONB NOT NULL, run_at BIGINT NOT NULL, created_at BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, done BOOLEAN NOT NULL DEFAULT false);
