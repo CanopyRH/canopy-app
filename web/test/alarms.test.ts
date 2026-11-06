@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Address, Hex } from "viem";
-import { keyStatus, presetStatus, refusedPresets, REFIRE_SECONDS, type AlarmIo } from "../src/alarms";
+import { keyStatus, notArmable, presetStatus, refusedPresets, REFIRE_SECONDS, type AlarmIo } from "../src/alarms";
 import { COPY } from "../src/copy/text";
 import { MIN_DRAIN_WINDOW, registerTx } from "../src/tx";
 import { Kind, presetsFor, registrationOrder } from "../../services/src/api/presets";
@@ -8,7 +8,7 @@ import { Kind, presetsFor, registrationOrder } from "../../services/src/api/pres
 const V = "0x00000000000000000000000000000000000000a3" as Address;
 const BOOK = "0x00000000000000000000000000000000000000a1" as Address;
 const NOW = 2_000_000_000n;
-const presets = presetsFor(V);
+const presets = presetsFor(V, V, { paused: true });
 const byName = (n: string) => presets.find((p) => p.name === n)!;
 
 /** A fake AlarmBook: which keys would fire now, and when each last fired. */

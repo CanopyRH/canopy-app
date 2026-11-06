@@ -6,7 +6,8 @@ import sanctioned from "./sanctioned.json";
 /** Every transaction is built here, in the browser. The server never sees or supplies calldata. */
 
 export const routerAbi = parseAbi([
-  "struct ArmParams { address adapter; address target; uint256 tokenId; uint8 harbour; uint16 maxSlipBps; bytes32 termsHash; bytes32[] keys; }",
+  "struct SwapLeg { address token; address feed; uint32 heartbeat; uint8 tokenDecimals; bytes path; }",
+  "struct ArmParams { address adapter; address target; uint256 tokenId; uint8 harbour; uint16 maxSlipBps; bytes32 termsHash; bytes32[] keys; SwapLeg[] swaps; }",
   "function arm(ArmParams a) returns (bytes32)",
   "function exit(bytes32 posId, bytes32 alarmKey, uint256 amount) returns (uint256)",
   "function disarmAll()",
@@ -16,8 +17,9 @@ export const routerAbi = parseAbi([
 export const alarmBookAbi = parseAbi([
   "struct Detector { uint8 kind; address target; uint256 threshold; uint32 window; bytes32 a; bytes32 b; }",
   "function register(Detector d) returns (bytes32)",
-  "function state(bytes32) view returns (bool exists, uint64 firedAt, uint64 snapAt, uint256 baseline, uint256 snap)",
+  "function state(bytes32) view returns (bool exists, uint64 firedAt, uint64 snapAt, uint256 baseline, uint256 snap, uint64 episodeAt, uint64 pendingAt)",
   "function check(bytes32) view returns (bool)",
+  "function armable(bytes32) view returns (bool)",
   "function isLive(bytes32, uint256) view returns (bool)",
 ]);
 const erc20Abi = parseAbi([
@@ -49,14 +51,17 @@ export function approveTx(vault: Address, router: Address): Tx {
   return { to: vault, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [router, maxUint256] }) };
 }
 
-/** Vault positions take no swap in v1, so harbour and slippage are always 0. */
+/**
+ * Vault positions are paid out as the vault pays them: the raw harbour, no slippage setting and no swap legs. The router
+ * refuses legs on the raw harbour, so the list is always empty. The app does not offer the stablecoin harbour.
+ */
 export function armTx(router: Address, adapter: Address, vault: Address, keys: Hex[]): Tx {
   return {
     to: router,
     data: encodeFunctionData({
       abi: routerAbi,
       functionName: "arm",
-      args: [{ adapter, target: vault, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: termsHash(), keys }],
+      args: [{ adapter, target: vault, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: termsHash(), keys, swaps: [] }],
     }),
   };
 }

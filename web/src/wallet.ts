@@ -1,5 +1,6 @@
 import type { Address, Hex } from "viem";
 import { COPY } from "./copy/text";
+import { revertText } from "./errors";
 import type { Tx } from "./tx";
 
 export interface Eip1193 { request(a: { method: string; params?: unknown[] }): Promise<unknown> }
@@ -71,5 +72,7 @@ export async function sendTx(w: Eip1193, receipts: Receipts, from: Address, tx: 
 export function friendly(e: unknown): string {
   const err = e as { code?: number; message?: string };
   if (err?.code === 4001 || /user (rejected|denied|cancel)/i.test(err?.message ?? "")) return COPY.txRejected;
+  const known = revertText(e);
+  if (known) return known;
   return (err?.message ?? COPY.txFailed).split("\n")[0]!.slice(0, 160);
 }

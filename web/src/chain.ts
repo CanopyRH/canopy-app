@@ -2,8 +2,9 @@ import { createPublicClient, http, maxUint256, parseAbi, type Address, type Hex 
 import { CONFIG, type Vault } from "./config";
 import { exitBlocked, gateAbi, type Read } from "./gates";
 import { sendTx, type Eip1193 } from "./wallet";
-import { Kind, keyOf, presetsFor, registrationOrder, type Detector, type Preset } from "../../services/src/api/presets";
-import { presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
+import { keyOf, presetsFor, registrationOrder, type Detector, type Preset } from "../../services/src/api/presets";
+import { notArmable, presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
+import { revertText } from "./errors";
 import { COPY } from "./copy/text";
 import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
 
@@ -76,14 +77,13 @@ const alarmIo: AlarmIo = {
   now: () => client.getBlock().then((b) => b.timestamp),
 };
 
+/** Whether a vault answers paused(). Many have no pause switch, so a Paused alarm could never fire there and is not offered. */
+export const answersPaused = (vault: Address) => client.readContract({ address: vault, abi: pausedAbi, functionName: "paused" }).then(() => true, () => false);
+
 /** The presets this vault can use. Worked out here, not fetched, so a compromised server can't swap in different alarm keys. */
 export async function presetViews(vault: Address): Promise<PresetView[]> {
-  const views = await Promise.all(presetsFor(vault).map(async (preset): Promise<PresetView | null> => {
-    // Many vaults have no pause switch, so that alarm could never fire there.
-    if (preset.detector.kind === Kind.PAUSED) {
-      const ok = await client.readContract({ address: vault, abi: pausedAbi, functionName: "paused" }).then(() => true, () => false);
-      if (!ok) return null;
-    }
+  const paused = await answersPaused(vault);
+  const views = await Promise.all(presetsFor(vault, vault, { paused }).map(async (preset): Promise<PresetView | null> => {
     // An alarm that is going off now, or fired in the last day, would exit this position for something that happened before the owner arrived.
     return { preset, status: await presetStatus(alarmIo, preset) };
   }));
@@ -104,16 +104,26 @@ function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
 
 /** Registers any missing alarms, approves the shares if needed, then arms. Each step is its own wallet signature. */
 export async function arm(s: Signer, vault: Address, keys: Hex[]) {
-  const presets = presetsFor(vault);
+  const paused = await answersPaused(vault);
+  const presets = presetsFor(vault, vault, { paused });
   // Read again at the moment of arming: the list on screen may be minutes old. Nothing is sent if any key is going off.
   if (keys.some((k) => !presets.some((p) => p.key === k)) || (await refusedPresets(alarmIo, presets, keys)).length > 0) throw new Error(COPY.armRefused);
-  for (const d of registrationOrder(vault).filter((d) => needed(presets, keys, d))) {
+  for (const d of registrationOrder(vault, vault, { paused }).filter((d) => needed(presets, keys, d))) {
     const known = await client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [keyOf(d)] });
     if (!known[0]) await send(s, registerTx(CONFIG.alarmBook!, d));
   }
   const allowed = await client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, CONFIG.router!] });
   if (allowed < maxUint256 / 2n) await send(s, approveTx(vault, CONFIG.router!));
-  await send(s, armTx(CONFIG.router!, CONFIG.adapter!, vault, keys));
+  // The contract's own answer, now that every key is registered: the router asks it again inside arm and reverts if any key fails it.
+  const armable = (key: Hex) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "armable", args: [key] });
+  if ((await notArmable(armable, keys)).length > 0) throw new Error(COPY.armRefused);
+  const tx = armTx(CONFIG.router!, CONFIG.adapter!, vault, keys);
+  // Run it once without sending, so a refusal reads in plain words and not as a wallet's raw error.
+  await client.call({ account: s.account, to: tx.to, data: tx.data }).catch((e) => {
+    const known = revertText(e);
+    if (known) throw new Error(known);
+  });
+  await send(s, tx);
 }
 
 /** Exit Now. The router only handles armed positions; anyone else withdraws from the vault as usual. Returns the exit's transaction. */

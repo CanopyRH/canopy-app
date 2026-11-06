@@ -32,6 +32,16 @@ export async function keyStatus(io: AlarmIo, key: Hex): Promise<AlarmStatus> {
   }
 }
 
+/**
+ * The chosen keys that AlarmBook.armable() turns down: unknown, tripped, unreadable, or fired in the last day. This is the
+ * contract's own answer, and the router asks it again inside `arm`, so it backs up the app's checks above. Ask it only
+ * once the keys are registered, because an unknown key is not armable. A failed read counts as not armable.
+ */
+export async function notArmable(armable: (key: Hex) => Promise<boolean>, keys: Hex[]): Promise<Hex[]> {
+  const answers = await Promise.all(keys.map((k) => armable(k).catch(() => false)));
+  return keys.filter((_, i) => !answers[i]);
+}
+
 /** Every key a preset arms: its own key and the parts it depends on. The worst status wins. */
 export async function presetStatus(io: AlarmIo, preset: Preset): Promise<AlarmStatus> {
   const keys = [preset.key, ...(preset.requires ?? []).map((p) => p.key)];
