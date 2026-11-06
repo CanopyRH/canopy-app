@@ -1,9 +1,10 @@
-"""Hand-written mutation campaign over ExitRouter.sol and AlarmBook.sol (review 2026-11-06, v2).
+"""Hand-written mutation campaign over ExitRouter.sol and AlarmBook.sol (third review of v2, extended for the V3 fixes).
 
 Run it on a scratch COPY of contracts/ (it edits src/ in place and restores each file):
     cp -R contracts /some/scratch/dir && FORGE=/path/to/forge python3 -I mutants.py /some/scratch/dir/contracts
 Each mutant is (file, name, exact old text, new text); the old text must occur exactly once. A mutant is KILLED when
-`forge test` fails, SURVIVED when it passes. Results of the review run are in mutants.results.tsv.
+`forge test` fails, SURVIVED when it passes. Results are in mutants.results.tsv: the review run (existing suite, then with the review tests) and the v2_fix run
+(117 mutants after the V3 fixes: 102 killed, 2 equivalent, and the 13 the review also left alive).
 """
 import subprocess, sys, json, os
 
@@ -44,6 +45,7 @@ M = [
  (ER, "legs: duplicates allowed", "if (swaps[j].token == l.token) revert DuplicateSwap(l.token);", ""),
  (ER, "legs: heartbeat +1", "l.heartbeat > MAX_FEED_HEARTBEAT) revert BadFeed();", "l.heartbeat > MAX_FEED_HEARTBEAT + 1) revert BadFeed();"),
  (ER, "legs: decimals >=", "if (l.tokenDecimals > MAX_TOKEN_DECIMALS) revert BadFeed();", "if (l.tokenDecimals >= MAX_TOKEN_DECIMALS) revert BadFeed();"),
+ (ER, "legs: decimals not compared", "if (!okD || dec[0] != l.tokenDecimals) revert BadFeed();", "if (!okD) revert BadFeed();"),
  (ER, "legs: path alignment off", "if (path.length < 43 || (path.length - 20) % 23 != 0) revert BadRoute();", "if (path.length < 43) revert BadRoute();"),
  (ER, "legs: end not checked", "if (address(bytes20(path[path.length - 20:])) != STABLE) revert BadRoute();", ""),
  (ER, "legs: start not checked", "if (address(bytes20(path[0:20])) != l.token) revert BadRoute();", ""),
@@ -84,7 +86,8 @@ M = [
  (AB, "register: zero share price ok", "if (!ok || px == 0) revert BadDetector();", "if (!ok) revert BadDetector();"),
  (AB, "register: drain snapAt unset", "s.snapAt = uint64(block.timestamp);\n        }\n        emit Registered", "}\n        emit Registered"),
  (AB, "check: confirm ignored", "return block.timestamp >= uint256(s.pendingAt) + DRAIN_CONFIRM;", "return true;"),
- (AB, "armable: live ignored", "if (!s.exists || _liveNow(s)) return false;\n        (Reading r,) = _reading(_detectors[key], s);", "if (!s.exists) return false;\n        (Reading r,) = _reading(_detectors[key], s);"),
+ (AB, "armable: live ignored", "if (!s.exists || _liveNow(s)) return false;\n        Detector memory d = _detectors[key];\n        if (d.kind == Kind.DRAIN && _pendingLive", "if (!s.exists) return false;\n        Detector memory d = _detectors[key];\n        if (d.kind == Kind.DRAIN && _pendingLive"),
+ (AB, "armable: pending ignored", "if (d.kind == Kind.DRAIN && _pendingLive(s, d)) return false;", ""),
  (AB, "armable: unknown is clear", "return r == Reading.CLEAR;", "return r != Reading.TRIPPED;"),
  (AB, "poke: unreadable drain sights", "if (r != Reading.TRIPPED) return false; // clear", "if (r == Reading.CLEAR) return false; // clear"),
  (AB, "poke: no confirm delay", "if (block.timestamp < uint256(s.pendingAt) + DRAIN_CONFIRM) return false;", ""),
@@ -116,7 +119,11 @@ M = [
  (AB, "validate: short BOTH window", " || d.window < REFIRE_AFTER) revert BadDetector();", ") revert BadDetector();"),
  (AB, "reading: share drop <=", "px * 10_000 < s.baseline * (10_000 - d.threshold)", "px * 10_000 <= s.baseline * (10_000 - d.threshold)"),
  (AB, "reading: exhausted ignored", "if (exhausted) return (Reading.UNKNOWN, 0);", ""),
- (AB, "reading: drain reference never expires", "if (s.snap == 0 || block.timestamp - s.snapAt > d.window) return (Reading.CLEAR, ta);", "if (s.snap == 0) return (Reading.CLEAR, ta);"),
+ (AB, "reading: drain reference never expires", "if (s.snap == 0 || s.prevSnap == 0 || block.timestamp - s.snapAt > d.window) return (Reading.CLEAR, ta);", "if (s.snap == 0 || s.prevSnap == 0) return (Reading.CLEAR, ta);"),
+ (AB, "reading: drain ignores prevSnap", "uint256 ref = s.snap < s.prevSnap ? s.snap : s.prevSnap;", "uint256 ref = s.snap;"),
+ (AB, "reading: drain needs no prevSnap", "if (s.snap == 0 || s.prevSnap == 0 ||", "if (s.snap == 0 ||"),
+ (AB, "checkpoint: prevSnap not rolled", "s.prevSnap = s.snap;\n", ""),
+ (AB, "rebase: prevSnap kept", "s.prevSnap = 0;\n", ""),
  (AB, "reading: price staleness off", " || block.timestamp - upd > d.window) return (Reading.UNKNOWN, 0);", ") return (Reading.UNKNOWN, 0);"),
  (AB, "read: no gas floor", "if (gasleft() < TARGET_READ_GAS + READ_GAS_OVERHEAD) revert NotEnoughGas();", ""),
  (AB, "read: overhead without 1/64", "READ_GAS_OVERHEAD = TARGET_READ_GAS / 63 + 10_000;", "READ_GAS_OVERHEAD = 10_000;"),
