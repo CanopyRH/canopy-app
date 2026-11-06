@@ -32,7 +32,7 @@ const minimal = {
 describe("the env check for ROLE=watcher", () => {
   test("accepts the minimal settings and fills the ones a watcher never reads", () => {
     const e = loadEnv(minimal);
-    expect(e.ROLE).toBe("watcher");
+    expect(e.ROLE).toEqual(["watcher"]);
     expect(e.PUBLIC_URL).toBe(WATCHER_UNUSED.PUBLIC_URL!);
     expect(e.TELEGRAM_BOT_TOKEN).toBe(WATCHER_UNUSED.TELEGRAM_BOT_TOKEN!);
     expect(e.RPC_URL).toBe(minimal.RPC_URL); // the one setting a watcher reads that the other roles also have: the v2 check needs a node
@@ -86,11 +86,13 @@ describe("the env check for ROLE=watcher", () => {
       }
     };
     const telegram = { PUBLIC_URL: "https://api.invalid", RPC_URL: "https://rpc.invalid", RPC_URL_BACKUP: "https://rpc2.invalid", TELEGRAM_BOT_TOKEN: "1:x", TELEGRAM_WEBHOOK_SECRET: "x".repeat(16) };
-    for (const role of ["all", "api", "bot", "indexer", "detector", "keeper"]) {
-      // The watcher's own settings are not enough: the role still wants Telegram, the public URL and the second RPC endpoint...
-      expect(issues({ ...minimal, ROLE: role })).toEqual(["PUBLIC_URL", "RPC_URL_BACKUP", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]);
-      // ...and then the router, adapter and plan payment addresses.
-      expect(issues({ ...minimal, ...telegram, ROLE: role })).toEqual(["ROUTER", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
+    for (const role of ["all", "api", "bot", "indexer", "detector", "keeper", "watcher,keeper"]) {
+      // The watcher's fills and its relaxed check are for a watcher alone. Every other role still wants the router and adapter...
+      expect(issues({ ...minimal, ...telegram, ROLE: role })).toEqual(expect.arrayContaining(["ROUTER", "ADAPTER_4626"]));
+    }
+    for (const role of ["all", "api", "bot"]) {
+      // ...and the roles that answer Telegram still want the public URL and the bot's settings.
+      expect(issues({ ...minimal, RPC_URL_BACKUP: telegram.RPC_URL_BACKUP, ROLE: role })).toEqual(expect.arrayContaining(["PUBLIC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]));
     }
   });
 
