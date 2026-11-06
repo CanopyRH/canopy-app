@@ -1,31 +1,31 @@
 [
   {
-    "id": "17dad16660642ff0899e571cba1bcc94d3ae254cf4e32bfbfc278dad00090ee6",
+    "id": "64703137e1498036968f7b4e3658fbecfd41985e4737b8672614482d63aeef9e",
     "check": "arbitrary-send-erc20",
     "impact": "High",
-    "description": "ExitRouter._pull(ExitRouter.Position,uint256) (src/ExitRouter.sol#603-615) uses arbitrary from in transferFrom: IERC721(p.asset).transferFrom(p.owner,p.adapter,p.tokenId) (src/ExitRouter.sol#605)\n",
+    "description": "ExitRouter._pull(ExitRouter.Position,uint256) (src/ExitRouter.sol#610-622) uses arbitrary from in transferFrom: p.asset.safeTransferFrom(p.owner,p.adapter,amt) (src/ExitRouter.sol#620)\n",
     "reason": "By design: from is the position owner, who armed the position and approved the router; to is the adapter the owner chose from the admin allowlist. A third party can only reach this through exit, which requires an armed key that fired at or after the arming."
   },
   {
-    "id": "6f7d91f003f37c2e7b9991de1fde02f224642409a727058efe4399be9682a3a8",
+    "id": "c517f7614d3d77217c1f8688b6e0c84c07a94a4b273c0dc47165d03c0c141199",
     "check": "arbitrary-send-erc20",
     "impact": "High",
-    "description": "ExitRouter._pull(ExitRouter.Position,uint256) (src/ExitRouter.sol#603-615) uses arbitrary from in transferFrom: p.asset.safeTransferFrom(p.owner,p.adapter,amt) (src/ExitRouter.sol#613)\n",
+    "description": "ExitRouter._pull(ExitRouter.Position,uint256) (src/ExitRouter.sol#610-622) uses arbitrary from in transferFrom: IERC721(p.asset).transferFrom(p.owner,p.adapter,p.tokenId) (src/ExitRouter.sol#612)\n",
     "reason": "By design: from is the position owner, who armed the position and approved the router; to is the adapter the owner chose from the admin allowlist. A third party can only reach this through exit, which requires an armed key that fired at or after the arming."
   },
   {
-    "id": "43b6039c7afff30132233cae9667609023ebcabda12a3930046dcb76fcb7d181",
+    "id": "50c8f508ee9a0f079959c0b79c78c5ee03a0471b04b58e4fd895cf7429949fa3",
     "check": "arbitrary-send-eth",
     "impact": "High",
-    "description": "ExitRouter.claimOwed(address,address) (src/ExitRouter.sol#415-427) sends eth to arbitrary user\n\tDangerous calls:\n\t- (ok,None) = owner.call{value: amt}() (src/ExitRouter.sol#421)\n",
-    "reason": "By design: the ETH goes only to the owner named in the owed record; there is no recipient argument."
-  },
-  {
-    "id": "c1cfe62f02b7d8610e76544cf8603a72230cd50c35df458138c1cfa7033fb9fe",
-    "check": "arbitrary-send-eth",
-    "impact": "High",
-    "description": "ExitRouter._pay(uint256,address,address,uint256,bool) (src/ExitRouter.sol#694-722) sends eth to arbitrary user\n\tDangerous calls:\n\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n",
+    "description": "ExitRouter._pay(uint256,address,address,uint256,bool) (src/ExitRouter.sol#701-729) sends eth to arbitrary user\n\tDangerous calls:\n\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n",
     "reason": "By design: the value goes to the immutable WETH contract, which wraps ETH the router holds for the owner; the WETH is then sent to the owner or booked as owed to the owner. There is no recipient argument."
+  },
+  {
+    "id": "68aeb45e7d7740ebf4c56afdcb51a471090abbf2ddd3dc0e7b6f97f21af3cbba",
+    "check": "arbitrary-send-eth",
+    "impact": "High",
+    "description": "ExitRouter.claimOwed(address,address) (src/ExitRouter.sol#418-430) sends eth to arbitrary user\n\tDangerous calls:\n\t- (ok,None) = owner.call{value: amt}() (src/ExitRouter.sol#424)\n",
+    "reason": "By design: the ETH goes only to the owner named in the owed record; there is no recipient argument."
   },
   {
     "id": "59ab332dc43460b73187ac63f8b89137af5f7ea2349e8aaaae3a5233fdbf86aa",
@@ -35,17 +35,17 @@
     "reason": "False positive: the XOR is the intended Newton-Raphson seed of the 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows."
   },
   {
-    "id": "a386125e5eab62b1db0b4956efab31503da28d71733aa66dc8520bfeb815c104",
+    "id": "a70bd315fb22935eda0cc8dcd44a907c4e3301c96ceb39e38cb3ab3eac57af18",
     "check": "reentrancy-eth",
     "impact": "High",
-    "description": "Reentrancy in ExitRouter._unwindAndPay(uint256,ExitRouter.Position,ExitRouter.SwapLeg[],uint256,bool) (src/ExitRouter.sol#561-588):\n\tExternal calls:\n\t- amountOrId = _pull(p,amount) (src/ExitRouter.sol#565)\n\t\t- IERC721(p.asset).transferFrom(p.owner,p.adapter,p.tokenId) (src/ExitRouter.sol#605)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x23b872dd,from,to,amount)) (src/lib/SafeTransferLib.sol#50)\n\t\t- p.asset.safeTransferFrom(p.owner,p.adapter,amt) (src/ExitRouter.sol#613)\n\t- IExitAdapter(p.adapter).unwind(p.target,amountOrId) (src/ExitRouter.sol#574)\n\t- IERC721(p.asset).transferFrom(address(this),p.owner,p.tokenId) (src/ExitRouter.sol#578)\n\t- delivered = _settle(exitId,legs,p,outs,before,viaAlarm) (src/ExitRouter.sol#581)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- ! ok || ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#680)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#684-690)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#691)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#585)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\tExternal calls sending eth:\n\t- delivered = _settle(exitId,legs,p,outs,before,viaAlarm) (src/ExitRouter.sol#581)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#585)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#585)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#703)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#718)\n\tExitRouter.owed (src/ExitRouter.sol#129) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#129)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#585)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#704)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#719)\n\tExitRouter.totalOwed (src/ExitRouter.sol#131) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#131)\n",
+    "description": "Reentrancy in ExitRouter._settle(uint256,ExitRouter.SwapLeg[],ExitRouter.Position,address[],uint256[],bool) (src/ExitRouter.sol#641-669):\n\tExternal calls:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#657)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\t- p.harbour == HARBOUR_STABLE && t != address(0) && _swapIfLeg(legs,t,d,slip) (src/ExitRouter.sol#660)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- ! ok || ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#687)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#691-697)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#698)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#665)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\tExternal calls sending eth:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#657)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#665)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#657)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#710)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#725)\n\tExitRouter.owed (src/ExitRouter.sol#130) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#130)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#665)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#710)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#725)\n\tExitRouter.owed (src/ExitRouter.sol#130) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#130)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#657)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#711)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#726)\n\tExitRouter.totalOwed (src/ExitRouter.sol#132) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#132)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#665)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#711)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#726)\n\tExitRouter.totalOwed (src/ExitRouter.sol#132) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#132)\n",
     "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that books or pays owed balances. In v2 exit copies the position and its swap legs into memory before its first external call, and the only storage it reads afterwards is totalOwed (through _free), which only the guarded exit and claimOwed write. arm, disarm and disarmAll can be reached from a callback, but only for the caller's own positions, and this exit never reads them again."
   },
   {
-    "id": "d9f2b2f318922fdaf54ff512e7361a0c8ae7e53a878e96f9b93e485bf5165f77",
+    "id": "fc1ef57c4c7363c4d3654b49f04feb38883464aba438d4a1cf8ae15910efd224",
     "check": "reentrancy-eth",
     "impact": "High",
-    "description": "Reentrancy in ExitRouter._settle(uint256,ExitRouter.SwapLeg[],ExitRouter.Position,address[],uint256[],bool) (src/ExitRouter.sol#634-662):\n\tExternal calls:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#650)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\t- p.harbour == HARBOUR_STABLE && t != address(0) && _swapIfLeg(legs,t,d,slip) (src/ExitRouter.sol#653)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- ! ok || ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#680)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#684-690)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#691)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#658)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\tExternal calls sending eth:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#650)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#658)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#697)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#700-710)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#650)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#703)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#718)\n\tExitRouter.owed (src/ExitRouter.sol#129) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#129)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#658)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#703)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#718)\n\tExitRouter.owed (src/ExitRouter.sol#129) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#129)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#650)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#704)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#719)\n\tExitRouter.totalOwed (src/ExitRouter.sol#131) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#131)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#658)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#704)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#719)\n\tExitRouter.totalOwed (src/ExitRouter.sol#131) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#131)\n",
+    "description": "Reentrancy in ExitRouter._unwindAndPay(uint256,ExitRouter.Position,ExitRouter.SwapLeg[],uint256,bool) (src/ExitRouter.sol#564-591):\n\tExternal calls:\n\t- amountOrId = _pull(p,amount) (src/ExitRouter.sol#568)\n\t\t- IERC721(p.asset).transferFrom(p.owner,p.adapter,p.tokenId) (src/ExitRouter.sol#612)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x23b872dd,from,to,amount)) (src/lib/SafeTransferLib.sol#50)\n\t\t- p.asset.safeTransferFrom(p.owner,p.adapter,amt) (src/ExitRouter.sol#620)\n\t- IExitAdapter(p.adapter).unwind(p.target,amountOrId) (src/ExitRouter.sol#577)\n\t- IERC721(p.asset).transferFrom(address(this),p.owner,p.tokenId) (src/ExitRouter.sol#581)\n\t- delivered = _settle(exitId,legs,p,outs,before,viaAlarm) (src/ExitRouter.sol#584)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- ! ok || ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#687)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#691-697)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#698)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#588)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\tExternal calls sending eth:\n\t- delivered = _settle(exitId,legs,p,outs,before,viaAlarm) (src/ExitRouter.sol#584)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#588)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#704)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#707-717)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#588)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#710)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#725)\n\tExitRouter.owed (src/ExitRouter.sol#130) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#130)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#588)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#711)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#726)\n\tExitRouter.totalOwed (src/ExitRouter.sol#132) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#132)\n",
     "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that books or pays owed balances. In v2 exit copies the position and its swap legs into memory before its first external call, and the only storage it reads afterwards is totalOwed (through _free), which only the guarded exit and claimOwed write. arm, disarm and disarmAll can be reached from a callback, but only for the caller's own positions, and this exit never reads them again."
   },
   {
@@ -105,10 +105,10 @@
     "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
-    "id": "6967f86e095005b9b25cae8ce62bda54cf8bc0bfe10bf91420e7b66071320ee6",
+    "id": "ffc269835112e341c16c2ee41495d471be22816d7c05e3725dec6c60d43a5ef3",
     "check": "incorrect-equality",
     "impact": "Medium",
-    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#674-692) uses a dangerous strict equality:\n\t- called && ret.length == 64 (src/ExitRouter.sol#679)\n",
+    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#681-699) uses a dangerous strict equality:\n\t- called && ret.length == 64 (src/ExitRouter.sol#686)\n",
     "reason": "False positive: the equality checks the length of the ABI-encoded (bool, uint256) that quoteMinOut, this contract's own function, returns; it is not a balance or a timestamp. Anything else means no swap."
   },
   {
@@ -119,32 +119,25 @@
     "reason": "Accepted by design: the redeem result is not used. The router measures what the exit produced by the change in its own balance, and the adapter returns any unredeemed shares."
   },
   {
-    "id": "55c2c365fafb62d3d5286c89a051c68c71b688fab071011ae54d8790502668f3",
+    "id": "19425e94ded2ac646620d0f7202fcc55dd741cce6721697b6ef4cf463fdcb4c6",
     "check": "unused-return",
     "impact": "Medium",
-    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#592-600) ignores return value by (kind,None,None,None,pa,pb) = IAlarmBookDetector(address(ALARMS)).detector(k) (src/ExitRouter.sol#593)\n",
-    "reason": "Accepted by design: arm needs only the kind of a key (and of a BOTH key, its two part keys) from the immutable AlarmBook's stored detectors, to refuse a DRAIN without a QUORUM partner and nested BOTH keys; the target, threshold and window play no part in arming."
-  },
-  {
-    "id": "6b8333f95c7aaf77c0ef652dcbe9d8ba2cb7d3796708ef9cbbadb29497bbf583",
-    "check": "unused-return",
-    "impact": "Medium",
-    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#674-692) ignores return value by token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#691)\n",
+    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#681-699) ignores return value by token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#698)\n",
     "reason": "Accepted by design: resetting the approval is best effort. If it fails, the allowance left over is only to SWAP_ROUTER, the immutable Uniswap router the swap already trusts, and the exit is unaffected."
   },
   {
-    "id": "73bb6c4a5e712033cc1403cba48bb872725bdc704d1e6379b41cdf2cdf98b53b",
+    "id": "49b0904af231634af9d79ae6825da13d7a0927fff15012124282e16849a6bb80",
     "check": "unused-return",
     "impact": "Medium",
-    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#592-600) ignores return value by (kb,None,None,None,None,None) = IAlarmBookDetector(address(ALARMS)).detector(pb) (src/ExitRouter.sol#597)\n",
+    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#596-607) ignores return value by (kb,None,None,None,None,None) = IAlarmBookDetector(address(ALARMS)).detector(pb) (src/ExitRouter.sol#601)\n",
     "reason": "Accepted by design: arm needs only the kind of a key (and of a BOTH key, its two part keys) from the immutable AlarmBook's stored detectors, to refuse a DRAIN without a QUORUM partner and nested BOTH keys; the target, threshold and window play no part in arming."
   },
   {
-    "id": "9f98502173f05884a9775214d81b67193d2227e378df10a20a92b948d96e58fa",
+    "id": "909b682b9a37f70e5c8629363f506dc105b2da2055a62c02030769c5739ecdfc",
     "check": "unused-return",
     "impact": "Medium",
-    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#674-692) ignores return value by IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#684-690)\n",
-    "reason": "Accepted by design: the swap's reported output is not used. The router measures what it received by the change in its own balance, and exactInput already enforces the oracle-bounded amountOutMinimum."
+    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#596-607) ignores return value by (kind,None,None,window,pa,pb) = IAlarmBookDetector(address(ALARMS)).detector(k) (src/ExitRouter.sol#597)\n",
+    "reason": "Accepted by design: arm needs only the kind of a key (and of a BOTH key, its two part keys) from the immutable AlarmBook's stored detectors, to refuse a DRAIN without a QUORUM partner and nested BOTH keys; the target, threshold and window play no part in arming."
   },
   {
     "id": "ac973ea25c9ccbcd03d4e88a21ee082b89b1b90300a590a8fa63a178d1e6adbc",
@@ -154,10 +147,17 @@
     "reason": "Accepted by design: the redeem result is not used. The router measures what the exit produced by the change in its own balance, and the adapter returns any unredeemed shares."
   },
   {
-    "id": "fcb0d2c330a0002822384784ce2ea5d4b2fc8b507f33da1a39a6972f52c074b2",
+    "id": "dda703bac4b937a4b94c8bb66798443a8b8eb5445cd836f3a81d59c99825d69e",
     "check": "unused-return",
     "impact": "Medium",
-    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#592-600) ignores return value by (ka,None,None,None,None,None) = IAlarmBookDetector(address(ALARMS)).detector(pa) (src/ExitRouter.sol#596)\n",
+    "description": "ExitRouter._trySwap(address,uint256,uint16,ExitRouter.SwapLeg) (src/ExitRouter.sol#681-699) ignores return value by IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:leg.path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#691-697)\n",
+    "reason": "Accepted by design: the swap's reported output is not used. The router measures what it received by the change in its own balance, and exactInput already enforces the oracle-bounded amountOutMinimum."
+  },
+  {
+    "id": "e3ed76b0d54239b65adbea0348b09ad44e5d1ae7b9edc135f0695f4e93e8331f",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#596-607) ignores return value by (ka,None,None,None,None,None) = IAlarmBookDetector(address(ALARMS)).detector(pa) (src/ExitRouter.sol#600)\n",
     "reason": "Accepted by design: arm needs only the kind of a key (and of a BOTH key, its two part keys) from the immutable AlarmBook's stored detectors, to refuse a DRAIN without a QUORUM partner and nested BOTH keys; the target, threshold and window play no part in arming."
   }
 ]
