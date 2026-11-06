@@ -1,8 +1,8 @@
 id	status	severity	lane	location	title	first_seen	last_seen
 offchain-backend|services/src/keeper/liquidity.ts|unbounded-loop-dos	fixed	High	offchain-backend	services/src/keeper/liquidity.ts:26-53	One armed contract hangs the keeper's exit loop	2026-11-05	2026-11-06
-evm|contracts/src/ExitRouter.sol|admin-swap-config	accepted	Medium	evm	contracts/src/ExitRouter.sol:319-336	Admin feed+route can take Stable-harbour exits armed after the change	2026-11-05	2026-11-06
+evm|contracts/src/ExitRouter.sol|admin-swap-config	fixed-in-v2	Medium	evm	contracts/src/ExitRouter.sol:319-336	Admin feed+route can take Stable-harbour exits armed after the change	2026-11-05	2026-11-06
 offchain-backend|services/src/index.ts|indexer-liveness	fixed	Low	offchain-backend	services/src/index.ts:97-120	Telegram alerts inside the indexer delay other alarms' exits	2026-11-05	2026-11-06
-evm|contracts/src/AlarmBook.sol|refire-gap	accepted	Low	evm	contracts/src/AlarmBook.sol:146-152	Position armed during a live alarm waits up to 24h for keepers	2026-11-05	2026-11-06
+evm|contracts/src/AlarmBook.sol|refire-gap	fixed-in-v2	Low	evm	contracts/src/AlarmBook.sol:146-152	Position armed during a live alarm waits up to 24h for keepers	2026-11-05	2026-11-06
 ai-agents|services/src/index.ts|unmetered-signing	fixed	Low	ai-agents	services/src/index.ts:225-227	Watchers sign and keeper fires QUORUM keys on any contract	2026-11-05	2026-11-06
 offchain-backend|services/src/index.ts|rpc-key-in-logs	fixed	Low	offchain-backend	services/src/index.ts:44	RPC key in URL path reaches logs	2026-11-05	2026-11-06
 offchain-backend|services/src/keeper/keeper.ts|multicall-gas-griefing	fixed	High	offchain-backend	services/src/keeper/keeper.ts:52-78	One gas-burning key blinds the keeper batch check	2026-11-05	2026-11-06
@@ -15,7 +15,20 @@ offchain-backend|services/src/index.ts|followed-scan-starves-listed	fixed	Medium
 offchain-backend|services/src/index.ts|watcher-scope-per-detector	fixed	Low	offchain-backend	services/src/index.ts:273-278	Watcher reruns live-keys query per detector	2026-11-06	2026-11-06
 offchain-backend|services/src/api/ratelimit.ts|ipv6-buckets	fixed	Low	offchain-backend	services/src/api/ratelimit.ts:21-47	Rate limit counts each IPv6 address separately	2026-11-06	2026-11-06
 ai-agents|services/src/watcher/watcher.ts|platform-wide-report-match	fixed	Low	ai-agents	services/src/watcher/watcher.ts:36-43	Watchers sign a vault's exploit alarm from a platform-wide report	2026-11-06	2026-11-06
-evm|contracts/src/AlarmBook.sol|tripped-never-resets	accepted	Low	evm	contracts/src/AlarmBook.sol:146-182	A tripped detector refires daily and exits later armings	2026-11-06	2026-11-06
-evm|contracts/src/AlarmBook.sol|drain-single-low-reading	accepted	Low	evm	contracts/src/AlarmBook.sol:170-181	DRAIN trusts single low readings and tiny windows	2026-11-06	2026-11-06
-evm|contracts/src/AlarmBook.sol|watcher-list-never-expires	accepted	Low	evm	contracts/src/AlarmBook.sol:92-96	Admin keeps the watcher list after admin expiry	2026-11-06	2026-11-06
-evm|contracts/src/ExitRouter.sol|gas-burning-feed	accepted	Low	evm	contracts/src/ExitRouter.sol:430	Admin gas-burning feed makes stable exits costly	2026-11-06	2026-11-06
+evm|contracts/src/AlarmBook.sol|tripped-never-resets	fixed-in-v2	Low	evm	contracts/src/AlarmBook.sol:146-182	A tripped detector refires daily and exits later armings	2026-11-06	2026-11-06
+evm|contracts/src/AlarmBook.sol|drain-single-low-reading	fixed-in-v2	Low	evm	contracts/src/AlarmBook.sol:170-181	DRAIN trusts single low readings and tiny windows	2026-11-06	2026-11-06
+evm|contracts/src/AlarmBook.sol|watcher-list-never-expires	fixed-in-v2	Low	evm	contracts/src/AlarmBook.sol:92-96	Admin keeps the watcher list after admin expiry	2026-11-06	2026-11-06
+evm|contracts/src/ExitRouter.sol|gas-burning-feed	fixed-in-v2	Low	evm	contracts/src/ExitRouter.sol:430	Admin gas-burning feed makes stable exits costly	2026-11-06	2026-11-06
+evm|contracts/src/AlarmBook.sol|drain-flash-reference	fixed	Low	evm	contracts/src/AlarmBook.sol (checkpoint)	A flash-deposit sample in an unsampled period becomes the DRAIN reference (V3-01)	2026-11-06	2026-11-06
+offchain-backend|services/src/keeper/keeper.ts|gas-below-read-floor	fixed	High	offchain-backend	services/src/keeper/keeper.ts	Keeper gas limits below AlarmBook's per-read floor (V3-02)	2026-11-06	2026-11-06
+evm|contracts/src/ExitRouter.sol|leg-decimals-unchecked	fixed	Info	evm	contracts/src/ExitRouter.sol (arm)	Swap leg decimals not checked against the token (V3-03)	2026-11-06	2026-11-06
+evm|contracts/src/AlarmBook.sol|pending-sighting-before-arm	fixed	Info	evm	contracts/src/AlarmBook.sol (armable)	A DRAIN sighting before arming counts toward a fire after it (V3-04)	2026-11-06	2026-11-06
+evm|contracts/src/ExitRouter.sol|both-drain-without-quorum	fixed	Low	evm	contracts/src/ExitRouter.sol (arm)	BOTH keys could carry DRAIN without a QUORUM (V3B-01)	2026-11-06	2026-11-06
+evm|contracts/src/ExitRouter.sol|long-both-window	fixed	Info	evm	contracts/src/ExitRouter.sol (arm)	A long BOTH(DRAIN, QUORUM) window lets old signatures count (V3C-01)	2026-11-06	2026-11-06
+offchain-backend|services/src/keeper/keeper.ts|listed-by-target	fixed	High	offchain-backend	services/src/keeper/keeper.ts	Attacker jobs get the listed vault's fast lane (V3-S02)	2026-11-06	2026-11-06
+offchain-backend|services/src/store/switch.ts|switch-race	fixed	Medium	offchain-backend	services/src/store/switch.ts	Old processes race or undo the contract switch (V3-S01)	2026-11-06	2026-11-06
+offchain-backend|services/src/keeper/keeper.ts|overcap-poke	fixed	Medium	offchain-backend	services/src/keeper/keeper.ts	An over-cap poke is never set aside (V3-S03)	2026-11-06	2026-11-06
+offchain-backend|services/src/keeper/keeper.ts|stale-pending	fixed	Medium	offchain-backend	services/src/keeper/keeper.ts	An old DRAIN sighting counts as progress (V3-S04)	2026-11-06	2026-11-06
+offchain-frontend|web/src/alarms.ts|drain-pending-arm	fixed	Low	offchain-frontend	web/src/alarms.ts	Arming check misses a pending DRAIN part (V3-S05)	2026-11-06	2026-11-06
+offchain-backend|services/src/indexer/indexer.ts|reorg-crash-park	fixed	Low	offchain-backend	services/src/indexer/indexer.ts	A stop mid-rewind retries a parked log from a dropped block (V3-S06)	2026-11-06	2026-11-06
+offchain-backend|services/src/store/switch.ts|old-cursor-replay	fixed	Low	offchain-backend	services/src/store/switch.ts	The switch deletes the old cursor, so an old indexer replays v1 (V3V-01)	2026-11-06	2026-11-06

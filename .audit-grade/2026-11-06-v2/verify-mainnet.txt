@@ -1,0 +1,59 @@
+PASS  Timelock bytecode matches the tested build
+PASS  AlarmBook bytecode matches the tested build
+PASS  ExitRouter bytecode matches the tested build
+PASS  ERC4626Adapter bytecode matches the tested build
+PASS  Timelock proposer
+PASS  Timelock delay is 0s
+PASS  AlarmBook admin is the Timelock
+PASS  Router admin is the Timelock
+PASS  Router alarm book
+PASS  Router guardian
+PASS  Router stablecoin
+PASS  Router WETH
+PASS  Router swap router
+PASS  Router stablecoin feed
+PASS  Router feed heartbeat
+PASS  Router admin expiry
+PASS  Arming is not paused
+PASS  Adapter is wired to this router
+PASS  Multisig proposer is a contract
+PASS  Multisig guardian is a contract
+PASS  Adapter is allowed from deployment
+PASS  The adapter is the only allowed adapter
+PASS  Watcher 0x8b644F is active
+PASS  Watcher 0x8b644F started at the deploy  (since 1793984374, deploy block time 1793984373)
+PASS  Watcher 0x8b644F is approved for 365 days
+PASS  Watcher 0xB3a99F is active
+PASS  Watcher 0xB3a99F started at the deploy  (since 1793984374, deploy block time 1793984373)
+PASS  Watcher 0xB3a99F is approved for 365 days
+PASS  Watcher 0x38Fde1 is active
+PASS  Watcher 0x38Fde1 started at the deploy  (since 1793984374, deploy block time 1793984373)
+PASS  Watcher 0x38Fde1 is approved for 365 days
+PASS  Every watcher started in the same transaction  (1793984374, 1793984374, 1793984374)
+PASS  No watcher beyond the intended ones
+PASS  AlarmBook signing domain is version 2 on this chain
+PASS  AlarmBook TARGET_READ_GAS
+PASS  AlarmBook MIN_DRAIN_WINDOW
+PASS  AlarmBook DRAIN_CONFIRM
+PASS  AlarmBook REFIRE_AFTER
+PASS  AlarmBook REBASE_AFTER
+PASS  AlarmBook WATCHER_DELAY
+PASS  AlarmBook MAX_WATCHER_TERM
+PASS  AlarmBook MAX_ATTEST_LIFE
+PASS  AlarmBook MAX_QUORUM
+PASS  Router MAX_KEYS
+PASS  Router MAX_SWAPS
+PASS  Router MAX_SLIP_CAP_BPS
+PASS  Router THIRD_PARTY_SLIP_CAP_BPS
+PASS  Router ALARM_TTL
+PASS  Router MAX_FEED_HEARTBEAT
+PASS  Router STABLE_FLOOR_BPS
+PASS  Router FEED_READ_GAS
+PASS  Router QUOTE_GAS
+PASS  Router MAX_TOKEN_DECIMALS
+PASS  Router has no setFeed
+PASS  Router has no setRoute
+PASS  Router has no feeds
+PASS  Router has no routes
+PASS  Router has no swapConfig
+all 58 checks passed

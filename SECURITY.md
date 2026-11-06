@@ -14,9 +14,10 @@ public issue for it. Include what you found, how to reproduce it, and what it af
 - The web app in `web/`.
 
 The deployed contracts can't be upgraded, so a contract bug is fixed by deploying new contracts that people choose to
-move to, never by changing the ones in use. v2 is that new deployment: it closes the contract findings of the two
-internal reviews (M-1, L-1, A2-01, A2-02, A2-04, A2-05, A2-06, A2-07) and the third review's V3-01, V3-03 and V3-04. Until a user moves, their position is on v1, and
-v1's accepted risks (listed in this file at the `v1-deployed` tag) still apply to it.
+move to, never by changing the ones in use. v2 is that new deployment, live since 2026-11-06 at block 107737863: it closes the contract findings of the two
+internal reviews (M-1, L-1, A2-01, A2-02, A2-04, A2-05, A2-06, A2-07) and the third review's V3-01, V3-03 and V3-04. Canopy's services and app
+now run on v2 only. v1 is retired: the only position ever armed on it was our own test, which holds nothing. v1's accepted
+risks are listed in this file at the `v1-deployed` tag.
 
 ## Who holds which power (v2)
 
@@ -95,7 +96,7 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
 ## Audit status
 
 The contracts haven't had an external audit. They have unit, fuzz, invariant and mainnet fork tests, Slither runs in
-CI, and v1's source is verified on Blockscout and Sourcify with an exact match.
+CI, and both v1's and v2's sources are exact matches on Sourcify.
 
 Internal reviews are in [`.audit-grade/`](.audit-grade/) and [`contracts/test/review/`](contracts/test/review/):
 

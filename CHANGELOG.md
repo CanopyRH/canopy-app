@@ -5,6 +5,18 @@ services, the web app or the tooling unless it says otherwise.
 
 ## 2026-11-06
 
+- **v2 contracts live on Robinhood Chain** at block 107737863: ExitRouter `0x1c3ca2B2f01C30B731909563Dad550062B340757`,
+  AlarmBook `0x6A391f2c489dDFcb60Ad64eDddda5Ea0921584cf`, Timelock `0x4F656b09c4D3c859Dd2BB9919f384681e9ccb3f5`,
+  ERC4626Adapter `0x32C39abF03a12303Cc3150be50eD7b0e03Ab9D38`. Exact matches on Sourcify, `verify.ts` 58 of 58, the 30 launch
+  alarms registered. The services and web app switched to v2 the same day. v1 is retired (source at `v1-deployed`).
+  - **Closed in the contracts:** no admin swap settings (the owner picks each swap leg), arming only on a clear alarm,
+    resettable detectors, a vault drain that counts only as BOTH(DRAIN, QUORUM) with a one-day window, expiring and
+    delayed watchers, gas-capped reads, payouts by balance change.
+  - **Third internal review** ([report](.audit-grade/2026-11-06-v2/REPORT.md)): every finding fixed with a regression test,
+    including a keeper High (attacker jobs in the listed fast lane) and the contract switch's races.
+- **Indexer:** survives chain reorgs (rewind, undo, re-check), and checks each log's block hash.
+- **API:** the read limit now applies on Railway (the caller is 2 entries from the end of X-Forwarded-For).
+
 - **Second internal review.** The report is in [.audit-grade/2026-11-06](.audit-grade/2026-11-06/REPORT.md). Its fixes:
   - **Keeper.**
     - The exit queue keeps moving when an attacker fills it with jobs too big or too slow (A2-H1, A2-M1).
