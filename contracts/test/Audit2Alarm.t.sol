@@ -11,6 +11,7 @@ import {RealVault} from "./AlarmAttacks.t.sol";
 
 interface VmEtch {
     function etch(address, bytes calldata) external;
+    function chainId(uint256) external;
 }
 
 /// @dev Stands in for a large depositor who can move a vault's totalAssets inside one transaction.
@@ -418,5 +419,23 @@ contract Audit2AlarmTest is Base {
         (address[] memory s, bytes[] memory g) = _sigsFor(other.attestDigest(qk, EVIDENCE, dl));
         vm.expectRevert(abi.encodeWithSelector(AlarmBook.BadSignature.selector, s[0]));
         book.fireByQuorum(qk, EVIDENCE, dl, s, g);
+    }
+
+    /// No existing test pins the chain id in the EIP-712 domain: removing `block.chainid` from the constructor kept the whole suite green.
+    function test_A2_C8_domainSeparatorBindsTheChainIdAndTheContract() public {
+        bytes32 typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        bytes32 name = keccak256("Canopy AlarmBook");
+        bytes32 version = keccak256("1");
+        assertTrue(
+            book.DOMAIN_SEPARATOR() == keccak256(abi.encode(typeHash, name, version, block.chainid, address(book))),
+            "domain for this chain"
+        );
+        VmEtch(address(uint160(uint256(keccak256("hevm cheat code"))))).chainId(4663);
+        AlarmBook live = new AlarmBook(ADMIN);
+        assertTrue(
+            live.DOMAIN_SEPARATOR() == keccak256(abi.encode(typeHash, name, version, uint256(4663), address(live))),
+            "domain for Robinhood Chain"
+        );
+        assertTrue(live.DOMAIN_SEPARATOR() != book.DOMAIN_SEPARATOR(), "differs from the test chain");
     }
 }
