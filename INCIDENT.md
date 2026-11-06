@@ -40,8 +40,9 @@ can't arm until it is lifted.
 
 ## Pause arming through the guardian Safe
 
-You need the ExitRouter address (in the README's deployment list, and the `ROUTER` setting the services run with) and
-two guardian signers.
+You need the **v2** ExitRouter address, `0x1c3ca2B2f01C30B731909563Dad550062B340757` (also in
+`deploy/out/4663/deployment.json`, the docs page's Contracts table and the `ROUTER` setting the services run with), and
+two guardian signers. The retired v1 router is not the target: pausing it does nothing for anyone using the app.
 
 1. Signer 1 opens the guardian Safe in the Safe web app, on Robinhood Chain (4663).
 2. Choose **New transaction**, then **Transaction Builder**.
@@ -69,8 +70,7 @@ Do this only when the reason is understood and fixed.
 
 ## An admin alert fires that nobody expected
 
-The operator chat gets a message for every `AdapterSet`, `FeedSet`, `RouteSet`, `GuardianSet`, `ArmingPaused` and
-`WatcherSet` event, with the arguments and a link to the transaction. Every one of these should match a change the
+The operator chat gets a message for every `AdapterSet`, `GuardianSet`, `ArmingPaused` and `WatcherSet` event, with the arguments and a link to the transaction. Every one of these should match a change the
 admin Safe signers know about. If one does not:
 
 1. **Ask first, for a few minutes.** Post in the signers' private channel: "Did anyone propose this?" Compare it with
@@ -85,12 +85,11 @@ admin Safe signers know about. If one does not:
    - `AdapterSet(adapter, true)`: set it back to `false`. An unreviewed adapter must not be armed against.
    - `AdapterSet(adapter, false)`: harmless to armed positions, since it only blocks new arming. Re-enable it if it was
      ours.
-   - `FeedSet` or `RouteSet`: no feed or route is set today and the app doesn't offer the swap exit, so any such event is
-     unexpected. Positions already armed are not affected, because a position uses the feed and route set before it was
-     armed. Clear or restore the setting before the swap is ever offered.
    - `GuardianSet`: set the guardian back to the guardian Safe.
-   - `WatcherSet(watcher, true)` for a watcher we don't run: call `setWatcher(watcher, false)` on the AlarmBook. An
-     alarm needs 2 approved watcher signatures, so one bad watcher can't fire an alarm alone, but remove it anyway.
+   - `WatcherSet(watcher, since, until)` with `until` not 0, for a watcher we don't run: call
+     `setWatcher(watcher, 0)` on the AlarmBook. This removes it at once, even if its approval hasn't started. A new
+     approval counts only from `since`, 2 days after the call, so you have that time. An alarm needs 2 active watcher
+     signatures, so one bad watcher can't fire an alarm alone, but remove it anyway.
    - `ArmingPaused(true)` nobody asked for: find who called it. If it was the guardian Safe, ask the guardian signers. If
      the Timelock, treat it as an admin compromise.
 5. **Tell users** if arming was paused or an adapter was involved: they can disarm at any time, and exits stay open. The
@@ -113,18 +112,21 @@ owner can always exit from the app. Stop it if it is sending bad transactions or
 
 ## Stop a watcher
 
-A watcher signs alarms from public reports. One watcher alone can't fire an alarm: the contract needs 2 approved
+A watcher signs alarms from public reports. One watcher alone can't fire an alarm: the contract needs 2 active
 signatures.
 
 1. Stop the host. In the hosting dashboard, remove the latest deployment of that `watcher` service. To keep it down,
    delete its `WATCHER_PRIVATE_KEY` variable.
 2. If its key may be exposed or it signed something wrong, **remove it from the allowed list**: the admin Safe sends,
-   through the Timelock, `setWatcher(watcher, false)` on the AlarmBook. The `WatcherSet` alert confirms it.
+   through the Timelock, `setWatcher(watcher, 0)` on the AlarmBook (`until` = 0 removes it at once). The `WatcherSet`
+   alert, with `since` and `until` both 0, confirms it.
 3. Take its address out of the `WATCHERS` setting on every service, and out of the `WATCHER_PEERS` list on the other
    watchers, then redeploy them.
 4. A watcher that signed something wrong may have started a quorum. Read the AlarmBook for the key's state and check
    the `Fired` events. A fired alarm can't be undone, but it only lets keepers return funds to their owners.
-5. When a replacement is ready, add it with `setWatcher(newWatcher, true)` and set its address in `WATCHERS`.
+5. When a replacement is ready, add it with `setWatcher(newWatcher, until)`, where `until` is a Unix time at most 365
+   days away. It counts only from 2 days after the call (the `since` in the `WatcherSet` alert). Set its address in
+   `WATCHERS`. Every approval ends at its `until`, so put renewals in the calendar: an expired watcher stops counting.
 
 ## Who to tell
 

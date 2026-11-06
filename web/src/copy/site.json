@@ -38,7 +38,7 @@
     "visualLabel": "Your vaults. Your alarms. Your wallet.",
     "metrics": [
       { "value": "1", "label": "Payout destination", "detail": "The position owner's wallet." },
-      { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can change who gets paid, and the exit contract's settings lock after 12 months." },
+      { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can change who gets paid, and the exit contract's settings lock on November 4, 2027." },
       { "value": "Free", "label": "Scan and alerts", "detail": "Wallet check, risk cards and vault alerts." }
     ],
     "note": "An exit can only take what the vault can pay out at that moment."
@@ -77,7 +77,7 @@
       {
         "id": "harbour",
         "title": "Get the vault's own asset.",
-        "description": "An exit redeems your shares for the vault's asset, such as USDG, straight to your wallet. There is no swap in v1.",
+        "description": "An exit redeems your shares for the vault's asset, such as USDG, straight to your wallet. There is no swap at launch.",
         "scene": "harbour-routing"
       },
       {
@@ -196,7 +196,7 @@
     "items": [
       { "id": "empty-vault", "kind": "featured", "label": "Liquidity limit", "title": "The alarm is live. The vault is fully lent out.", "body": "An alarm can't create liquidity. Canopy withdraws whatever is liquid and keeps trying while the alarm is live, but there may be nothing to withdraw.", "attribution": "Product limit" },
       { "id": "rumour", "kind": "text", "label": "False alarms", "title": "A warning turns out to be wrong.", "body": "An unneeded exit gives up your position. Requiring two signals reduces false fires, but can't remove them.", "attribution": "Product limit" },
-      { "id": "same-asset", "kind": "text", "label": "No swap in v1", "title": "The stablecoin itself is the problem.", "body": "You get the vault's own asset. An exit from a vault in a failing stablecoin doesn't help, so Canopy doesn't offer that alarm on those vaults.", "attribution": "Product limit" },
+      { "id": "same-asset", "kind": "text", "label": "No swap at launch", "title": "The stablecoin itself is the problem.", "body": "You get the vault's own asset. An exit from a vault in a failing stablecoin doesn't help, so Canopy doesn't offer that alarm on those vaults.", "attribution": "Product limit" },
       { "id": "destination", "kind": "text", "label": "Permission model", "title": "A keeper runs the exit.", "body": "The keeper can't choose a payout address. The contract pays the position owner. Contract risk still applies.", "attribution": "How it works" },
       { "id": "gates", "kind": "text", "label": "Protocol restrictions", "title": "The vault turns on a share gate.", "body": "A curator can switch on share-transfer gates that block the standard exit. The app reads each vault's gates and won't arm one that would block you.", "attribution": "Product limit" },
       { "id": "unpaid", "kind": "text", "label": "Separate billing", "title": "A plan payment lapses.", "body": "The exit contract has no fee logic. Canopy's keepers run paid wallets, and anyone can run an exit for an armed position with the open-source keeper. Exit Now stays free.", "attribution": "How it works" },
