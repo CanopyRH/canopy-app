@@ -6,6 +6,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { webhookCallback } from "grammy";
 import { alarmBookAbi, erc20Abi, routerAbi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
+import { isLevelKey } from "./api/levels";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
 import { alertKeyboard, createBot, notifyText } from "./bot/bot";
@@ -240,7 +241,7 @@ if (run("indexer") && contracts) {
         if (keeper) await onFired(keeper, f.key, firedAt);
         const kind = await r.detectorKind(f.key);
         // Anyone can arm a key of their own on a real vault, so followers only hear about the vault's own presets.
-        const armed = (await r.vaultsFor(f.key)).filter((v) => isPreset(v as Address, f.key));
+        const armed = (await r.vaultsFor(f.key)).filter((v) => isPreset(v as Address, f.key) || (listed.includes(v.toLowerCase()) && isLevelKey(v as Address, f.key)));
         const once = (vault: string) => r.claimAlert(vault, `fired:${f.key}:${firedAt}`, now(), 2 * ALARM_TTL);
         for (const vault of armed) {
           if (!(await once(vault))) continue;

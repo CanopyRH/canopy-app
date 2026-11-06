@@ -1,5 +1,6 @@
 import { decodeFunctionResult, encodeFunctionData, getAbiItem, toEventSelector, type Address, type Hex, type PublicClient } from "viem";
 import { alarmBookAbi, erc20Abi, multicall3Abi, positionManagerAbi, routerAbi, vaultAbi } from "../chain/abi";
+import { isOwnKey } from "../api/levels";
 import { isPreset, Kind } from "../api/presets";
 import { keeperShouldRun } from "../billing/prepaid";
 import type { Repo } from "../store/repo";
@@ -483,7 +484,8 @@ export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECK
     const targets = await d.repo.detectorTargets(keys);
     const own = (k: Hex) => {
       const t = targets.get(k.toLowerCase());
-      return t !== undefined && d.listed!.has(t) && isPreset(t as Address, k);
+      // A listed vault's presets and its five alarm levels. Keys come from liveKeys, so they are already paid-only when the keeper is.
+      return t !== undefined && d.listed!.has(t) && isOwnKey(t as Address, k);
     };
     first = keys.filter(own);
     rest = keys.filter((k) => !own(k)).sort((a, b) => (CHECKPOINTED.get(a.toLowerCase()) ?? 0) - (CHECKPOINTED.get(b.toLowerCase()) ?? 0)).slice(0, max);
