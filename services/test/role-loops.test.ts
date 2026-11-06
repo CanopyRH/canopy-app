@@ -8,7 +8,7 @@
 //   in a loop of their own.
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { numberToHex, type Address, type Hex } from "viem";
+import { numberToHex, toFunctionSelector, type Address, type Hex } from "viem";
 import { generatePrivateKey } from "viem/accounts";
 import type { Db } from "../src/store/db";
 import { repo } from "../src/store/repo";
@@ -32,6 +32,8 @@ let slow = new Set<string>();
 let listedFirstRead = 0;
 let rpcDelayMs = 50;
 
+const V2_VIEWS = new Set<string>([toFunctionSelector("MAX_SWAPS()"), toFunctionSelector("REBASE_AFTER()")]);
+
 async function rpcNode(req: Request) {
   const one = async (m: { id: number; method: string; params: unknown[] }) => {
     const target = ((m.params?.[0] as { to?: string; address?: string } | string | undefined) ?? "") as never as { to?: string } | string;
@@ -42,6 +44,12 @@ async function rpcNode(req: Request) {
       case "eth_chainId": return { jsonrpc: "2.0", id: m.id, result: "0x1237" };
       case "eth_blockNumber": return { jsonrpc: "2.0", id: m.id, result: numberToHex(1000n) };
       case "eth_getCode": return { jsonrpc: "2.0", id: m.id, result: "0x6001" };
+      case "eth_call": {
+        // The startup version check reads two views only v2 has. Every other call reverts.
+        const c = m.params[0] as { data?: string; input?: string };
+        if (V2_VIEWS.has((c.data ?? c.input ?? "").slice(0, 10))) return { jsonrpc: "2.0", id: m.id, result: `0x${"0".repeat(63)}4` };
+        return { jsonrpc: "2.0", id: m.id, error: { code: 3, message: "execution reverted" } };
+      }
       default: return { jsonrpc: "2.0", id: m.id, error: { code: 3, message: "execution reverted" } };
     }
   };

@@ -13,6 +13,7 @@ import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
+import { announceRefusal, ContractVersionError, requireV2 } from "./chain/version";
 import { deepReorgText, stuckLogText, type StuckLog } from "./indexer/retry";
 import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, recheckRouter, syncLogs, type ReorgInfo } from "./indexer/indexer";
 import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, gasFor, onFired, pokeAndQueue, queueNewAlarms, SMALL_CALL_GAS, type AlarmCursor, type KeeperDeps } from "./keeper/keeper";
@@ -69,7 +70,25 @@ export function stop() {
   server?.stop(true);
 }
 
+const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
+// Bot buttons open the web app, which is a different host from this service's webhook address.
+const appUrl = env.APP_URL ?? env.PUBLIC_URL;
+const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db);
+
 await migrate(db);
+// Every service checks, before it touches anything, that the configured contracts are v2. A service started on v1 addresses
+// by mistake would index and act on the wrong contracts, even where CONTRACT_SWITCH is set.
+if (contracts) {
+  try {
+    await requireV2(client, { router, alarmBook });
+  } catch (e) {
+    if (!(e instanceof ContractVersionError)) throw e;
+    console.error("contract version check failed:", e.message);
+    const chat = env.OPS_CHAT_ID;
+    await announceRefusal(r, e, { router, alarmBook }, chat === undefined ? undefined : (text) => bot.api.sendMessage(chat, text), now).catch(() => {});
+    process.exit(1);
+  }
+}
 // The database may hold state from other contracts (v1). The first service to start on new addresses clears it, once.
 // That only happens when the operator says so (CONTRACT_SWITCH is this deploy's router). Any other service whose addresses
 // differ from the stored ones, such as an old copy that restarts after the switch, logs, tells the ops chat and exits.
@@ -90,10 +109,6 @@ if (contracts) {
 /** Every writer calls this at the start of a pass: the stored addresses must still be this process's. */
 const fence = contracts ? contractFence(db, { router, alarmBook }) : undefined;
 const routerName = routerCursor(router), alarmsName = alarmsCursor(alarmBook);
-const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
-// Bot buttons open the web app, which is a different host from this service's webhook address.
-const appUrl = env.APP_URL ?? env.PUBLIC_URL;
-const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db);
 const sendAlert = (chat: number, text: string) => bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
 const queueAlert = (vault: string, text: string) => enqueueAlert(r, vault, text, now());
 const vaultName = async (vault: string) => ((await r.card(vault)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? vault;

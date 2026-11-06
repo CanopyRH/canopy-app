@@ -62,6 +62,9 @@ const rpcLog = (l: RpcLog) => ({
 function callResult(to: string, data: Hex): Hex {
   const all = [...(routerAbi as Abi), ...(alarmBookAbi as Abi)] as Abi;
   const { functionName } = decodeFunctionData({ abi: all, data });
+  // The startup version check: only v2 contracts have these.
+  if (functionName === "MAX_SWAPS") return encodeFunctionResult({ abi: routerAbi as Abi, functionName: "MAX_SWAPS", result: 4n });
+  if (functionName === "REBASE_AFTER") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "REBASE_AFTER", result: 604_800n });
   if (functionName === "isArmed") return encodeFunctionResult({ abi: routerAbi as Abi, functionName: "isArmed", result: true });
   if (functionName === "state") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "state", result: [true, FIRED_AT, 0n, 0n, 0n, 0n, 0n, 0n] });
   throw new Error(`reverted ${functionName} on ${to}`);
