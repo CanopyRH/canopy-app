@@ -91,6 +91,10 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   Watchers cap their own deadlines at 10 to 30 minutes.
 - **The sender of an exit controls its gas.** A sender who supplies too little gas for the optional swap makes it skip,
   and the owner gets the raw token instead of the stablecoin. The amount is never less than what the vault paid out.
+- **Alarm levels are plain SHARE_DROP keys.** The app offers five "Vault loss" levels per vault (0.5%, 1%, 2%, 5% and 10%). Each
+  is armed only if the contract calls it armable, so a level that is tripped, or fired in the last 24 hours, is not
+  offered, and a lasting loss makes it unavailable until it is rebased. The keeper gives a listed vault's levels the
+  same treatment as its presets, and only those five keys: any other threshold is an ordinary key.
 - **A position stays armed after an exit**, with nothing left in it. That's harmless once the alarm's 24 hours are
   over: if the owner deposits into the same vault again before then, a keeper can exit the new shares on the same
   firing. Disarm it to tidy up.

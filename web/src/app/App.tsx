@@ -12,6 +12,7 @@ import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
 import { linkStep, parseDeepLink, type DeepLink } from "../deeplink";
 import { LINK_COPY } from "../copy/exitlink";
 import ExitPreview from "./ExitPreview";
+import { LevelPicker } from "./LevelPicker";
 import { receiptLink } from "../receipt";
 import WalletsPanel from "./wallets/WalletsPanel";
 import type { Payout } from "../stableExit";
@@ -162,6 +163,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
           const on = picked.includes(preset.key);
           return <label key={preset.key} className={`cd-alarm-option ${on ? "is-selected" : ""}`}><input type="checkbox" disabled={status !== "clear" || busy} checked={on} onChange={(e) => toggle(preset.key, e.target.checked)} /><span className="cd-checkbox-mark">{on && <Check size={12} strokeWidth={3} />}</span><span><strong>{preset.name}</strong><small>{status === "going-off" ? COPY.alarmTripped : status === "unreadable" ? COPY.alarmUnreadable : preset.note}</small></span>{preset.requires && <span className="cd-confirmation-tag">Watcher confirms</span>}</label>;
         })}{views === null && <p className="cd-caption">{COPY.reading}</p>}</div>
+        {views !== null && <LevelPicker io={net.alarmIo} vault={row.vault.address} picked={picked} setPicked={setPicked} busy={busy} />}
         {(views ?? []).some((v) => v.status === "going-off") && <p className="cd-inline-note"><TriangleAlert size={15} />{row.state?.armed ? COPY.alarmExitArmed : COPY.alarmExitUnarmed}</p>}
         <details className="cd-advanced"><summary>Terms</summary><pre className="cd-risk-text">{TERMS}</pre></details>
         <label className="cd-terms"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /> {COPY.termsAccept}</label>
