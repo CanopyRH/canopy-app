@@ -43,11 +43,23 @@ describe("per-chain config", () => {
     expect(base.vaults.every((v) => v.asset === "USDC" && v.name.length > 0)).toBe(true);
   });
 
-  test("Base contracts stay null until the Base deploy", () => {
-    expect(mainnetBase).toEqual({ router: null, adapter: null, alarmBook: null, planPayTo: null, apiUrl: "", walletConnectProjectId: null });
-    expect([base.router, base.adapter, base.alarmBook, base.planPayTo]).toEqual([null, null, null, null]);
+  // services/deploy/web-base-config.ts fills mainnet.base.json at release, from deploy/out/8453/deployment.json. Until then it is
+  // all null and Base is hidden. Once filled, it must be exactly that deployment: never a fork rehearsal's addresses.
+  test("Base contracts stay null until the Base deploy, then match the recorded Base deployment", () => {
     // mainnet.base.json fills the same address fields as mainnet.json.
     expect(Object.keys(mainnetBase).sort()).toEqual(Object.keys(mainnet).sort());
+    if (mainnetBase.router === null) {
+      expect(mainnetBase).toEqual({ router: null, adapter: null, alarmBook: null, planPayTo: null, apiUrl: "", walletConnectProjectId: null });
+      expect([base.router, base.adapter, base.alarmBook, base.planPayTo]).toEqual([null, null, null, null]);
+      expect(offered(CHAINS)).toEqual([robinhood]);
+      return;
+    }
+    const d = JSON.parse(readFileSync(join(import.meta.dir, "../../deploy/out/8453/deployment.json"), "utf8")) as { router: string; adapter: string; alarmBook: string; settings: { chainId: number; planPayTo: string; apiUrl: string } };
+    expect(d.settings.chainId).toBe(8453);
+    expect(mainnetBase).toMatchObject({ router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: d.settings.planPayTo });
+    expect(mainnetBase.apiUrl).toStartWith("https://");
+    const rehearsal = JSON.parse(readFileSync(join(import.meta.dir, "../../deploy/out/8453-rehearsal/deployment.json"), "utf8")) as { router: string };
+    expect((mainnetBase.router as string).toLowerCase()).not.toBe(rehearsal.router.toLowerCase());
   });
 
   test("one WalletConnect project serves both networks", () => {
