@@ -199,7 +199,11 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
 
 if (run("keeper") && keeper) {
   every(1_000, "poke", () => pokeAndQueue(keeper));
-  every(1_000, "exits", () => drainExits(keeper));
+  // Listed vaults' exits run in a loop of their own, so a queue of slow or costly jobs elsewhere never waits in front of them.
+  if (listed.length > 0) {
+    every(1_000, "exits", () => drainExits(keeper, "listed"));
+    every(1_000, "exits unlisted", () => drainExits(keeper, "unlisted"));
+  } else every(1_000, "exits", () => drainExits(keeper));
   // Watchers and the indexer run on other hosts, so this process picks up their work from the shared database.
   every(2_000, "alarm queue", async () => {
     for (const a of await r.recentAlarms(now() - ALARM_TTL)) await onFired(keeper, a.key as Hex, Number(a.fired_at));

@@ -142,10 +142,23 @@ export const repo = (db: Db) => ({
   async enqueue(kind: string, dedupe: string, payload: unknown, runAt: number) {
     await db.query(`INSERT INTO jobs (kind, dedupe, payload, run_at, created_at) VALUES ($1,$2,$3::text::jsonb,$4,$4) ON CONFLICT (dedupe) DO NOTHING`, [kind, dedupe, JSON.stringify(payload), runAt]);
   },
-  async dueJobs(kind: string, now: number, limit = 32) {
+  /**
+   * Due jobs, oldest first. With `listed`, jobs whose payload names one of those targets come first, so a queue full of
+   * other jobs can never keep them out of the fetched page; `only` narrows the page to one side.
+   */
+  async dueJobs(kind: string, now: number, limit = 32, order?: { listed: readonly string[]; only?: "listed" | "unlisted" }) {
+    const listed = (order?.listed ?? []).map((t) => t.toLowerCase()).filter((t) => /^0x[0-9a-f]{40}$/.test(t));
+    if (!order || listed.length === 0) {
+      return db.query<{ id: string; payload: unknown; attempts: number }>(
+        `SELECT id, payload, attempts FROM jobs WHERE kind=$1 AND NOT done AND run_at<=$2 ORDER BY run_at, id LIMIT $3`,
+        [kind, now, limit],
+      );
+    }
+    const isListed = `(lower(payload->>'target') = ANY($4::text[]))`;
+    const only = order.only === "listed" ? `AND ${isListed}` : order.only === "unlisted" ? `AND NOT ${isListed}` : "";
     return db.query<{ id: string; payload: unknown; attempts: number }>(
-      `SELECT id, payload, attempts FROM jobs WHERE kind=$1 AND NOT done AND run_at<=$2 ORDER BY run_at LIMIT $3`,
-      [kind, now, limit],
+      `SELECT id, payload, attempts FROM jobs WHERE kind=$1 AND NOT done AND run_at<=$2 ${only} ORDER BY ${isListed} DESC, run_at, id LIMIT $3`,
+      [kind, now, limit, `{${listed.join(",")}}`],
     );
   },
   async finishJob(id: string) {

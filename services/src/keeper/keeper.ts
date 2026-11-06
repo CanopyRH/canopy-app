@@ -16,6 +16,8 @@ export const CHECKS_PER_CALL = 250;
 export const JOB_BUDGET_MS = 45_000;
 /** A job that ran out of time waits this long, so it can't take the budget on every pass. */
 export const SLOW_RETRY_SEC = 300;
+/** No new job starts once a pass has run this long. The rest stay due for the next pass, which fetches listed vaults' jobs first. */
+export const PASS_BUDGET_MS = 90_000;
 /** How long a key whose own check fails stays out of the shared check. */
 export const QUARANTINE_SEC = 600;
 const QUARANTINE = new Map<string, number>();
@@ -36,6 +38,8 @@ export interface KeeperDeps {
   listed?: ReadonlySet<string>;
   /** Overrides JOB_BUDGET_MS, for tests. */
   jobBudgetMs?: number;
+  /** Overrides PASS_BUDGET_MS, for tests. */
+  passBudgetMs?: number;
   /** Keys left out of the shared check until a time. Defaults to one map per process. */
   quarantine?: Map<string, number>;
 }
@@ -45,11 +49,22 @@ const prepFor = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? dealloc
 
 class OverBudget extends Error {}
 
-/** Gives up waiting on a job after `ms`. The job itself can't be cancelled, but the keeper moves on to the next one. */
-async function withBudget<T>(p: Promise<T>, ms: number): Promise<T> {
+/**
+ * Gives up waiting on a job after `ms`. A read in flight can't be cancelled, so the job is told through its signal
+ * instead: it checks the signal before every send, and a job that runs on past its budget never sends late.
+ */
+async function withBudget<T>(job: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const stop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new OverBudget(`over the ${ms} ms budget`);
+      stop.abort(e);
+      reject(e);
+    }, ms);
+  });
   try {
-    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new OverBudget(`over the ${ms} ms budget`)), ms)))]);
+    return await Promise.race([job(stop.signal), late]);
   } finally {
     clearTimeout(timer);
   }
@@ -184,8 +199,8 @@ export async function gateExit(d: KeeperDeps, j: ExitJob, asset: Address, amount
   return gateOne(results as readonly SimResult[], exitAt, 0, exitAt + 1, asset);
 }
 
-/** Runs one exit. Returns "done" or "retry". Retries end when the 24h alarm expires. */
-export async function runExit(d: KeeperDeps, j: ExitJob): Promise<"done" | "retry"> {
+/** Runs one exit. Returns "done" or "retry". Retries end when the 24h alarm expires. Nothing is sent once `signal` aborts. */
+export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): Promise<"done" | "retry"> {
   if (d.now() > j.firedAt + ALARM_TTL) return "done";
   const shares = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] });
   const allowed = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] });
@@ -208,6 +223,7 @@ export async function runExit(d: KeeperDeps, j: ExitJob): Promise<"done" | "retr
   }
 
   const exitData = encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, amount] });
+  signal?.throwIfAborted();
   if (prep.length === 0) {
     await d.send({ ...direct, data: exitData });
   } else {
@@ -252,9 +268,11 @@ async function exitable(d: KeeperDeps, jobs: ExitJob[]): Promise<bigint[]> {
  * Exits many positions in one vault with one transaction. Each exit may fail alone, and the chain says afterwards which landed.
  * The gas limit comes from the simulation, because with failures allowed an estimate could settle on too little and only the
  * exits would fail. Bundles stay within one vault, so a vault built to burn gas can only cost its own holders.
- * Returns the jobs the gate turned down, for the one-by-one path to size. Jobs over the gas budget stay due for the next pass.
+ * Returns the jobs for the one-by-one path: those the gate turned down, for it to size, and any whose exit alone costs
+ * more than the bundle budget, which only ever run on their own. A job that fits alone but not beside the others stays
+ * due; it is the oldest of its vault's jobs, so it leads the next pass's bundle and can't be passed over twice.
  */
-export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]> {
+export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSignal): Promise<DueJob[]> {
   const live = d.now();
   const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL);
   const totals = await exitable(d, open.map((x) => x.payload as ExitJob));
@@ -272,8 +290,9 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
   const { results } = await d.client.simulateCalls({ account: d.account, calls });
   const sim = results as readonly SimResult[];
 
-  const gasOf = (from: number, to: number) => sim.slice(from, to).reduce((s, r) => s + r.gasUsed, 0n);
-  let gas = gasOf(0, prep.length);
+  const gasOf = (from: number, to: number) => sim.slice(from, to).reduce((s, r) => s + (r.gasUsed ?? 0n), 0n);
+  const prepGas = gasOf(0, prep.length);
+  let gas = prepGas;
   const picked: typeof jobs = [];
   const refused: DueJob[] = [];
   for (const [i, x] of jobs.entries()) {
@@ -282,8 +301,13 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
       refused.push(x.job);
       continue;
     }
-    const cost = sim[at + 3]!.gasUsed;
-    if (gas + cost > BUNDLE_GAS) break;
+    const cost = sim[at + 3]!.gasUsed ?? 0n;
+    // Too big to share a transaction with anything, ever: it runs alone, where its own gas limit applies.
+    if (prepGas + cost > BUNDLE_GAS) {
+      refused.push(x.job);
+      continue;
+    }
+    if (gas + cost > BUNDLE_GAS) continue;
     gas += cost;
     picked.push(x);
   }
@@ -293,6 +317,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
     ...prep.map((c) => ({ target: c.to, allowFailure: true, callData: c.data })),
     ...picked.map((x) => ({ target: d.router, allowFailure: true, callData: exitData(x) })),
   ];
+  signal?.throwIfAborted();
   await d.send({ to: d.multicall3, data: encodeFunctionData({ abi: multicall3Abi, functionName: "aggregate3", args: [all] }), gas: (gas * 3n) / 2n + 100_000n });
   const left = await exitable(d, picked.map((x) => x.j));
   for (const [i, x] of picked.entries()) {
@@ -304,13 +329,18 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
 
 /**
  * Works through due exit jobs, one transaction per vault when several are due. A failed job waits 30 s and tries again; it
- * never blocks the others. Listed vaults go first, and each job has a time budget, so a contract built to stall the
- * keeper only delays itself.
+ * never blocks the others. Listed vaults' jobs are fetched first, each job has a time budget and the pass has one too, so
+ * a contract built to stall the keeper only delays itself. `scope` lets the listed vaults run in a loop of their own.
  */
-export async function drainExits(d: KeeperDeps) {
+export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlisted" = "all") {
   const budget = d.jobBudgetMs ?? JOB_BUDGET_MS;
+  const passEnd = Date.now() + (d.passBudgetMs ?? PASS_BUDGET_MS);
+  const listed = [...(d.listed ?? [])];
+  // With no listed set every vault is treated alike, so there is nothing "unlisted" to run apart.
+  if (listed.length === 0 && scope === "unlisted") return;
+  const order = listed.length ? { listed, only: scope === "all" ? undefined : scope } : undefined;
   const byVault = new Map<string, DueJob[]>();
-  for (const job of await d.repo.dueJobs("exit", d.now())) {
+  for (const job of await d.repo.dueJobs("exit", d.now(), 32, order)) {
     const target = (job.payload as ExitJob).target.toLowerCase();
     byVault.set(target, [...(byVault.get(target) ?? []), job]);
   }
@@ -318,12 +348,13 @@ export async function drainExits(d: KeeperDeps) {
   const groups = [...byVault.values()].sort((a, b) => listedFirst(a[0]!, b[0]!));
   const single: DueJob[] = [];
   for (const group of groups) {
+    if (Date.now() >= passEnd) break;
     if (group.length === 1) {
       single.push(...group);
       continue;
     }
     try {
-      single.push(...(await withBudget(runBundle(d, group), budget)));
+      single.push(...(await withBudget((signal) => runBundle(d, group, signal), budget)));
     } catch (e) {
       console.warn("bundle", (e as Error).message);
       await d.repo.bump("bundle_error");
@@ -334,9 +365,14 @@ export async function drainExits(d: KeeperDeps) {
   }
   single.sort(listedFirst);
   for (const job of single) {
+    // Out of time: what is left stays due, and the next pass fetches listed vaults' jobs ahead of it.
+    if (Date.now() >= passEnd) {
+      await d.repo.bump("exit_pass_budget");
+      break;
+    }
     const j = job.payload as ExitJob;
     try {
-      if ((await withBudget(runExit(d, j), budget)) === "done") await d.repo.finishJob(job.id);
+      if ((await withBudget((signal) => runExit(d, j, signal), budget)) === "done") await d.repo.finishJob(job.id);
       else await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
     } catch (e) {
       console.warn("exit", j.posId, (e as Error).message);
