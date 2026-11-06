@@ -40,6 +40,8 @@ export interface ApiDeps {
   healthToken?: string;
   /** Reads allowed per address per minute, and how many proxies to trust. Defaults to 120 and one proxy. */
   rateLimit?: RateLimit;
+  /** Whether a vault answers `paused()`. Without it no vault is offered the Paused preset. */
+  answersPaused?: (vault: Address) => Promise<boolean>;
   /** Feature routes. Defaults to the files in src/plugins/. */
   plugins?: Plugin[];
 }
@@ -79,10 +81,11 @@ export function createApi(d: ApiDeps) {
     const card = await d.repo.card(t.toLowerCase());
     return card ? c.json(card) : c.json({ error: "unknown vault" }, 404);
   });
-  app.get("/presets/:target", (c) => {
+  app.get("/presets/:target", async (c) => {
     const t = vaultParam(c.req.param("target"));
     if (!t) return c.json({ error: "bad address" }, 400);
-    const out = presetsFor(t).map((p) => ({ name: p.name, note: p.note, key: p.key, detector: { ...p.detector, threshold: p.detector.threshold.toString() } }));
+    const paused = await (d.answersPaused?.(t) ?? Promise.resolve(false)).catch(() => false);
+    const out = presetsFor(t, t, { paused }).map((p) => ({ name: p.name, note: p.note, key: p.key, detector: { ...p.detector, threshold: p.detector.threshold.toString() } }));
     return c.json(out);
   });
   app.post("/watcher/attest", small, async (c) => {

@@ -23,6 +23,7 @@ export const vaultAbi = parseAbi([
   "function maxRedeem(address) view returns (uint256)",
   "function owner() view returns (address)",
   "function curator() view returns (address)",
+  "function paused() view returns (bool)",
 ]);
 
 /** Morpho Vault V2 only. Reads revert on other vaults, which is how V1 is told apart. */

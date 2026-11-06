@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
-import { hashTypedData, recoverAddress, type Address, type Hex } from "viem";
+import { encodeAbiParameters, hashDomain, hashTypedData, keccak256, recoverAddress, stringToHex, type Address, type Hex } from "viem";
 import { drainVelocity, feedSignal, governance, paused, shareDrop, type Signal } from "../src/detectors";
 import { decide } from "../src/engine/decide";
 import { buildPrompt, parseClassification } from "../src/engine/llmClassify";
@@ -111,6 +111,24 @@ describe("attestations", () => {
       message: { key, evidence: ev, deadline: 100n },
     });
     expect(await recoverAddress({ hash, signature: sigA })).toBe(a.address);
+  });
+
+  test("the signing domain is AlarmBook v2's: version 2, the same separator Deploy.s.sol checks", () => {
+    expect(attestDomain(book, 8453).version).toBe("2");
+    const typeHash = keccak256(stringToHex("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
+    const expected = keccak256(encodeAbiParameters(
+      [{ type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "address" }],
+      [typeHash, keccak256(stringToHex("Canopy AlarmBook")), keccak256(stringToHex("2")), 8453n, book],
+    ));
+    expect(hashDomain({ domain: attestDomain(book, 8453), types: { EIP712Domain: [
+      { name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" },
+    ] } })).toBe(expected);
+  });
+
+  test("a version 1 signature does not recover the watcher under the v2 domain", async () => {
+    const old = await a.signTypedData({ domain: { ...attestDomain(book, 8453), version: "1" }, types: attestTypes, primaryType: "Attest", message: { key, evidence: ev, deadline: 100n } });
+    const hash = hashTypedData({ domain: attestDomain(book, 8453), types: attestTypes, primaryType: "Attest", message: { key, evidence: ev, deadline: 100n } });
+    expect(await recoverAddress({ hash, signature: old })).not.toBe(a.address);
   });
 
   test("quorum is sorted, deduplicated and sized", () => {

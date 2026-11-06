@@ -11,7 +11,7 @@ export const attestTypes = {
 
 export const attestDomain = (alarmBook: Address, chainId: number) => ({
   name: "Canopy AlarmBook",
-  version: "1",
+  version: "2", // AlarmBook v2; a signature made under version 1 is rejected
   chainId,
   verifyingContract: alarmBook,
 });

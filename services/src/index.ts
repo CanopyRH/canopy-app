@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, fallback, getAbiItem, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { webhookCallback } from "grammy";
-import { alarmBookAbi, erc20Abi } from "./chain/abi";
+import { alarmBookAbi, erc20Abi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
@@ -326,6 +326,18 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
   });
 }
 
+/** Vaults seen to answer `paused()`. A refusal is remembered for ten minutes, a yes for good. */
+const pausedSeen = new Map<string, { yes: boolean; until: number }>();
+const answersPaused = async (vault: Address) => {
+  const k = vault.toLowerCase();
+  const seen = pausedSeen.get(k);
+  if (seen && (seen.yes || seen.until > now())) return seen.yes;
+  const yes = await client.readContract({ address: vault, abi: vaultAbi, functionName: "paused" }).then(() => true, () => false);
+  if (pausedSeen.size > 10_000) pausedSeen.clear();
+  pausedSeen.set(k, { yes, until: now() + 600 });
+  return yes;
+};
+
 if (run("api") || run("bot")) {
   // grammY refuses polling once a webhook handler exists, so polling mode never creates one.
   const hook = env.BOT_MODE === "webhook" ? webhookCallback(bot, "std/http") : null;
@@ -347,6 +359,7 @@ if (run("api") || run("bot")) {
     telegram: hook ? async (u) => void (await hook(new Request("http://local", { method: "POST", body: JSON.stringify(u) }))) : undefined,
     healthToken: env.HEALTH_TOKEN,
     rateLimit: { perMin: env.RATE_LIMIT_PER_MIN, proxyHops: env.TRUSTED_PROXY_HOPS },
+    answersPaused,
     health: async () => {
       const tip = await client.getBlockNumber();
       const cursor = await r.cursor("router");

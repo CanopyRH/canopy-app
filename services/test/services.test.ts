@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { createApi } from "../src/api/server";
-import { Kind, keyOf, presetsFor, registrationOrder } from "../src/api/presets";
+import { isPreset, Kind, keyOf, presetsFor, registrationOrder } from "../src/api/presets";
 import { appKeyboard, handle, notifyFollowers } from "../src/bot/bot";
 import { claudeClassifier } from "../src/engine/classifier";
 import { onFired, type KeeperDeps } from "../src/keeper/keeper";
@@ -171,6 +171,19 @@ describe("api", () => {
     const res = await app().request(`/presets/${V}`);
     const body = (await res.json()) as { name: string }[];
     expect(body.map((p) => p.name)).toContain("Vault loss");
+    expect(body.map((p) => p.name)).not.toContain("Paused");
+  });
+  test("the presets route adds Paused only for a vault that answers paused()", async () => {
+    const withPause = createApi({
+      db, repo: r, vaults: async () => [], liveAlarms: async () => [], watchers: [], alarmBook: BOOK, chainId: 8453, now: () => 100,
+      answersPaused: async (v) => v === V,
+    });
+    const names = async (vault: string) => ((await (await withPause.request(`/presets/${vault}`)).json()) as { name: string }[]).map((p) => p.name);
+    expect(await names(V)).toContain("Paused");
+    expect(await names("0x00000000000000000000000000000000000000b1")).not.toContain("Paused");
+    // A failing read is "no", never an error.
+    const broken = createApi({ db, repo: r, vaults: async () => [], liveAlarms: async () => [], watchers: [], alarmBook: BOOK, chainId: 8453, now: () => 100, answersPaused: async () => { throw new Error("rpc down"); } });
+    expect((await broken.request(`/presets/${V}`)).status).toBe(200);
   });
   test("attest rejects outsiders and malformed bodies, and accepts a watcher", async () => {
     const post = (b: unknown) => app().request("/watcher/attest", { method: "POST", body: JSON.stringify(b) });
@@ -192,8 +205,23 @@ describe("api", () => {
 describe("presets", () => {
   test("hard alarms fire alone; soft ones are wrapped in BOTH", () => {
     const p = presetsFor(V);
-    expect(p.map((x) => x.detector.kind)).toEqual([Kind.SHARE_DROP, Kind.QUORUM, Kind.PAUSED, Kind.BOTH, Kind.BOTH]);
+    expect(p.map((x) => x.detector.kind)).toEqual([Kind.SHARE_DROP, Kind.QUORUM, Kind.BOTH, Kind.BOTH]);
     expect(p[1]!.detector.threshold).toBe(2n);
+  });
+  test("the Paused preset is offered only to a vault that answers paused()", () => {
+    expect(presetsFor(V).some((x) => x.detector.kind === Kind.PAUSED)).toBe(false);
+    expect(presetsFor(V, V, { paused: true }).map((x) => x.detector.kind)).toEqual([Kind.SHARE_DROP, Kind.QUORUM, Kind.PAUSED, Kind.BOTH, Kind.BOTH]);
+    // Six detectors to register without it, seven with it.
+    expect(registrationOrder(V)).toHaveLength(6);
+    expect(registrationOrder(V, V, { paused: true })).toHaveLength(7);
+    // A key of the vault's own presets is recognised either way.
+    const pausedKey = keyOf(registrationOrder(V, V, { paused: true }).find((d) => d.kind === Kind.PAUSED)!);
+    expect(isPreset(V, pausedKey)).toBe(true);
+  });
+  test("every drain preset uses a window AlarmBook accepts", () => {
+    for (const paused of [false, true]) {
+      for (const d of registrationOrder(V, V, { paused })) if (d.kind === Kind.DRAIN) expect(d.window).toBeGreaterThanOrEqual(1200);
+    }
   });
   test("no USDG or stablecoin depeg preset is offered", () => {
     expect(presetsFor(V).some((x) => x.detector.kind === Kind.PRICE_BELOW)).toBe(false);
@@ -207,7 +235,7 @@ describe("presets", () => {
       expect(order.indexOf(d.a)).toBeLessThan(order.indexOf(keyOf(d)));
       expect(order.indexOf(d.b)).toBeLessThan(order.indexOf(keyOf(d)));
     }
-    expect(order).toHaveLength(7);
+    expect(order).toHaveLength(6);
   });
   test("keys match the detector", () => {
     for (const x of presetsFor(V)) expect(x.key).toBe(keyOf(x.detector));

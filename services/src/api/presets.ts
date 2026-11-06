@@ -19,9 +19,21 @@ const make = (name: string, note: string, d: Omit<Detector, "a" | "b"> & Partial
   return { name, note, detector, key: keyOf(detector) };
 };
 
+/** What is known about a vault that changes which presets it can use. */
+export interface PresetOpts {
+  /**
+   * Whether the vault answers `paused()`. Most vaults have no pause switch, so a Paused alarm on them could never fire, and
+   * arming it would only give false comfort. Off unless the vault was seen to answer.
+   */
+  paused?: boolean;
+}
+
+/** DRAIN windows below 1200 s are refused by AlarmBook (its sampling period is half the window). Presets use an hour. */
+export const DRAIN_WINDOW = 3600;
+
 /** Common options. The user chooses; nothing is armed by default. */
-export function presetsFor(vault: Address, protocol: Address = vault): Preset[] {
-  const drain = make("Vault drain", "Soft. Needs a watcher to confirm.", { kind: Kind.DRAIN, target: vault, threshold: 2500n, window: 3600 });
+export function presetsFor(vault: Address, protocol: Address = vault, opts: PresetOpts = {}): Preset[] {
+  const drain = make("Vault drain", "Soft. Needs a watcher to confirm.", { kind: Kind.DRAIN, target: vault, threshold: 2500n, window: DRAIN_WINDOW });
   const curator = make("Curator change", "Soft. Needs a watcher to confirm.", { kind: Kind.ADDRESS_CHANGE, target: vault, threshold: 0n, window: 0, a: sel("curator()") });
   const quorum = make("Exploit confirmed", "Two approved watchers sign it.", { kind: Kind.QUORUM, target: protocol, threshold: 2n, window: 0 });
   const both = (p: Preset): Preset => ({
@@ -32,22 +44,22 @@ export function presetsFor(vault: Address, protocol: Address = vault): Preset[] 
   return [
     make("Vault loss", "The share price fell 0.5% below its high.", { kind: Kind.SHARE_DROP, target: vault, threshold: 50n, window: 0 }),
     quorum,
-    make("Paused", "The vault reports that it is paused.", { kind: Kind.PAUSED, target: vault, threshold: 0n, window: 0 }),
+    ...(opts.paused ? [make("Paused", "The vault reports that it is paused.", { kind: Kind.PAUSED, target: vault, threshold: 0n, window: 0 })] : []),
     both(drain),
     both(curator),
   ];
 }
 
-/** Whether a key belongs to a vault's own presets, directly or as a part of one. */
-export const isPreset = (vault: Address, key: string) => registrationOrder(vault).some((d) => keyOf(d) === key);
+/** Whether a key belongs to a vault's own presets, directly or as a part of one. The Paused alarm counts, whether or not this vault offers it. */
+export const isPreset = (vault: Address, key: string) => registrationOrder(vault, vault, { paused: true }).some((d) => keyOf(d) === key);
 
 /** Every detector a vault's presets need, with dependencies first. AlarmBook rejects BOTH until its parts exist. */
-export function registrationOrder(vault: Address, protocol: Address = vault): Detector[] {
+export function registrationOrder(vault: Address, protocol: Address = vault, opts: PresetOpts = {}): Detector[] {
   const seen = new Map<Hex, Detector>();
   const add = (p: Preset) => {
     for (const r of p.requires ?? []) add(r);
     if (!seen.has(p.key)) seen.set(p.key, p.detector);
   };
-  for (const p of presetsFor(vault, protocol)) add(p);
+  for (const p of presetsFor(vault, protocol, opts)) add(p);
   return [...seen.values()];
 }
