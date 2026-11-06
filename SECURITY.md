@@ -54,9 +54,11 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   sighting (it only lapses after the window), so a flash deposit can't hold a real drain off. The reference is the
   lower of the lows of the last two sampling periods, so one flash-inflated sample in a period nobody else sampled can't
   fire the key: that takes two consecutive periods with no honest sample.
-- **V3-04 and V3V-01 (DRAIN on its own).** `arm` refuses any DRAIN key (`DrainNeedsQuorum`): DRAIN can only be armed as a
-  part of a BOTH key paired with a QUORUM key, so a DRAIN fire exits someone only if two active watchers also signed
-  within 24 hours. AlarmBook also reads a DRAIN key with a pending sighting as not armable.
+- **V3-04, V3V-01 and V3B-01 (DRAIN without a quorum).** `arm` accepts a DRAIN key only as a part of a BOTH key whose
+  other part is a QUORUM key. It refuses a bare DRAIN key and a BOTH key with a DRAIN part and any other non-QUORUM part,
+  two DRAIN parts included (`DrainNeedsQuorum`), and a BOTH key with a BOTH part (`NestedBoth`). So a DRAIN fire exits
+  someone only if two active watchers also signed within the BOTH key's 24 hours. AlarmBook also reads a DRAIN key with a
+  pending sighting as not armable.
 - **V3-03 (swap leg decimals).** `arm` reads each leg token's own `decimals()` (gas-capped) and refuses a leg that
   states other decimals, which would have shrunk the oracle minimum by a power of ten.
 - **A2-04 (watchers).** Approvals wait 2 days, last at most a year, and lapse unless extended.
@@ -71,9 +73,9 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   to sample a vault for two consecutive periods can inflate its reference with flash deposits, and by then taking every
   roll with a flash deposit keep the key tripped and refiring daily even while a keeper samples each period. Low samples
   taken by `checkpoint` lower the reference, so a real loss can later go unseen. None of this can force an exit without
-  a watcher quorum: the router refuses to arm a DRAIN key on its own, and the BOTH key it can be armed in fires only if
-  its QUORUM part (two active watchers' signatures) also fired within 24 hours. What the attacker gains is a DRAIN part
-  that is already "fired", so a quorum signed for any reason during that time would complete the BOTH key.
+  a watcher quorum: the router arms a DRAIN key only inside BOTH(DRAIN, QUORUM), which fires only if its QUORUM part
+  (two active watchers' signatures) also fired within 24 hours. What the attacker gains is a DRAIN part that is already
+  "fired", so a quorum signed for any reason during that time would complete the BOTH key.
 - **A PAUSED detector on a target without the view never fires.** If the view reverts, the key reads "not paused".
   None of the five launch vaults has a `paused()` view, so the "Paused" preset can't fire on them.
 - **No admin delay by default.** The admin can't move funds, change who is paid or touch an armed position's alarms or
