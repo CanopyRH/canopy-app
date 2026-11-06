@@ -1,13 +1,15 @@
 import React,{useEffect,useState} from 'react';
 import {ArrowUpRight,Check,Copy,Share2,Timer,TriangleAlert,Hourglass,SearchX,WifiOff,CircleHelp} from 'lucide-react';
 import {Shell} from '../Shell.jsx';
-import {CHAINS} from '../../config';
+import {CHAINS,offered} from '../../config';
+// Only networks with live contracts, as in the app header. Base joins this list on its deploy.
+const OFFERED=offered(CHAINS);
 import {loadReceipt,parseFragment,formatDelay,ReceiptError} from '../../receipt';
 import './receipt.css';
 
 const NOTES={
   pending:{icon:Hourglass,title:'This transaction is still pending',body:'It has not been included in a block yet. This page checks again every few seconds.'},
-  missing:{icon:SearchX,title:'We could not find that transaction',body:'Check the link. The hash may be incomplete, or from another chain. Canopy runs on '+CHAINS.map((c)=>c.chainName).join(' and ')+'.'},
+  missing:{icon:SearchX,title:'We could not find that transaction',body:'Check the link. The hash may be incomplete, or from another chain. Canopy runs on '+OFFERED.map((c)=>c.chainName).join(' and ')+'.'},
   failed:{icon:TriangleAlert,title:'That transaction failed',body:'It was included in a block but did not go through, so no exit happened.'},
   'not-exit':{icon:CircleHelp,title:'That is not a Canopy exit',body:'The transaction exists, but it does not include an exit from Canopy\'s router.'},
   rpc:{icon:WifiOff,title:'Could not reach the chain',body:'The network node did not answer. Nothing is wrong with the exit itself. Try again in a moment.'},
@@ -20,8 +22,8 @@ const utc=(s)=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short',year
 const short=(a)=>a.slice(0,6)+'…'+a.slice(-4);
 
 function useFragment(){
-  const [frag,setFrag]=useState(()=>parseFragment(window.location.hash));
-  useEffect(()=>{const on=()=>setFrag(parseFragment(window.location.hash));window.addEventListener('hashchange',on);return()=>window.removeEventListener('hashchange',on);},[]);
+  const [frag,setFrag]=useState(()=>parseFragment(window.location.hash,OFFERED));
+  useEffect(()=>{const on=()=>setFrag(parseFragment(window.location.hash,OFFERED));window.addEventListener('hashchange',on);return()=>window.removeEventListener('hashchange',on);},[]);
   return frag;
 }
 
@@ -104,7 +106,7 @@ export default function Receipt(){
     <header className="wp-head rc-head">
       <div className="doc-eyebrow">EXIT RECEIPT</div>
       <h1>What fired, how fast, what came back.</h1>
-      <p className="wp-abstract">Every detail below is read straight from {frag.kind==='ok'?frag.chain.chainName:CHAINS.map((c)=>c.chainName).join(" or ")}. Canopy's servers are not involved, so this page works even if Canopy is down.</p>
+      <p className="wp-abstract">Every detail below is read straight from {frag.kind==='ok'?frag.chain.chainName:OFFERED.map((c)=>c.chainName).join(" or ")}. Canopy's servers are not involved, so this page works even if Canopy is down.</p>
     </header>
     <main className="rc-main">
       {state.status==='loading'&&frag.kind==='ok'&&<div className="rc-note" role="status" aria-live="polite"><div className="rc-spin" aria-hidden="true"/><div><h2>Reading the chain…</h2><p>Looking up the transaction.</p></div></div>}
