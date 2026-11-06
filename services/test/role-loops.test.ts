@@ -1,13 +1,11 @@
-// Audit 2 PoCs that need src/index.ts itself, loaded the way index.test.ts loads it: a stand-in chain answered in
+// The watcher and detector loops of src/index.ts, loaded the way index.test.ts loads it: a stand-in chain answered in
 // process, an in-process Postgres, and a bot whose Telegram calls are answered locally. Nothing opens a port.
 //
-// A2-L1: the watcher's feed loop checks scope once per registered QUORUM detector, and every check re-runs the whole
-//        liveKeys query. Registering a QUORUM detector is open to anyone and has no code check, so detectors are
-//        cheap, and the loop's cost grows as detectors x positions before any report is even looked at.
-// A2-M4: the detector role scans followed vaults before listed ones, one after another. Anyone can follow any
-//        contract through the bot, so slow contracts push back the scans that feed the watchers' on-chain signal.
-//
-// Run: bun test test/audit2-loops.test.ts
+// - The watcher's feed loop used to run the whole liveKeys query once per registered QUORUM detector, every pass.
+//   Registering one is open to anyone, so the loop's cost grew as detectors x positions. Now it reads live keys once.
+// - The detector role scanned followed contracts before listed vaults, one after another. Anyone can follow any
+//   contract, so slow ones pushed back the scans that feed the watchers' on-chain signal. Now listed vaults go first,
+//   in a loop of their own.
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { numberToHex, type Address, type Hex } from "viem";
@@ -28,7 +26,7 @@ const saved = { env: { ...process.env }, console: { ...console }, fetch: globalT
 let restoreModules: () => void = () => {};
 let current: { stop: () => void } | undefined;
 let db: Db;
-let counting = { liveKeys: 0 };
+let counting = { liveKeys: 0, passes: 0 };
 /** The stand-in node: how long a call to each address takes, and when the listed vault was first read. */
 let slow = new Set<string>();
 let listedFirstRead = 0;
@@ -93,6 +91,7 @@ async function freshPg() {
   db = {
     query: async (s, p) => {
       if (s.includes("WITH armed AS")) counting.liveKeys++;
+      if (s.includes("FROM feed_items WHERE at>")) counting.passes++; // the end of one feed pass
       return inner.query(s, p);
     },
     exec: inner.exec,
@@ -112,7 +111,7 @@ async function boot(role: string, tag: string) {
     CARD_VAULTS: LISTED, TELEGRAM_BOT_TOKEN: "1:test", TELEGRAM_WEBHOOK_SECRET: "w".repeat(20), BOT_MODE: "polling", LOOP_SCALE: "0.001",
   });
   for (const level of ["log", "info", "warn", "error", "debug"] as const) console[level] = () => {};
-  current = (await import(`../src/index.ts?audit2=${tag}`)) as { stop: () => void };
+  current = (await import(`../src/index.ts?loops=${tag}`)) as { stop: () => void };
 }
 
 const until = async (check: () => boolean | Promise<boolean>, ms: number) => {
@@ -124,7 +123,7 @@ const until = async (check: () => boolean | Promise<boolean>, ms: number) => {
   return false;
 };
 
-describe("A2-L1: the watcher's scope check runs the full liveKeys query once per QUORUM detector, every pass", () => {
+describe("the watcher's scope check", () => {
   async function seed(detectors: number) {
     await freshPg();
     const r = repo(db);
@@ -140,28 +139,24 @@ describe("A2-L1: the watcher's scope check runs the full liveKeys query once per
     }
   }
 
-  async function firstPass(detectors: number, tag: string) {
-    await seed(detectors);
-    counting = { liveKeys: 0 };
+  test("2,000 detectors: one liveKeys query per pass, not one per detector", async () => {
+    await seed(2_000);
+    counting = { liveKeys: 0, passes: 0 };
     const t0 = performance.now();
-    await boot("watcher", tag);
-    const done = await until(() => counting.liveKeys >= detectors, 60_000);
+    await boot("watcher", "w2000");
+    const done = await until(() => counting.passes >= 3, 60_000);
     const ms = performance.now() - t0;
+    const { liveKeys, passes } = counting;
     current?.stop();
-    return { done, ms, queries: counting.liveKeys };
-  }
-
-  test("2,000 detectors: 2,000 liveKeys queries before the first report is matched", async () => {
-    const small = await firstPass(50, "w50");
-    const big = await firstPass(2_000, "w2000");
-    saved.console.log(`A2-L1: 50 detectors -> ${small.queries} liveKeys queries, ${small.ms.toFixed(0)} ms; 2,000 detectors -> ${big.queries} queries, ${big.ms.toFixed(0)} ms (in-process Postgres, 800 armed keys)`);
-    expect(small.done && big.done).toBe(true);
-    expect(big.queries).toBeGreaterThanOrEqual(2_000);
-    expect(big.ms).toBeGreaterThan(small.ms * 5);
+    saved.console.log(`watcher scope: ${passes} passes, ${liveKeys} liveKeys queries, ${ms.toFixed(0)} ms for 3 passes over 2,000 detectors`);
+    expect(done).toBe(true);
+    // Before: 2,000 queries before the first pass could even match a report, about a minute here.
+    expect(liveKeys).toBeLessThanOrEqual(passes + 1);
+    expect(ms).toBeLessThan(15_000);
   }, 120_000);
 });
 
-describe("A2-M4: followed contracts are scanned before the listed vault, one at a time", () => {
+describe("the detector role", () => {
   async function timeToListed(follows: number, tag: string) {
     await freshPg();
     const r = repo(db);
@@ -179,13 +174,12 @@ describe("A2-M4: followed contracts are scanned before the listed vault, one at 
     return reached ? listedFirstRead - t0 : Infinity;
   }
 
-  test("40 followed contracts that answer in 50 ms hold the listed vault's first read back by seconds", async () => {
+  test("reads the listed vault first, however many slow contracts are followed", async () => {
     rpcDelayMs = 50;
     const control = await timeToListed(0, "d0");
     const attacked = await timeToListed(40, "d40");
-    saved.console.log(`A2-M4: listed vault first read after ${control.toFixed(0)} ms with no follows, ${attacked.toFixed(0)} ms behind 40 followed contracts (2 chats)`);
-    // Each followed contract costs at least a getCode and a round of reads in each of the two loops before the listed one.
-    expect(attacked).toBeGreaterThan(40 * rpcDelayMs);
-    expect(attacked).toBeGreaterThan(control * 5);
+    saved.console.log(`detector: listed vault first read after ${control.toFixed(0)} ms with no follows, ${attacked.toFixed(0)} ms with 40 slow followed contracts`);
+    // Before: behind every followed contract, each costing a getCode and a round of reads, so over 40 x 50 ms.
+    expect(attacked).toBeLessThan(5 * rpcDelayMs);
   }, 120_000);
 });

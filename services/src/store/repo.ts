@@ -129,6 +129,14 @@ export const repo = (db: Db) => ({
   async following(chatId: number): Promise<string[]> {
     return (await db.query<{ target: string }>(`SELECT target FROM vault_follows WHERE chat_id=$1 ORDER BY target`, [chatId])).map((x) => x.target);
   },
+  /** Distinct vaults followed across every chat. */
+  async followedTargets(): Promise<number> {
+    const r = await db.query<{ n: string }>(`SELECT COUNT(DISTINCT target)::text AS n FROM vault_follows`);
+    return Number(r[0]?.n ?? 0);
+  },
+  async isFollowed(target: string): Promise<boolean> {
+    return (await db.query(`SELECT 1 FROM vault_follows WHERE target=$1 LIMIT 1`, [target])).length > 0;
+  },
   async followers(target: string): Promise<number[]> {
     return (await db.query<{ chat_id: string }>(`SELECT chat_id FROM vault_follows WHERE target=$1`, [target])).map((x) => Number(x.chat_id));
   },
@@ -206,6 +214,10 @@ export const repo = (db: Db) => ({
   },
   async recordSnap(target: string, t: number, totalAssets: bigint, sharePrice: bigint) {
     await db.query(`INSERT INTO vault_snaps (target, t, total_assets, share_price) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [target, t, totalAssets.toString(), sharePrice.toString()]);
+  },
+  /** Deletes vault readings older than `before`. */
+  async pruneSnaps(before: number) {
+    await db.query(`DELETE FROM vault_snaps WHERE t<$1`, [before]);
   },
   async snaps(target: string, since: number) {
     const rows = await db.query<{ t: string; total_assets: string }>(`SELECT t, total_assets FROM vault_snaps WHERE target=$1 AND t>=$2 ORDER BY t`, [target, since]);

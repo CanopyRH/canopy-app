@@ -7,9 +7,12 @@ export const ALERT_RETRY_SEC = 30;
 
 export interface QueuedAlert { vault: string; text: string }
 
-/** Queues one alert for a vault's followers. The same text for the same vault is only queued once. */
-export function queueAlert(r: Repo, vault: string, text: string, now: number) {
-  const dedupe = `alert:${createHash("sha256").update(`${vault.toLowerCase()}\n${text}`).digest("hex")}`;
+/**
+ * Queues one alert for a vault's followers. The same text for the same vault is only queued once, unless `tag` sets it
+ * apart: a scan's "paused" alert reads the same each time, and a second pause next month is a new alert.
+ */
+export function queueAlert(r: Repo, vault: string, text: string, now: number, tag = "") {
+  const dedupe = `alert:${createHash("sha256").update(`${vault.toLowerCase()}\n${text}${tag ? `\n${tag}` : ""}`).digest("hex")}`;
   return r.enqueue("alert", dedupe, { vault, text } satisfies QueuedAlert, now);
 }
 

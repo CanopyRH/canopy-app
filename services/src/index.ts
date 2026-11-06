@@ -7,9 +7,10 @@ import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
 import { appKeyboard, createBot, notifyText } from "./bot/bot";
 import { queueAlert as enqueueAlert, queueOps, sendQueuedAlerts, sendQueuedOps } from "./bot/queue";
-import { ALARM_NAMES, alarmAlert, signalLine, watchAlert } from "./copy/alerts";
+import { ALARM_NAMES, alarmAlert, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
-import { scanVault } from "./detectors/scan";
+import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
+import { SNAP_KEEP_SEC } from "./detectors/scan";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
@@ -23,7 +24,7 @@ import { migrate, postgres } from "./store/db";
 import { repo } from "./store/repo";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
-import { quorumScope } from "./watcher/scope";
+import { quorumScope, quorumScopeNow } from "./watcher/scope";
 import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, recentReports } from "./watcher/watcher";
 
 scrubConsole();
@@ -239,37 +240,36 @@ if (run("keeper") && keeper) {
   });
 }
 
-/** Vaults people are in, plus the app's supported list, so a risk card is there before anyone arms. */
-const trackedVaults = async () => {
+/** Vaults people are in or follow that aren't on the app's supported list. Anyone can add to these. */
+const otherVaults = async () => {
   const rows = await db.query<{ target: string }>(`SELECT DISTINCT target FROM positions UNION SELECT DISTINCT target FROM vault_follows`);
-  return [...new Set([...rows.map((x) => x.target), ...listed])];
+  return [...new Set(rows.map((x) => x.target.toLowerCase()))].filter((t) => !listed.includes(t));
 };
 
 if (run("detector")) {
+  // The supported list first, so a risk card is there before anyone arms, and no followed contract can delay it.
   every(600_000, "cards", async () => {
-    for (const target of await trackedVaults()) {
+    for (const target of [...listed, ...(await otherVaults())]) {
       try {
-        // Followers can name a vault on another chain. That chain's operator builds its card.
-        if (!(await client.getCode({ address: target as Address }))) continue;
-        const c = await readCard(client as never, target as Address);
-        await r.saveCard(target, c, cardText(c), now());
+        await withinMs((async () => {
+          // Followers can name a vault on another chain. That chain's operator builds its card.
+          if (!(await client.getCode({ address: target as Address }))) return;
+          const c = await readCard(client as never, target as Address);
+          await r.saveCard(target, c, cardText(c), now());
+        })(), SCAN_BUDGET_MS, "card");
       } catch (e) {
         console.error("card", target, (e as Error).message);
       }
     }
   });
-  every(60_000, "scans", async () => {
-    for (const target of await trackedVaults()) {
-      try {
-        for (const s of await scanVault({ client, repo: r, now }, target as Address)) {
-          if (!(await r.claimAlert(target, s.kind, now()))) continue;
-          await notifyText(r, sendAlert, target, watchAlert({ vaultName: await vaultName(target), what: signalLine(s.kind, s.value), withdrawInRobinhoodApp: onRobinhood }));
-        }
-      } catch (e) {
-        console.error("scan", target, (e as Error).message);
-      }
-    }
-  });
+  // Listed vaults are scanned in a loop of their own: their signals feed the watchers, and anyone can follow any contract.
+  const scans = { client, repo: r, now, vaultName, withdrawInRobinhoodApp: onRobinhood, queue: (vault: string, text: string, tag: string) => enqueueAlert(r, vault, text, now(), tag) };
+  every(60_000, "scans", () => scanAll(scans, listed));
+  every(60_000, "scans followed", async () => scanAll(scans, await otherVaults()));
+  // Share-price highs look back 30 days and drain baselines a day, so older readings only take space.
+  every(3_600_000, "prune snaps", () => r.pruneSnaps(now() - SNAP_KEEP_SEC));
+  // On a chain with no Canopy contracts the indexer role has nothing to do, so the scan's alerts go out from here.
+  if (!contracts) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
 }
 
 if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_KEY) {
@@ -286,9 +286,9 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
     const keys = await db.query<{ key: Hex; target: Hex; name: string }>(
       `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`,
     );
-    // Anyone can register a watcher alarm on any contract, so watchers only sign the ones in scope.
-    const scoped: typeof keys = [];
-    for (const k of keys) if (await inScope(k.key, k.target)) scoped.push(k);
+    // Anyone can register a watcher alarm on any contract, so watchers only sign the ones in scope. Live keys are read once a pass.
+    const inScopeNow = await quorumScopeNow(r, listed, now, env.KEEPER_PAID_ONLY);
+    const scoped = keys.filter((k) => inScopeNow(k.key, k.target));
     for (const item of await recentReports(db, now() - 3600)) {
       for (const { key, target } of matchVaults(item.classification.protocol, scoped)) {
         if (await r.firedSince(key, now() - 86_400)) continue;

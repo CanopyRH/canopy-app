@@ -8,6 +8,8 @@ import { PLUGINS, type Plugin } from "../plugins";
 export interface Reply { text: string; keyboard?: InlineKeyboard }
 
 const MAX_FOLLOWS = 20;
+/** Distinct vaults followed across every chat. Each one is scanned every minute, so the total has to stop somewhere. */
+export const MAX_FOLLOWED_VAULTS = 500;
 const MAX_MESSAGE = 4000; // Telegram's limit is 4096.
 const BUILT_IN = ["start", "vaults", "watch", "unwatch", "list", "card"];
 
@@ -28,6 +30,10 @@ export async function handle(
     case "watch":
       if (!isAddress(vault)) return { text: "Send a vault address: /watch 0x..." };
       if ((await r.followCount(chatId)) >= MAX_FOLLOWS) return { text: `You can follow up to ${MAX_FOLLOWS} vaults. Use /unwatch to free one up.` };
+      // A vault someone already follows, or a listed one, costs nothing more to watch.
+      if (!listed.some((v) => v.toLowerCase() === vault) && !(await r.isFollowed(vault)) && (await r.followedTargets()) >= MAX_FOLLOWED_VAULTS) {
+        return { text: "Canopy is watching as many vaults as it can right now, so it can't add this one. The listed vaults in /vaults can always be followed." };
+      }
       await r.follow(chatId, vault);
       return { text: `Following ${vault}. You'll get an alert if an alarm fires.` };
     case "unwatch":
