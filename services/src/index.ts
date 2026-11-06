@@ -32,6 +32,7 @@ import { repo } from "./store/repo";
 import { PLUGINS } from "./plugins";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
+import { recordWatcherSet } from "./watcher/roster";
 import { quorumScope, quorumScopeNow } from "./watcher/scope";
 import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, recentReports } from "./watcher/watcher";
 
@@ -171,6 +172,7 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
 
 /** Admin and guardian changes go to the operator chat. This only queues a row, so the indexer never waits on Telegram. */
 const adminAlert = async (e: AdminEvent) => {
+  await recordWatcherSet(db, e, now()); // the public Watchers page reads these
   if (env.OPS_CHAT_ID === undefined) return void console.warn("admin event", e.event, "(set OPS_CHAT_ID to be told)");
   await queueOps(r, adminAlertId(e), adminAlertText(env.CHAIN_ID, e), now());
 };
