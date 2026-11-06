@@ -453,6 +453,7 @@ if ((run("api") || run("bot")) && bot) {
     alarmBook,
     chainId: env.CHAIN_ID,
     now,
+    publicUrl: env.PUBLIC_URL,
     onAttested: tryQuorum,
     telegramSecret: env.TELEGRAM_WEBHOOK_SECRET,
     // In polling mode the webhook route has no handler, so it refuses every request.

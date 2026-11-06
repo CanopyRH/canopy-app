@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.135.0",
+    "@resvg/resvg-wasm": "2.6.2",
     "grammy": "1.46.0",
     "hono": "4.13.13",
     "viem": "2.57.7",

@@ -43,6 +43,9 @@ export interface ApiDeps {
   rateLimit?: RateLimit;
   /** Whether a vault answers `paused()`. Without it no vault is offered the Paused preset. */
   answersPaused?: (vault: Address) => Promise<boolean>;
+  /** This API's public address and the website's, for links in share pages. Without them: the address the request came to, and https://canopyrh.com. */
+  publicUrl?: string;
+  siteUrl?: string;
   /**
    * What each owner can still exit from a vault: the smaller of their share balance and their approval to the router, read
    * on-chain, one answer per request and null where the read failed. Without it the armed board cannot price anything.
