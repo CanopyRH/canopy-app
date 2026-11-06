@@ -160,6 +160,10 @@ export const repo = (db: Db) => ({
     const rows = await db.query<{ target: string; name: string | null; asset: string | null }>(`SELECT target, numbers->>'name' AS name, numbers->>'assetSymbol' AS asset FROM risk_cards ORDER BY name`);
     return rows.filter((x) => approved.includes(x.target));
   },
+  async detectorTarget(key: string): Promise<string | null> {
+    const r = await db.query<{ target: string }>(`SELECT target FROM detectors WHERE key=$1`, [key]);
+    return r[0]?.target ?? null;
+  },
   async detectorKind(key: string): Promise<number | null> {
     const r = await db.query<{ kind: number }>(`SELECT kind FROM detectors WHERE key=$1`, [key]);
     return r[0] ? Number(r[0].kind) : null;

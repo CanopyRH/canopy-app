@@ -5,8 +5,9 @@ import { alarmBookAbi, erc20Abi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
-import { appKeyboard, createBot, notifyFollowers, notifyText } from "./bot/bot";
-import { ALARM_NAMES, signalLine, watchAlert } from "./copy/alerts";
+import { appKeyboard, createBot, notifyText } from "./bot/bot";
+import { queueAlert as enqueueAlert, sendQueuedAlerts } from "./bot/queue";
+import { ALARM_NAMES, alarmAlert, signalLine, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
 import { scanVault } from "./detectors/scan";
 import { classifierFor } from "./engine/classifier";
@@ -18,9 +19,12 @@ import { serialSender, withMargin } from "./keeper/sender";
 import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
 import { repo } from "./store/repo";
+import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
+import { quorumScope } from "./watcher/scope";
 import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, recentReports } from "./watcher/watcher";
 
+scrubConsole();
 const env = loadEnv(process.env);
 const now = () => Math.floor(Date.now() / 1000);
 const transport = fallback([http(env.RPC_URL), http(env.RPC_URL_BACKUP)]);
@@ -54,6 +58,7 @@ const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCa
 const appUrl = env.APP_URL ?? env.PUBLIC_URL;
 const bot = createBot(env.TELEGRAM_BOT_TOKEN, r, appUrl, env.TELEGRAM_API_ROOT, listed, db);
 const sendAlert = (chat: number, text: string) => bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
+const queueAlert = (vault: string, text: string) => enqueueAlert(r, vault, text, now());
 const vaultName = async (vault: string) => ((await r.card(vault)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? vault;
 
 const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
@@ -111,15 +116,17 @@ if (run("indexer") && contracts) {
         const once = (vault: string) => r.claimAlert(vault, `fired:${f.key}:${firedAt}`, now(), 2 * ALARM_TTL);
         for (const vault of armed) {
           if (!(await once(vault))) continue;
-          await notifyFollowers(r, sendAlert, vault, { vaultName: await vaultName(vault), alarm: ALARM_NAMES[kind ?? -1] ?? "an alarm", evidenceUrl: txUrl(env.CHAIN_ID, f.tx) });
+          await queueAlert(vault, alarmAlert({ vaultName: await vaultName(vault), alarm: ALARM_NAMES[kind ?? -1] ?? "an alarm", evidenceUrl: txUrl(env.CHAIN_ID, f.tx) }));
         }
         // With nothing armed, the scan already covers on-chain signals. A watcher confirmation has no other route to followers.
         const vault = f.target.toLowerCase();
         if (armed.length === 0 && kind === Kind.QUORUM && isPreset(vault as Address, f.key) && (await once(vault))) {
-          await notifyText(r, sendAlert, vault, watchAlert({ vaultName: await vaultName(vault), what: "watchers confirmed a report about it", withdrawInRobinhoodApp: onRobinhood }));
+          await queueAlert(vault, watchAlert({ vaultName: await vaultName(vault), what: "watchers confirmed a report about it", withdrawInRobinhoodApp: onRobinhood }));
         }
       },
     }));
+  // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
+  every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
   every(30_000, "payments", () =>
     syncLogs(client, r, {
       name: "payments",
@@ -131,6 +138,7 @@ if (run("indexer") && contracts) {
 }
 
 const watchers = env.WATCHERS.split(",").filter(Boolean) as Address[];
+const inScope = quorumScope(r, listed, now, env.KEEPER_PAID_ONLY);
 
 const firing = new Set<Hex>();
 
@@ -141,6 +149,8 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
   try {
     const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook);
     if (!call) return;
+    // Firing costs gas, so it's spent only on alarms in scope: a listed vault's preset, or one a position armed.
+    if (!(await inScope(key, await r.detectorTarget(key)))) return;
     const live = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "isLive", args: [key, 86_400n] });
     if (!live) await keeper.send(call);
   } catch (e) {
@@ -226,8 +236,11 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
     const keys = await db.query<{ key: Hex; target: Hex; name: string }>(
       `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`,
     );
+    // Anyone can register a watcher alarm on any contract, so watchers only sign the ones in scope.
+    const scoped: typeof keys = [];
+    for (const k of keys) if (await inScope(k.key, k.target)) scoped.push(k);
     for (const item of await recentReports(db, now() - 3600)) {
-      for (const { key, target } of matchVaults(item.classification.protocol, keys)) {
+      for (const { key, target } of matchVaults(item.classification.protocol, scoped)) {
         if (await r.firedSince(key, now() - 86_400)) continue;
         const feed = feedSignal(item.classification, target, now(), item.hash);
         if (!feed) continue;

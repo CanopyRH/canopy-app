@@ -38,7 +38,7 @@
     "visualLabel": "Your vaults. Your alarms. Your wallet.",
     "metrics": [
       { "value": "1", "label": "Payout destination", "detail": "The position owner's wallet." },
-      { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can redirect a payout, and the exit contract's settings lock after 12 months." },
+      { "value": "2 of 3", "label": "Admin signers", "detail": "Settings change only with 2 of 3 signers. No setting can change who gets paid, and the exit contract's settings lock after 12 months." },
       { "value": "Free", "label": "Scan and alerts", "detail": "Wallet check, risk cards and vault alerts." }
     ],
     "note": "An exit can only take what the vault can pay out at that moment."

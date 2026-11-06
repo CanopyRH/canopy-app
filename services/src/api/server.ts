@@ -8,6 +8,7 @@ import type { Db } from "../store/db";
 import type { Repo } from "../store/repo";
 import { acceptAttestation } from "../watcher/watcher";
 import { PLUGINS, type Plugin } from "../plugins";
+import { sameSecret } from "./secret";
 
 const AttestBody = z.strictObject({
   key: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
@@ -48,7 +49,7 @@ export function createApi(d: ApiDeps) {
   app.get("/vaults", async (c) => c.json(await d.vaults()));
   app.get("/alarms/live", async (c) => c.json(await d.liveAlarms()));
   app.get("/health", async (c) => {
-    if (!d.health || !d.healthToken || c.req.header("authorization") !== `Bearer ${d.healthToken}`) return c.json({ error: "forbidden" }, 403);
+    if (!d.health || !d.healthToken || !sameSecret(c.req.header("authorization"), `Bearer ${d.healthToken}`)) return c.json({ error: "forbidden" }, 403);
     return c.json(await d.health());
   });
   app.get("/risk/:target", async (c) => {
@@ -79,7 +80,7 @@ export function createApi(d: ApiDeps) {
     return c.json({ ok: true });
   });
   app.post("/tg/webhook", small, async (c) => {
-    if (!d.telegram || !d.telegramSecret || c.req.header("x-telegram-bot-api-secret-token") !== d.telegramSecret) {
+    if (!d.telegram || !d.telegramSecret || !sameSecret(c.req.header("x-telegram-bot-api-secret-token"), d.telegramSecret)) {
       return c.json({ error: "forbidden" }, 403);
     }
     await d.telegram(await c.req.json());

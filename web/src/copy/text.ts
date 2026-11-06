@@ -31,7 +31,7 @@ export const COPY = {
   armTitle: "Choose your alarms",
   armHelp: "These are common options, and you choose which to use. The exit contract can only pay your own wallet.",
   armPick: "Choose at least one alarm.",
-  alarmTripped: "Already tripped, so it can't protect you now.",
+  alarmTripped: "Already fired, so a keeper can't exit you on it for up to 24 hours. Use Exit Now if you want out.",
   armed: "Armed",
   changeAlarms: "Change alarms",
   setAlarms: "Set alarms",
