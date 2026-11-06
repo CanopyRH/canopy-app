@@ -58,3 +58,24 @@ jobs:
           exit 1
       - name: The web build is repeatable
         run: test "$(tools/build-web.sh 2>/dev/null)" = "$(tools/build-web.sh 2>/dev/null)"
+  slither:
+    # Static analysis of the contracts. Findings of medium or higher fail the job unless they are triaged, with a
+    # reason each, in contracts/slither.db.json. The settings live in contracts/slither.config.json.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FOUNDRY_SOLC: 0.8.28
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1
+        with:
+          version: v1.8.6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install slither-analyzer==0.11.3
+      - run: slither .
+        working-directory: contracts

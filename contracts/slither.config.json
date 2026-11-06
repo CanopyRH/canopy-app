@@ -1,0 +1,5 @@
+{
+  "filter_paths": "test/|script/",
+  "triage_database": "slither.db.json",
+  "fail_on": "medium"
+}
