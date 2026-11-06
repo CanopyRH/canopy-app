@@ -392,7 +392,7 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
           // Progress, not a miss: the drop is recorded, and a poke DRAIN_CONFIRM seconds on can fire it. Until then check() reads
           // false, so the key is left alone for that long and then comes back at its normal pace.
           (d.misses ?? MISSES).delete(key.toLowerCase());
-          q.set(key.toLowerCase(), Number(at) + DRAIN_CONFIRM_SEC + 2);
+          q.set(key.toLowerCase(), now + DRAIN_CONFIRM_SEC + 2);
           await d.repo.bump("poke_pending");
           continue;
         }

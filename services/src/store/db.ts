@@ -6,6 +6,8 @@ export interface Db {
   exec(sql: string): Promise<void>;
   /** Runs a script behind a lock that every process shares. */
   locked?(sql: string): Promise<void>;
+  /** Runs `fn` in one transaction: all of its queries commit together or not at all. */
+  transaction?<T>(fn: (q: Db) => Promise<T>): Promise<T>;
 }
 
 /** The core tables, then each feature's own file from schema.d/ in name order. */
@@ -36,6 +38,13 @@ export function postgres(url: string, max = DEFAULT_POOL): Db {
     exec: async (text) => {
       await sql.unsafe(text).simple();
     },
+    transaction: (fn) =>
+      sql.begin((tx) => fn({
+        query: (text, params = []) => tx.unsafe(text, params as never[]) as never,
+        exec: async (text) => {
+          await tx.unsafe(text).simple();
+        },
+      })),
     locked: async (text) => {
       await sql.begin(async (tx) => {
         await tx.unsafe("SELECT pg_advisory_xact_lock(7226679)");

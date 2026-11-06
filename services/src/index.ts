@@ -20,6 +20,7 @@ import { opsProblems } from "./keeper/ops";
 import { serialSender } from "./keeper/sender";
 import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
+import { switchContracts, switchText } from "./store/switch";
 import { repo } from "./store/repo";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
@@ -69,6 +70,14 @@ export function stop() {
 }
 
 await migrate(db);
+// The database may hold state from other contracts (v1). The first service to start on new addresses clears it, once.
+if (contracts) {
+  const switched = await switchContracts(db, { router, alarmBook, startBlock: env.START_BLOCK });
+  if (switched) {
+    console.warn(switchText(switched));
+    if (env.OPS_CHAT_ID !== undefined) await queueOps(r, `switch:${router.toLowerCase()}:${alarmBook.toLowerCase()}`, `Canopy ops: ${switchText(switched)}`, now());
+  }
+}
 const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
 // Bot buttons open the web app, which is a different host from this service's webhook address.
 const appUrl = env.APP_URL ?? env.PUBLIC_URL;
