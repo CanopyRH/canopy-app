@@ -36,7 +36,9 @@ function hexesIn(e: unknown, seen = new Set<unknown>(), depth = 0): string[] {
   if (typeof e === "string") return /^0x[0-9a-fA-F]{8,}$/.test(e) ? [e] : [];
   if (typeof e !== "object") return [];
   seen.add(e);
-  return Object.values(e as Record<string, unknown>).flatMap((v) => hexesIn(v, seen, depth + 1));
+  // Own names, not just enumerable ones: viem hangs the wrapped error on a non-enumerable `cause`.
+  const obj = e as Record<string, unknown>;
+  return Object.getOwnPropertyNames(obj).flatMap((k) => hexesIn(obj[k], seen, depth + 1));
 }
 
 /** The plain sentence for a revert this app knows, from the revert data or from the error's name in a wallet's message. Null otherwise. */

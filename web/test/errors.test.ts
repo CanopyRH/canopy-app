@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { encodeErrorResult, type Address, type Hex } from "viem";
+import { createPublicClient, custom, encodeErrorResult, type Address, type Hex } from "viem";
 import { COPY } from "../src/copy/text";
 import { contractErrorsAbi, revertText } from "../src/errors";
 import { friendly } from "../src/wallet";
@@ -24,6 +24,15 @@ describe("contract errors in plain words", () => {
     expect(revertText({ cause: { cause: { data: { data: d } } } })).toBe(COPY.errAlarmNotClear);
     expect(friendly(Object.assign(new Error("Execution reverted for an unknown reason."), { data: d }))).toBe(COPY.errAlarmNotClear);
     expect(COPY.errAlarmNotClear).toContain("That alarm is going off or can't be read right now, so it can't protect a new position");
+  });
+
+  test("a real viem call error hides the revert data under non-enumerable causes, and it is still found", async () => {
+    const d = data("AlarmNotClear", [K]);
+    const client = createPublicClient({ transport: custom({ request: async () => { throw Object.assign(new Error("execution reverted"), { code: 3, data: d }); } }) });
+    const err = await client.call({ to: A, data: "0x12345678" }).then(() => null, (e: unknown) => e);
+    expect(err).not.toBeNull();
+    expect(revertText(err)).toBe(COPY.errAlarmNotClear);
+    expect(friendly(err)).toBe(COPY.errAlarmNotClear);
   });
 
   test("a wallet that prints the error's name is understood too", () => {
