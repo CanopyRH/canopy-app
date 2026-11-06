@@ -216,6 +216,7 @@ contract RouterHandler {
     uint256 internal gMark;
     uint256 internal gDBase;
     uint256 internal gDSnap;
+    uint256 internal gDPrevSnap;
     uint64 internal gDSnapAt;
     uint64 internal gDPending;
     uint64[NW] internal gWSince;
@@ -258,6 +259,7 @@ contract RouterHandler {
     uint256 public drainPendings;
     uint256 public drainFires;
     uint256 public flashPokes;
+    uint256 public flashCheckpoints;
     uint256 public rebased;
     uint256 public quorumFired;
     uint256 public quorumRefusedInactiveWatcher;
@@ -356,16 +358,17 @@ contract RouterHandler {
     /// @dev Every place where AlarmBook's state or views disagree with the model, counted. 0 means they agree exactly.
     function alarmModelDisagreements() external view returns (uint256 n) {
         for (uint256 k; k < NK; ++k) {
-            (, uint64 firedAt,,,, uint64 episodeAt,) = book.state(keys[k]);
+            (, uint64 firedAt,,,, uint64 episodeAt,,) = book.state(keys[k]);
             if (firedAt != gFiredAt[k]) n++;
             if (episodeAt != gEpisodeAt[k]) n++;
             if (book.check(keys[k]) != _mCheck(k)) n++;
             if (book.armable(keys[k]) != _mArmable(k)) n++;
         }
-        (,,, uint256 mark,,,) = book.state(keys[K_SD]);
+        (,,, uint256 mark,,,,) = book.state(keys[K_SD]);
         if (mark != gMark) n++;
-        (,, uint64 snapAt, uint256 base, uint256 snap,, uint64 pendingAt) = book.state(keys[K_DRAIN]);
+        (,, uint64 snapAt, uint256 base, uint256 snap,, uint64 pendingAt, uint256 prevSnap) = book.state(keys[K_DRAIN]);
         if (snapAt != gDSnapAt || base != gDBase || snap != gDSnap || pendingAt != gDPending) n++;
+        if (prevSnap != gDPrevSnap) n++;
         for (uint256 i; i < NW; ++i) {
             if (book.isWatcher(watchers[i]) != _mWatcherActive(i)) n++;
         }
@@ -389,8 +392,11 @@ contract RouterHandler {
         if (k < 2) return pausables[k].paused();
         if (k == K_SD) return _px() * 10_000 < gMark * (10_000 - SD_BPS);
         if (k == K_DRAIN) {
-            bool refLive = gDSnap != 0 && block.timestamp - gDSnapAt <= DRAIN_WINDOW;
-            return refLive && _ta() * 10_000 < gDSnap * (10_000 - DRAIN_BPS);
+            // The reference is the lower of the last two period lows, live only once both exist and the last roll
+            // is no older than the window.
+            bool refLive = gDSnap != 0 && gDPrevSnap != 0 && block.timestamp - gDSnapAt <= DRAIN_WINDOW;
+            uint256 ref = gDSnap < gDPrevSnap ? gDSnap : gDPrevSnap;
+            return refLive && _ta() * 10_000 < ref * (10_000 - DRAIN_BPS);
         }
         return false; // QUORUM: only signatures fire it
     }
@@ -400,6 +406,7 @@ contract RouterHandler {
     }
 
     function _mArmable(uint256 k) internal view returns (bool) {
+        if (k == K_DRAIN && _mPendingLive()) return false; // a pending sighting must not count toward a later fire
         return !_mLive(k) && !_mTripped(k);
     }
 
@@ -648,6 +655,17 @@ contract RouterHandler {
         flashPokes++;
     }
 
+    /// @dev A flash deposit around a DRAIN checkpoint (V3-01): vault 0 looks half again as large for that one sample,
+    /// which can become a period's low only if no other sample lands in the period.
+    function flashCheckpointDrain(uint256) external {
+        IVault v = IVault(vaults[0]);
+        uint256 pps = v.assetsPerShare();
+        v.setPrice((pps * 3) / 2);
+        _checkpoint(K_DRAIN);
+        v.setPrice(pps);
+        flashCheckpoints++;
+    }
+
     /// @dev Rare: something takes 30% of vault 0's assets, as an exploit would; its share price falls with them.
     function crashVault0(uint256 seed) external {
         if (seed % 5 != 0) return;
@@ -666,6 +684,7 @@ contract RouterHandler {
                 if (block.timestamp < uint256(gDSnapAt) + DRAIN_WINDOW / 2) {
                     if (ta < gDBase) gDBase = ta;
                 } else {
+                    gDPrevSnap = gDSnap;
                     gDSnap = gDBase;
                     gDBase = ta;
                     gDSnapAt = uint64(block.timestamp);
@@ -685,6 +704,7 @@ contract RouterHandler {
             } else {
                 gDBase = _ta();
                 gDSnap = 0;
+                gDPrevSnap = 0;
                 gDSnapAt = uint64(block.timestamp);
                 gDPending = 0;
             }
@@ -1197,6 +1217,8 @@ contract RouterInvariants {
         h.checkpoint(3);
         vm.warp(block.timestamp + 600);
         h.checkpoint(3);
+        vm.warp(block.timestamp + 600);
+        h.checkpoint(3); // three rolls: both period lows in the reference are today's level
         h.arm(0, 0, 0, 0, 0);
         h.arm(1, 0, 0, 0, 0);
         h.exitPosition(0, 0, 0, 5, 0);

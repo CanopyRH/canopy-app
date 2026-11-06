@@ -43,12 +43,12 @@ contract MutantKillersTest is Base {
         vault.setPrice(2e6);
         book.checkpoint(sk); // mark 2e6
         _fireAlarm();
-        (bool e0, uint64 f0,,,,,) = book.state(pauseKey);
+        (bool e0, uint64 f0,,,,,,) = book.state(pauseKey);
         book.register(_detector(AlarmBook.Kind.PAUSED, address(pausable), 0, 0, 0, 0));
         vault.setPrice(1e6);
         book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 50, 0, 0, 0));
-        (bool e1, uint64 f1,,,,,) = book.state(pauseKey);
-        (,,, uint256 mark,,,) = book.state(sk);
+        (bool e1, uint64 f1,,,,,,) = book.state(pauseKey);
+        (,,, uint256 mark,,,,) = book.state(sk);
         assertTrue(e0 && e1 && f0 == f1 && f1 != 0, "fire kept");
         assertEq(mark, 2e6, "mark kept, so the 50% drop still reads tripped");
         assertTrue(book.check(sk), "tripped");

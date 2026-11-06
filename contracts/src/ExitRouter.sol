@@ -243,7 +243,8 @@ contract ExitRouter is ReentrancyGuard {
     error NftNotReturned();
     /// @notice A swap leg's path is malformed, doesn't start at its token, or doesn't end at STABLE.
     error BadRoute();
-    /// @notice A swap leg's feed has no code, its heartbeat is 0 or above MAX_FEED_HEARTBEAT, or its decimals are too high.
+    /// @notice A swap leg's feed has no code, its heartbeat is 0 or above MAX_FEED_HEARTBEAT, or its decimals are above
+    /// MAX_TOKEN_DECIMALS or differ from the token's own `decimals()`.
     error BadFeed();
     /// @notice Nothing is owed to this owner in this token.
     error NothingOwed();
@@ -505,7 +506,8 @@ contract ExitRouter is ReentrancyGuard {
     // ------------------------------------------------------------------ internals
 
     /// @dev Legs only with the STABLE harbour, at most MAX_SWAPS, one per token, each with a feed that has code, a heartbeat
-    /// in (0, MAX_FEED_HEARTBEAT], sane decimals, and a well-formed Uniswap v3 path from the token to STABLE.
+    /// in (0, MAX_FEED_HEARTBEAT], the token's own decimals (read with a FEED_READ_GAS cap), and a well-formed Uniswap v3
+    /// path from the token to STABLE.
     function _validateSwaps(uint8 harbour, SwapLeg[] calldata swaps) internal view {
         if (swaps.length == 0) return;
         if (harbour != HARBOUR_STABLE) revert SwapsNeedStableHarbour();
@@ -517,6 +519,11 @@ contract ExitRouter is ReentrancyGuard {
             }
             if (l.feed.code.length == 0 || l.heartbeat == 0 || l.heartbeat > MAX_FEED_HEARTBEAT) revert BadFeed();
             if (l.tokenDecimals > MAX_TOKEN_DECIMALS) revert BadFeed();
+            // The stated decimals set the oracle minimum, so they must be the token's own: a leg that claimed more would
+            // shrink the minimum by a power of ten and let a third party swap at almost any price.
+            (bool okD, uint256[5] memory dec) =
+                CappedCall.readWords(l.token, abi.encodeWithSelector(0x313ce567), FEED_READ_GAS, 1); // decimals()
+            if (!okD || dec[0] != l.tokenDecimals) revert BadFeed();
             bytes calldata path = l.path;
             if (path.length < 43 || (path.length - 20) % 23 != 0) revert BadRoute();
             if (address(bytes20(path[0:20])) != l.token) revert BadRoute();

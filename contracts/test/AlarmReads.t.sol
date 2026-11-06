@@ -83,7 +83,9 @@ contract AlarmReadsTest is Base {
         k[2] = book.register(_detector(AlarmBook.Kind.PRICE_BELOW, address(c), 0.9e6, 3600, 0, 0));
         k[3] = book.register(_detector(AlarmBook.Kind.ADDRESS_CHANGE, address(c), 0, 0, CURATOR, 0));
         vm.warp(block.timestamp + 600);
-        book.checkpoint(k[1]); // DRAIN's reference: 1e6
+        book.checkpoint(k[1]);
+        vm.warp(block.timestamp + 600);
+        book.checkpoint(k[1]); // DRAIN's reference, the lower of two period lows: 1e6
         for (uint256 i; i < 4; ++i) {
             assertTrue(book.armable(k[i]), "clear while healthy");
         }
@@ -94,7 +96,7 @@ contract AlarmReadsTest is Base {
     }
 
     function _pendingAt(bytes32 k) internal view returns (uint64 p) {
-        (,,,,,, p) = book.state(k);
+        (,,,,,, p,) = book.state(k);
     }
 
     function test_failedReads_neverFire_andAreNeverArmable() public {

@@ -77,6 +77,10 @@ contract AlarmBookTest is Base {
     function test_drain_snapshotCannotResetAfterWindowWhileTripped() public {
         vault.deposit(OWNER, 100e18);
         bytes32 k = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k); // first period's low
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k); // second: the reference is live
         vm.warp(block.timestamp + 1800); // past window/2, so only the tripped check protects it
         vault.setPrice(0.74e6);
         book.checkpoint(k);
@@ -106,7 +110,12 @@ contract AlarmBookTest is Base {
         assertTrue(!book.check(k), "a new detector has no confirmed baseline yet");
         vault.setPrice(1e6);
         vm.warp(block.timestamp + 1800);
-        book.checkpoint(k); // the first period's low becomes the baseline
+        book.checkpoint(k); // the first period's low
+        vault.setPrice(0.74e6);
+        assertTrue(!book.check(k), "one period's low is not a reference yet: it takes two");
+        vault.setPrice(1e6);
+        vm.warp(block.timestamp + 1800);
+        book.checkpoint(k); // the second: the reference is the lower of the two
         vault.setPrice(0.74e6);
         assertTrue(book.check(k), "tripped");
         vm.warp(block.timestamp + 1800);

@@ -92,7 +92,7 @@ contract ForkPresetsTest {
     }
 
     function _pendingAt(bytes32 k) internal view returns (uint64 p) {
-        (,,,,,, p) = book.state(k);
+        (,,,,,, p,) = book.state(k);
     }
 
     // ------------------------------------------------------------------ register, read clear, arm
@@ -132,11 +132,16 @@ contract ForkPresetsTest {
             );
             require(router.isArmed(id), "armed");
 
-            // After a keeper's two routine DRAIN samples the reference is live, and the vault still reads clear.
+            // After a keeper's routine samples over two periods the DRAIN reference is live, and the vault still reads
+            // clear.
             uint256 snap = vm.snapshotState();
-            vm.warp(block.timestamp + 1800);
-            book.checkpoint(k[3]);
-            book.checkpoint(k[0]);
+            for (uint256 r; r < 2; ++r) {
+                vm.warp(block.timestamp + 1800);
+                book.checkpoint(k[3]);
+                book.checkpoint(k[0]);
+            }
+            (,,,, uint256 dSnap,,, uint256 dPrev) = book.state(k[3]);
+            require(dSnap != 0 && dPrev != 0, "the DRAIN reference is live");
             for (uint256 p; p < NP; ++p) {
                 require(!book.check(k[p]) && book.armable(k[p]), string.concat(presetName[p], ": not clear after sampling"));
             }
@@ -191,7 +196,9 @@ contract ForkPresetsTest {
             address v = launchVaults[i];
             bytes32[NP] memory k = _register(v);
             vm.warp(block.timestamp + 1800);
-            _checkpointAll(k); // the DRAIN reference is live from here on
+            _checkpointAll(k);
+            vm.warp(block.timestamp + 1800);
+            _checkpointAll(k); // two periods sampled: the DRAIN reference is live from here on
 
             uint256 tvl = IERC4626(v).totalAssets();
             uint256 donation = tvl / 50 > 1_000e6 ? tvl / 50 : 1_000e6;

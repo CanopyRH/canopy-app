@@ -264,7 +264,7 @@ contract ExitRouterTest is Base {
     }
 
     function test_arm_storesLegsAndEmitsOnePerLeg() public {
-        MockERC20 u = new MockERC20(18);
+        MockERC20 u = new MockERC20(6);
         ExitRouter.SwapLeg[] memory legs = new ExitRouter.SwapLeg[](2);
         legs[0] = _leg(address(t), address(tFeed));
         legs[1] = _leg(address(u), address(stableFeed));

@@ -15,13 +15,11 @@ contract GasProbe {
 
 /// @notice V3-02 and the 63/64 checks.
 ///
-/// V3-02: the keeper in `services/` sends every poke and checkpoint with a gas limit of at most SMALL_CALL_GAS
-/// (1,000,000, services/src/keeper/keeper.ts:33), derived from the simulated gasUsed (`used * 3 / 2 + 100_000`,
-/// keeper.ts:46). v2's AlarmBook refuses any target read unless 1,025,873 gas is left (`TARGET_READ_GAS +
-/// READ_GAS_OVERHEAD`), however little the read uses. So on v2 every keeper poke and checkpoint of a SHARE_DROP, PAUSED,
-/// ADDRESS_CHANGE, DRAIN or PRICE_BELOW key reverts NotEnoughGas on chain: the keeper can't fire those alarms or keep
-/// DRAIN references and share marks fresh. The services also still carry the v1 router ABI (`setFeed`, `swapConfig`,
-/// `arm` without `swaps`, services/src/chain/abi.generated.ts). The calls below give the exact limits the keeper would.
+/// V3-02 (fixed in the services): AlarmBook refuses any target read unless 1,025,873 gas is left (`TARGET_READ_GAS +
+/// READ_GAS_OVERHEAD`), however little the read uses. The keeper as reviewed sent pokes and checkpoints with at most
+/// 1,000,000 gas, derived from the simulated gasUsed, so every one of them on a key that reads its target reverted
+/// NotEnoughGas. The keeper now gives every target-reading call at least READ_GAS_FLOOR (1,600,000,
+/// services/src/keeper/keeper.ts). This test pins the contract side: the old limits revert, the floor works.
 contract V3ReadGasTest is Base {
     bytes32 internal shareKey;
 
@@ -41,7 +39,7 @@ contract V3ReadGasTest is Base {
         if (limit > 1_000_000) limit = 1_000_000;
     }
 
-    function test_V3_02_keeperGasLimitsRevertOnEveryTargetRead() public {
+    function test_V3_02_limitsUnderTheReadFloorRevert_theKeepersFloorWorks() public {
         pausable.setPaused(true);
         bytes memory pokeData = abi.encodeCall(book.poke, (pauseKey));
         // The simulation would fire it; measure on a snapshot-free copy by reading `check` instead of poking.
@@ -60,7 +58,10 @@ contract V3ReadGasTest is Base {
         (uint256 hi) = _baseline(shareKey);
         assertEq(hi, 1e6, "the mark never moved");
 
-        // Control: about 1.1M is enough, and the poke itself uses a small fraction of that.
+        // The keeper's READ_GAS_FLOOR is enough for a checkpoint, and about 1.1M is enough for a poke, which itself uses a
+        // small fraction of that.
+        (ok,) = address(book).call{gas: 1_600_000}(abi.encodeCall(book.checkpoint, (shareKey)));
+        assertTrue(ok && _baseline(shareKey) == 2e6, "at the keeper's 1.6M floor the checkpoint lands");
         uint256 g0 = gasleft();
         (ok,) = address(book).call{gas: 1_100_000}(pokeData);
         uint256 used = g0 - gasleft();
@@ -69,7 +70,7 @@ contract V3ReadGasTest is Base {
     }
 
     function _baseline(bytes32 k) internal view returns (uint256 b) {
-        (,,, b,,,) = book.state(k);
+        (,,, b,,,,) = book.state(k);
     }
 
     /// Checked and fine: whatever gas the caller sends, the target either gets its full cap or the call reverts

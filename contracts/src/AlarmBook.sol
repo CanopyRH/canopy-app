@@ -14,8 +14,9 @@ import {CappedCall} from "./lib/CappedCall.sol";
 ///   SHARE_DROP      ERC-4626 share price fell more than `threshold` bps under its high-water mark.
 ///   PAUSED          target's bool view (`a` = selector, default paused()) returns true.
 ///   ADDRESS_CHANGE  target's address view (`a` = selector) differs from the registered value.
-///   DRAIN           ERC-4626 totalAssets fell more than `threshold` bps under the low of the previous sampling
-///                   period, seen by two pokes at least DRAIN_CONFIRM s apart. `window` is at least MIN_DRAIN_WINDOW.
+///   DRAIN           ERC-4626 totalAssets fell more than `threshold` bps under the lower of the lows of the last two
+///                   sampling periods, seen by two pokes at least DRAIN_CONFIRM s apart. `window` is at least
+///                   MIN_DRAIN_WINDOW.
 ///   QUORUM          k = `threshold` distinct active watchers signed an attestation.
 ///   BOTH            keys `a` and `b` both fired within `window` s of now.
 /// An alarm can never move funds; it only widens who may call ExitRouter.exit, which pays the owner only.
@@ -55,9 +56,10 @@ contract AlarmBook is IAlarmBook {
         uint64 firedAt;
         uint64 snapAt;
         uint256 baseline; // SHARE_DROP: high-water share price; ADDRESS_CHANGE: registered address; DRAIN: lowest sample since snapAt
-        uint256 snap; // DRAIN: the lowest sample of the previous period, which alarms measure against
+        uint256 snap; // DRAIN: the lowest sample of the previous period
         uint64 episodeAt; // when the current run of fires began (0 = none, or ended by rebase)
         uint64 pendingAt; // DRAIN: when a poke first saw the drop it is waiting to confirm (0 = none)
+        uint256 prevSnap; // DRAIN: the lowest sample of the period before that; alarms measure against min(snap, prevSnap)
     }
 
     /// @notice EIP-712 type hash of a watcher attestation.
@@ -118,7 +120,7 @@ contract AlarmBook is IAlarmBook {
     event Fired(bytes32 indexed key, Kind kind, address indexed target, address by, bytes32 evidence);
     /// @notice A baseline rolled forward.
     /// @param key The key.
-    /// @param value The new SHARE_DROP mark, or the new DRAIN reference.
+    /// @param value The new SHARE_DROP mark, or the low of the DRAIN period that just ended (the new `snap`).
     event Checkpoint(bytes32 indexed key, uint256 value);
     /// @notice A DRAIN poke saw the drop for the first time; a poke at least DRAIN_CONFIRM s later can fire it.
     /// @param key The key.
@@ -286,13 +288,16 @@ contract AlarmBook is IAlarmBook {
     }
 
     /// @notice Whether ExitRouter may arm this key now: it exists, its target reads clear (a failed read is not clear),
-    /// and it has not fired within the last REFIRE_AFTER.
+    /// it has not fired within the last REFIRE_AFTER, and (DRAIN) no sighting is pending, so both sightings of any fire
+    /// that exits the position come after the arming.
     /// @param key The key.
     /// @return True if the key can be armed.
     function armable(bytes32 key) external view returns (bool) {
         State storage s = state[key];
         if (!s.exists || _liveNow(s)) return false;
-        (Reading r,) = _reading(_detectors[key], s);
+        Detector memory d = _detectors[key];
+        if (d.kind == Kind.DRAIN && _pendingLive(s, d)) return false;
+        (Reading r,) = _reading(d, s);
         return r == Reading.CLEAR;
     }
 
@@ -326,9 +331,10 @@ contract AlarmBook is IAlarmBook {
 
     /// @notice Rolls baselines forward, and only while the key reads clear. The SHARE_DROP high-water mark only rises.
     /// DRAIN never trusts one reading, because anyone can call this inside a flash deposit. Calls sample totalAssets, and
-    /// every window/2 the lowest sample of the period becomes the reference. So an inflated reading only counts if it
-    /// survives a whole period of samples, and a keeper sampling once a period is enough. Nothing rolls while the
-    /// detector is tripped or unreadable, so a drain cannot be "reset" away.
+    /// every window/2 the lowest sample of the period becomes `snap` (the one before moves to `prevSnap`). Alarms
+    /// measure against the lower of the two, so an inflated reading counts only if it is the low of two consecutive
+    /// periods: one honest sample in either period is enough to stop it. Nothing rolls while the detector is tripped or
+    /// unreadable, so a drain cannot be "reset" away.
     /// @param key The key.
     function checkpoint(bytes32 key) external {
         State storage s = state[key];
@@ -349,6 +355,7 @@ contract AlarmBook is IAlarmBook {
             if (v < s.baseline) s.baseline = v;
             return;
         }
+        s.prevSnap = s.snap;
         s.snap = s.baseline;
         s.baseline = v;
         s.snapAt = uint64(block.timestamp);
@@ -371,6 +378,7 @@ contract AlarmBook is IAlarmBook {
         s.baseline = v;
         if (d.kind == Kind.DRAIN) {
             s.snap = 0;
+            s.prevSnap = 0;
             s.snapAt = uint64(block.timestamp);
             s.pendingAt = 0;
         }
@@ -500,8 +508,10 @@ contract AlarmBook is IAlarmBook {
         if (k == Kind.DRAIN) {
             (bool ok, uint256 ta) = _totalAssets(d.target);
             if (!ok) return (Reading.UNKNOWN, 0);
-            if (s.snap == 0 || block.timestamp - s.snapAt > d.window) return (Reading.CLEAR, ta); // no live reference
-            return (ta * 10_000 < s.snap * (10_000 - d.threshold) ? Reading.TRIPPED : Reading.CLEAR, ta);
+            // No live reference until two periods have rolled, and none once the last roll is older than the window.
+            if (s.snap == 0 || s.prevSnap == 0 || block.timestamp - s.snapAt > d.window) return (Reading.CLEAR, ta);
+            uint256 ref = s.snap < s.prevSnap ? s.snap : s.prevSnap;
+            return (ta * 10_000 < ref * (10_000 - d.threshold) ? Reading.TRIPPED : Reading.CLEAR, ta);
         }
         if (k == Kind.BOTH) {
             bool both = _firedWithin(state[d.a], d.window) && _firedWithin(state[d.b], d.window);

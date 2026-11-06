@@ -122,6 +122,12 @@ contract AlarmAttackTest is Base {
         book.checkpoint(key);
     }
 
+    /// @dev Two routine passes: a DRAIN reference needs the lows of two periods before anything can fire.
+    function _ready(bytes32 key) internal {
+        _period(key);
+        _period(key);
+    }
+
     function _sigs(bytes32 digest) internal returns (address[] memory s, bytes[] memory g) {
         (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
         s = new address[](2);
@@ -175,7 +181,7 @@ contract AlarmAttackTest is Base {
         book.checkpoint(key); // a keeper sample, in the same period
         vm.warp(block.timestamp + WINDOW / 2 - 600);
         book.checkpoint(key);
-        (,,,, uint256 snap,,) = book.state(key);
+        (,,,, uint256 snap,,,) = book.state(key);
         assertEq(snap, 1000e18, "the inflated reading never became the baseline");
         assertTrue(!book.check(key), "healthy");
     }
@@ -196,7 +202,7 @@ contract AlarmAttackTest is Base {
     function test_midDrainCheckpoint_cantHideADrain() public {
         _deposit(OWNER, 1000e18);
         bytes32 key = _drainKey();
-        _period(key);
+        _ready(key);
         rv.exploitDrain(ATTACKER, 249e18); // under the threshold, so checkpoint runs
         book.checkpoint(key);
         rv.exploitDrain(ATTACKER, 187e18);
@@ -207,7 +213,7 @@ contract AlarmAttackTest is Base {
     function test_midDrainRoll_cantHideADrain() public {
         _deposit(OWNER, 1000e18);
         bytes32 key = _drainKey();
-        _period(key);
+        _ready(key);
         vm.warp(block.timestamp + WINDOW / 2);
         rv.exploitDrain(ATTACKER, 249e18);
         book.checkpoint(key); // rolls in the middle of the drain
@@ -218,7 +224,7 @@ contract AlarmAttackTest is Base {
     function test_flashDeposit_cantResetATrippedDrain() public {
         _deposit(OWNER, 1000e18);
         bytes32 key = _drainKey();
-        _period(key);
+        _ready(key);
         vm.warp(block.timestamp + WINDOW / 2);
         rv.exploitDrain(ATTACKER, 350e18);
         assertTrue(book.check(key), "tripped");
@@ -231,7 +237,7 @@ contract AlarmAttackTest is Base {
     function test_samplesDuringATrippedDrain_cantLowerTheNextBaseline() public {
         _deposit(OWNER, 1000e18);
         bytes32 key = _drainKey();
-        _period(key);
+        _ready(key);
         rv.exploitDrain(ATTACKER, 350e18);
         vm.warp(block.timestamp + 600);
         book.checkpoint(key); // tripped, so this must not record the drained value as a low
@@ -247,7 +253,7 @@ contract AlarmAttackTest is Base {
         _deposit(KEEPER, 1000e18);
         _period(key);
         _period(key);
-        (,,,, uint256 snap,,) = book.state(key);
+        (,,,, uint256 snap,,,) = book.state(key);
         assertEq(snap, 2000e18, "lasting deposits raise the baseline after a full period");
     }
 
@@ -255,7 +261,7 @@ contract AlarmAttackTest is Base {
         _deposit(OWNER, 1000e18);
         (bytes32 drain, bytes32 quorum, bytes32 both) = _bothKeys();
         bytes32 id = _arm(OWNER, _keys(both));
-        _period(drain);
+        _ready(drain);
         vm.warp(block.timestamp + 1);
         rv.exploitDrain(ATTACKER, 300e18);
         assertTrue(_confirmDrain(drain), "an honest large withdrawal fires the drain part");
@@ -274,7 +280,7 @@ contract AlarmAttackTest is Base {
         _deposit(OWNER, 1000e18);
         (bytes32 drain, bytes32 quorum, bytes32 both) = _bothKeys();
         bytes32 id = _arm(OWNER, _keys(both));
-        _period(drain);
+        _ready(drain);
         vm.warp(block.timestamp + 1);
         _reallyDrain(drain);
         vm.warp(block.timestamp + 23 hours); // a report that takes most of a day

@@ -122,11 +122,11 @@ contract AlarmLimitsTest is Base {
     }
 
     function _episodeAt(bytes32 k) internal view returns (uint64 e) {
-        (,,,,, e,) = book.state(k);
+        (,,,,, e,,) = book.state(k);
     }
 
     function _baseline(bytes32 k) internal view returns (uint256 b) {
-        (,,, b,,,) = book.state(k);
+        (,,, b,,,,) = book.state(k);
     }
 
     // ------------------------------------------------------------------ L-1: arming on a live alarm is refused, not left waiting
@@ -303,11 +303,13 @@ contract AlarmLimitsTest is Base {
         rv.deposit(600e18, address(this));
         key = book.register(_detector(AlarmBook.Kind.DRAIN, address(rv), 2500, WINDOW, 0, 0));
         vm.warp(block.timestamp + WINDOW / 2);
-        book.checkpoint(key); // first roll: reference 1000
+        book.checkpoint(key); // first roll: 1000
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key); // second roll: the reference, min(1000, 1000), is live
     }
 
     function _pendingAt(bytes32 k) internal view returns (uint64 p) {
-        (,,,,,, p) = book.state(k);
+        (,,,,,, p,) = book.state(k);
     }
 
     /// v1: a depositor holding 40% of the vault withdrew, poked and deposited back in one transaction, and the alarm fired

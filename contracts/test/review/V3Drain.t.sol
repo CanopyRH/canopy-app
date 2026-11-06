@@ -7,12 +7,11 @@ import {ExitRouter} from "../../src/ExitRouter.sol";
 import {MockERC20} from "../Mocks.sol";
 import {RealVault, FlashAttacker} from "../AlarmAttacks.t.sol";
 
-/// @notice V3-01. A DRAIN reference can be one flash-inflated reading.
-/// INVARIANTS.md A5 says a single high totalAssets reading "never becomes a reference: the lowest sample of a whole
-/// period does". That holds only if some other CLEAR sample lands in the same period. The candidate set by a roll is
-/// the only sample of its period unless someone else checkpoints before the next roll, and once the key reads tripped
-/// `checkpoint` returns early, so honest samples can no longer lower the stuck candidate. An attacker with a flash loan
-/// (no capital, no shares) then fires DRAIN on a vault that lost nothing, and a keeper exits every position armed on it.
+/// @notice V3-01, regression. In v2 as reviewed, a DRAIN reference could be one flash-inflated reading: the candidate set
+/// by a roll is the only sample of its period unless someone else checkpoints before the next roll, and once the key
+/// read tripped `checkpoint` returned early, so an attacker with a flash loan (no capital, no shares) fired DRAIN on a
+/// vault that lost nothing. Fixed: alarms measure against the lower of the last two period lows (`snap`, `prevSnap`), so
+/// a single inflated period never trips the key; it takes two consecutive periods with no honest sample.
 contract V3DrainTest is Base {
     uint32 internal constant WINDOW = 3600; // the app's preset
     uint256 internal constant LOAN = 500e18;
@@ -37,8 +36,8 @@ contract V3DrainTest is Base {
         // An honest first period: the reference is the real 1000.
         vm.warp(block.timestamp + WINDOW / 2);
         book.checkpoint(key);
-        (,,,, uint256 snap,,) = book.state(key);
-        assertEq(snap, 1000e18, "honest reference");
+        (,,,, uint256 snap,,,) = book.state(key);
+        assertEq(snap, 1000e18, "honest first period low (the reference goes live at the next roll)");
         // The owner arms on DRAIN alone (the contract allows it; the app pairs it with a quorum).
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
@@ -46,39 +45,45 @@ contract V3DrainTest is Base {
         posId = router.arm(_params(address(rv), 0, 0, _keys(key)));
     }
 
-    /// @dev The attacker lands a flash deposit on the roll, so the next reference candidate is 1500.
     function _flashRoll() internal {
         vm.warp(block.timestamp + WINDOW / 2);
         asset.mint(address(fa), LOAN);
         fa.flash(book, rv, key, LOAN);
-        (,,, uint256 cand,,,) = book.state(key);
+        (,,, uint256 cand,,,,) = book.state(key);
         assertEq(cand, 1500e18, "the flash reading is the candidate");
     }
 
-    function test_V3_01_flashCandidateBecomesTheReference_andFiresWithNoLoss() public {
+    function _snaps() internal view returns (uint256 snap, uint256 prevSnap) {
+        (,,,, snap,,, prevSnap) = book.state(key);
+    }
+
+    /// v2 (the review's PoC): one flash-inflated sample in an unsampled period became the whole reference, and a flash loan
+    /// fired DRAIN on a vault that lost nothing. Fixed: the reference is the lower of the last two period lows, so the
+    /// inflated period is measured against the honest one before it and nothing trips. And because the key reads clear,
+    /// an honest sample can still pull the next candidate down.
+    function test_V3_01_oneFlashPeriodCantFire() public {
         _flashRoll();
         // Nobody samples during this period. At its end anyone rolls (plain checkpoint, no flash needed).
         vm.warp(block.timestamp + WINDOW / 2);
         book.checkpoint(key);
-        (,,,, uint256 snap,,) = book.state(key);
-        assertEq(snap, 1500e18, "the single flash reading became the reference");
+        (uint256 snap, uint256 prevSnap) = _snaps();
+        assertEq(snap, 1500e18, "the flash reading is that period's low");
+        assertEq(prevSnap, 1000e18, "but the period before it was honest");
         assertEq(rv.totalAssets(), 1000e18, "the vault lost nothing");
+        assertTrue(!book.check(key), "measured against min(1500, 1000): not tripped");
 
-        // Honest samples now change nothing: the key reads tripped, so checkpoint returns early.
-        uint256 candBefore;
-        (,,, candBefore,,,) = book.state(key);
+        // Honest samples still count: the key reads clear, so checkpoint keeps working.
         book.checkpoint(key);
-        (,,, uint256 candAfter,,,) = book.state(key);
-        assertEq(candAfter, candBefore, "an honest sample can't repair it while tripped");
+        (,,, uint256 cand,,,,) = book.state(key);
+        assertEq(cand, 1000e18, "an honest sample pulls the next candidate back down");
 
-        // Two pokes a minute apart fire it, and any keeper exits the owner.
-        assertTrue(!book.poke(key), "first sighting");
+        assertTrue(!book.poke(key), "no sighting");
         vm.warp(block.timestamp + 60);
-        assertTrue(book.poke(key), "second sighting fires a DRAIN that never happened");
+        assertTrue(!book.poke(key), "and no fire");
         vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
         router.exit(posId, key, 0);
-        assertEq(asset.balanceOf(OWNER), 1000e18, "the owner was exited on a false drain");
-        assertEq(rv.balanceOf(OWNER), 0, "position closed");
+        assertEq(rv.balanceOf(OWNER), 1000e18, "the owner keeps the position");
     }
 
     /// Control: one honest sample in the period after the flash roll pulls the candidate back down, and nothing fires.
@@ -88,48 +93,64 @@ contract V3DrainTest is Base {
         book.checkpoint(key); // the keeper's sample
         vm.warp(block.timestamp + WINDOW / 2 - 600);
         book.checkpoint(key);
-        (,,,, uint256 snap,,) = book.state(key);
+        (uint256 snap,) = _snaps();
         assertEq(snap, 1000e18, "reference stays honest");
         assertTrue(!book.check(key), "nothing to fire");
     }
 
-    /// Persistence: once tripped, honest sampling never helps. Only winning the next roll does; an attacker who lands a
-    /// flash deposit on each roll keeps the key tripped across windows, and it refires every day.
-    function test_V3_01_attackerWhoWinsEachRollKeepsItTripped() public {
-        _flashRoll();
+    /// An attacker who lands a flash deposit on every roll for a day, against a keeper that samples (and pokes) every 10
+    /// minutes, never fires the key: each of its inflated candidates is pulled down by the keeper's next sample.
+    function test_V3_01_attackerWhoWinsEachRoll_againstAKeeperSamplingEachPeriod_neverFires() public {
+        uint256 end = block.timestamp + 1 days;
+        uint256 rolls;
+        while (block.timestamp < end) {
+            (,, uint64 snapAt,,,,,) = book.state(key);
+            vm.warp(uint256(snapAt) + WINDOW / 2); // the roll moment: the attacker gets there first
+            asset.mint(address(fa), LOAN);
+            fa.flash(book, rv, key, LOAN);
+            (,, uint64 rolledAt,,,,,) = book.state(key);
+            assertEq(rolledAt, block.timestamp, "the attacker's flash sample rolled the period");
+            ++rolls;
+            for (uint256 i; i < 2; ++i) {
+                vm.warp(block.timestamp + 600);
+                book.checkpoint(key); // the keeper's samples inside the period
+                assertTrue(!book.poke(key), "never fires");
+            }
+        }
+        assertTrue(rolls >= 40, "the attacker took every roll of the day");
+        assertTrue(!book.isLive(key, 1 days), "nothing fired");
+        assertEq(rv.totalAssets(), 1000e18, "never drained");
+    }
+
+    /// The boundary the fix keeps, pinned: an attacker who wins two consecutive rolls with no honest sample in between
+    /// (two whole unsampled periods) makes both period lows inflated, and can then fire. A keeper sampling once a period
+    /// prevents it (the control above, and the test before this one).
+    function test_V3_01_twoUnsampledPeriodsAreNeeded_documentedLimit() public {
+        _flashRoll(); // period 1: only the flash sample
         vm.warp(block.timestamp + WINDOW / 2);
         asset.mint(address(fa), LOAN);
-        fa.flash(book, rv, key, LOAN); // roll: reference 1500, candidate 1500 again
-        assertTrue(!book.poke(key), "sighting");
-        vm.warp(block.timestamp + 60);
-        assertTrue(book.poke(key), "fires");
-        (, uint64 firedAt,,,,,) = book.state(key);
-        uint256 rolls;
-        // For the next day a keeper samples every 10 minutes (all ignored while tripped). Each time the reference
-        // expires and the key reads clear, the attacker takes the roll with a flash deposit (it knows the exact second).
-        while (block.timestamp < uint256(firedAt) + 1 days) {
-            (,, uint64 snapAt,,,,) = book.state(key);
-            if (block.timestamp > uint256(snapAt) + WINDOW) {
-                vm.warp(uint256(snapAt) + WINDOW + 1);
-                asset.mint(address(fa), LOAN);
-                fa.flash(book, rv, key, LOAN);
-                ++rolls;
-                (,,,, uint256 snap,,) = book.state(key);
-                assertEq(snap, 1500e18, "still the flash reading");
-            } else {
-                book.checkpoint(key);
-            }
-            vm.warp(block.timestamp + 600);
-        }
-        assertTrue(rolls >= 20, "the attacker took every roll of the day");
-        (,, uint64 lastRoll,,,,) = book.state(key);
-        // The attacker takes the next roll too, then sights the "drain" twice within the fresh reference's window.
-        if (block.timestamp < uint256(lastRoll) + WINDOW + 1) vm.warp(uint256(lastRoll) + WINDOW + 1);
+        fa.flash(book, rv, key, LOAN); // roll: snap 1500, prevSnap 1000; period 2: only the flash sample again
+        assertTrue(!book.check(key), "one unsampled period is not enough");
+        vm.warp(block.timestamp + WINDOW / 2);
         asset.mint(address(fa), LOAN);
-        fa.flash(book, rv, key, LOAN);
+        fa.flash(book, rv, key, LOAN); // roll: snap 1500, prevSnap 1500
+        (uint256 snap, uint256 prevSnap) = _snaps();
+        assertTrue(snap == 1500e18 && prevSnap == 1500e18, "both period lows inflated");
         assertTrue(!book.poke(key), "sighting");
         vm.warp(block.timestamp + 60);
-        assertTrue(book.poke(key), "and it refires a day later, with the vault whole throughout");
-        assertEq(rv.totalAssets(), 1000e18, "never drained");
+        assertTrue(book.poke(key), "fires after two unsampled periods");
+    }
+
+    /// A real drain still fires within one window of the reference being live.
+    function test_V3_01_realDrainStillFires() public {
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key); // second honest roll: the reference is live
+        rv.exploitDrain(ATTACKER, 300e18);
+        assertTrue(!book.poke(key), "sighting");
+        vm.warp(block.timestamp + 60);
+        assertTrue(book.poke(key), "fires a minute later");
+        vm.prank(KEEPER);
+        router.exit(posId, key, 0);
+        assertEq(asset.balanceOf(OWNER), 700e18, "the owner gets what is left");
     }
 }

@@ -132,7 +132,7 @@ contract ForkCheckpointTest {
     }
 
     function _mark(bytes32 key) internal view returns (uint256 b) {
-        (,,, b,,,) = book.state(key);
+        (,,, b,,,,) = book.state(key);
     }
 
     function _attempt(address v, uint256 attempt, bool aged) internal returns (Result memory r) {

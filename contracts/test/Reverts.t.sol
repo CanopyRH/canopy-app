@@ -339,7 +339,7 @@ contract ExitRouterReverts is Base {
     function test_arm_TooManySwaps() public {
         ExitRouter.SwapLeg[] memory legs = new ExitRouter.SwapLeg[](5);
         for (uint256 i; i < 5; ++i) {
-            legs[i] = _leg(address(uint160(0x7000 + i)), address(stableFeed));
+            legs[i] = _leg(address(new MockERC20(18)), address(stableFeed));
         }
         _expectLegs(legs, STABLE, abi.encodeWithSelector(ExitRouter.TooManySwaps.selector));
         ExitRouter.SwapLeg[] memory four = new ExitRouter.SwapLeg[](4);
@@ -352,7 +352,7 @@ contract ExitRouterReverts is Base {
     function test_arm_DuplicateSwap() public {
         ExitRouter.SwapLeg[] memory legs = new ExitRouter.SwapLeg[](3);
         legs[0] = _wethLeg();
-        legs[1] = _leg(address(0x7001), address(stableFeed));
+        legs[1] = _leg(address(new MockERC20(18)), address(stableFeed));
         legs[2] = _wethLeg();
         _expectLegs(legs, STABLE, abi.encodeWithSelector(ExitRouter.DuplicateSwap.selector, address(weth)));
     }
@@ -376,10 +376,24 @@ contract ExitRouterReverts is Base {
     }
 
     function test_arm_BadFeed_decimalsAboveMax() public {
-        ExitRouter.SwapLeg memory l = _wethLeg();
+        ExitRouter.SwapLeg memory l = _leg(address(new MockERC20(37)), address(stableFeed));
         l.tokenDecimals = 37;
         _expectLegs(_legs(l), STABLE, abi.encodeWithSelector(ExitRouter.BadFeed.selector));
+        l = _leg(address(new MockERC20(36)), address(stableFeed));
         l.tokenDecimals = 36; // the highest allowed
+        _armLegs(_legs(l), STABLE);
+    }
+
+    /// V3-03: the stated decimals must be the token's own `decimals()`, read with a gas cap; a token that can't say fails.
+    function test_arm_BadFeed_decimalsDifferFromTheToken() public {
+        ExitRouter.SwapLeg memory l = _wethLeg(); // an 18-decimal token
+        l.tokenDecimals = 6;
+        _expectLegs(_legs(l), STABLE, abi.encodeWithSelector(ExitRouter.BadFeed.selector));
+        l.tokenDecimals = 24;
+        _expectLegs(_legs(l), STABLE, abi.encodeWithSelector(ExitRouter.BadFeed.selector));
+        ExitRouter.SwapLeg memory p = _leg(address(pausable), address(stableFeed)); // has code, no decimals()
+        _expectLegs(_legs(p), STABLE, abi.encodeWithSelector(ExitRouter.BadFeed.selector));
+        l.tokenDecimals = 18;
         _armLegs(_legs(l), STABLE);
     }
 
@@ -980,7 +994,7 @@ contract AlarmBookReverts is Base {
         bytes32 key = book.keyOf(d);
         vm.expectRevert(AlarmBook.BadDetector.selector);
         book.register(d);
-        (bool exists,,,,,,) = book.state(key);
+        (bool exists,,,,,,,) = book.state(key);
         assertTrue(!exists, "nothing stored by a failed register");
     }
 
