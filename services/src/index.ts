@@ -99,7 +99,7 @@ await migrate(db);
 // by mistake would index and act on the wrong contracts, even where CONTRACT_SWITCH is set.
 if (contracts) {
   try {
-    await requireV2(client, { router, alarmBook });
+    await requireV2(client, { router: env.ROUTER === undefined ? undefined : router, alarmBook });
   } catch (e) {
     if (!(e instanceof ContractVersionError)) throw e;
     console.error("contract version check failed:", e.message);

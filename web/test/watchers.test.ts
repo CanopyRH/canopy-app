@@ -6,7 +6,7 @@ const hash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const NOW = 2_000_000_000;
 
 const attestation = { key: hash(1), evidence: hash(2), attestedAt: NOW - 120, deadline: NOW + 600, firedAt: NOW - 100, matched: true };
-const watcher = { address: A, source: "chain", approvedAt: NOW - 86_400, lastAttestedAt: NOW - 120, attestations30d: 3, matched30d: 1, recent: [attestation] };
+const watcher = { address: A, source: "chain", status: "active", activeFrom: NOW - 86_400, expiresAt: NOW + 86_400 * 300, approvedAt: NOW - 86_400, lastAttestedAt: NOW - 120, attestations30d: 3, matched30d: 1, recent: [attestation] };
 const report = { windowDays: 30, generatedAt: NOW, watchers: [watcher] };
 
 describe("reading /watchers", () => {
@@ -15,7 +15,7 @@ describe("reading /watchers", () => {
   });
 
   test("accepts a watcher that has never signed", () => {
-    const fresh = { ...watcher, source: "config", approvedAt: null, lastAttestedAt: null, attestations30d: 0, matched30d: 0, recent: [] };
+    const fresh = { ...watcher, source: "config", status: "listed", activeFrom: null, expiresAt: null, approvedAt: null, lastAttestedAt: null, attestations30d: 0, matched30d: 0, recent: [] };
     expect(parseReport({ ...report, watchers: [fresh] })?.watchers[0]).toEqual(fresh as never);
   });
 

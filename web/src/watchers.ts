@@ -11,7 +11,12 @@ export interface WatcherAttestation {
 export interface WatcherRow {
   address: string;
   source: "chain" | "config";
+  /** "pending": approved, but a new watcher only counts 2 days after approval. "listed": only in the service's settings, dates unknown. */
+  status: "active" | "pending" | "listed";
   approvedAt: number | null;
+  /** When the approval starts to count and when it ends (every approval ends within 365 days). Null for "listed". */
+  activeFrom: number | null;
+  expiresAt: number | null;
   lastAttestedAt: number | null;
   attestations30d: number;
   matched30d: number;
@@ -37,15 +42,18 @@ export function parseReport(raw: unknown): WatchersReport | null {
   for (const w of r.watchers as Record<string, unknown>[]) {
     const approvedAt = numOrNull(w?.approvedAt);
     const lastAttestedAt = numOrNull(w?.lastAttestedAt);
+    const activeFrom = numOrNull(w?.activeFrom);
+    const expiresAt = numOrNull(w?.expiresAt);
     if (!w || !isAddress(w.address) || (w.source !== "chain" && w.source !== "config")) continue;
-    if (approvedAt === undefined || lastAttestedAt === undefined || !isNum(w.attestations30d) || !isNum(w.matched30d) || !Array.isArray(w.recent)) continue;
+    if (w.status !== "active" && w.status !== "pending" && w.status !== "listed") continue;
+    if (activeFrom === undefined || expiresAt === undefined || approvedAt === undefined || lastAttestedAt === undefined || !isNum(w.attestations30d) || !isNum(w.matched30d) || !Array.isArray(w.recent)) continue;
     const recent: WatcherAttestation[] = [];
     for (const a of w.recent as Record<string, unknown>[]) {
       const firedAt = numOrNull(a?.firedAt);
       if (!a || !isHash(a.key) || !isHash(a.evidence) || !isNum(a.attestedAt) || !isNum(a.deadline) || firedAt === undefined || typeof a.matched !== "boolean") continue;
       recent.push({ key: a.key, evidence: a.evidence, attestedAt: a.attestedAt, deadline: a.deadline, firedAt, matched: a.matched });
     }
-    watchers.push({ address: w.address, source: w.source, approvedAt, lastAttestedAt, attestations30d: w.attestations30d, matched30d: w.matched30d, recent });
+    watchers.push({ address: w.address, source: w.source, status: w.status, approvedAt, activeFrom, expiresAt, lastAttestedAt, attestations30d: w.attestations30d, matched30d: w.matched30d, recent });
   }
   return { windowDays: r.windowDays, generatedAt: r.generatedAt, watchers };
 }

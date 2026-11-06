@@ -21,12 +21,14 @@ function Watcher({w,now,days}) {
   return <li className="wt-card">
     <header>
       <Link href={CONFIG.explorer+'/address/'+w.address}><code className="wt-addr">{w.address}</code></Link>
-      <span className="wt-tag">{w.source==='chain'?'Approved on chain':'Listed in this service’s settings'}</span>
+      <span className="wt-tag">{w.status==='pending'?'Approved, not counting yet':w.source==='chain'?'Approved on chain':'Listed in this service’s settings'}</span>
     </header>
     <dl>
       <div><dt>Last signed</dt><dd>{ago(now,w.lastAttestedAt)}{w.lastAttestedAt!==null&&<small> · {utc(w.lastAttestedAt)}</small>}</dd></div>
       <div><dt>Last {days} days</dt><dd>{countsLine(w,days)}</dd></div>
       {w.approvedAt!==null&&<div><dt>Approved</dt><dd>{utc(w.approvedAt)}</dd></div>}
+      {w.status==='pending'&&w.activeFrom!==null&&<div><dt>Counts from</dt><dd>{utc(w.activeFrom)}</dd></div>}
+      {w.expiresAt!==null&&<div><dt>Approval ends</dt><dd>{utc(w.expiresAt)}</dd></div>}
     </dl>
     {w.recent.length>0&&<details>
       <summary>See the {w.recent.length<w.attestations30d?'latest '+w.recent.length:w.recent.length} {w.recent.length===1?'signature':'signatures'}</summary>
@@ -50,7 +52,7 @@ export default function Watchers() {
     <header className="wp-head rm-head">
       <div className="doc-eyebrow">WATCHERS</div>
       <h1>Who confirms an alarm</h1>
-      <p className="wp-abstract">Some alarms fire only when 2 approved watchers sign. A watcher can&rsquo;t move funds, and one watcher can&rsquo;t fire an alarm alone. This page lists every approved watcher and what it has signed.</p>
+      <p className="wp-abstract">Some alarms fire only when 2 approved watchers sign. A watcher can&rsquo;t move funds, and one watcher can&rsquo;t fire an alarm alone. A new watcher only counts 2 days after it is approved, and every approval ends within a year unless it is renewed. This page lists every approved watcher, when its approval ends, and what it has signed.</p>
     </header>
     <main className="wt-main">
       {state.status==='loading'&&<p className="wt-note" role="status">Loading watchers…</p>}

@@ -25,7 +25,7 @@ A watcher is a small program that reads public sources and signs a message when 
 
 - **It cannot move funds.** Its key holds none, signs messages off chain and never sends a transaction, so it needs no
   gas. Nothing in the contracts lets a watcher pay anyone, change who gets paid, or touch a position.
-- **One watcher cannot fire anything alone.** The AlarmBook needs signatures from 2 different approved watchers over
+- **One watcher cannot fire anything alone.** The AlarmBook needs signatures from 2 different active watchers over
   the same evidence and deadline. One watcher signing something false does nothing by itself.
 - It cannot pause arming, change settings, add or remove watchers, or pick which alarms exist.
 
@@ -90,7 +90,8 @@ which block goes where), then fill them in. The watcher process needs only these
 | `ROLE` | `watcher` |
 | `DATABASE_URL` | Your Postgres, with TLS and a password |
 | `CHAIN_ID` | `4663` |
-| `ALARM_BOOK` | The AlarmBook address from `deploy/out/4663/deployment.json` |
+| `ALARM_BOOK` | The v2 AlarmBook address from `deploy/out/4663/deployment.json` |
+| `RPC_URL` | Your chain endpoint. At start the watcher reads the AlarmBook once to confirm it is the v2 contract, and refuses to start on a v1 address |
 | `WATCHER_PRIVATE_KEY` | The key from step 1 |
 | `ANTHROPIC_API_KEY` | Your model key. Add `ANTHROPIC_BASE_URL` and `CLASSIFIER_MODEL` if you use a compatible service |
 | `WATCHERS` | The approved watcher addresses, yours included. Ask in your application for the current list |
@@ -98,8 +99,9 @@ which block goes where), then fill them in. The watcher process needs only these
 | `FEED_URLS` | The feed list from `deploy/services.env.example`. Use the same list as everyone else (see the note below) |
 | `CARD_VAULTS` | The vault list from `deploy/services.env.example` |
 
-A watcher does **not** need Telegram settings, a public URL, RPC endpoints, or the router, adapter and plan-payment
-addresses. For `ROLE=watcher` the service leaves them out and fills harmless placeholders for them. If a setting a
+A watcher does **not** need Telegram settings, a public URL, a second RPC endpoint (`RPC_URL_BACKUP` follows
+`RPC_URL`), or the router, adapter and plan-payment addresses. For `ROLE=watcher` the service leaves them out and fills
+harmless placeholders for them. If a setting a
 watcher does need is missing or badly formed, it stops at start and names the setting, instead of running and doing
 nothing.
 
@@ -133,8 +135,9 @@ catch up.
 - The indexer's block (the `cursors` table in your database) should be within a few blocks of the chain's tip.
 - Until you are approved, your signatures are refused by Canopy's API (HTTP 403). That is expected, and it is safe to
   run like this while you apply.
-- Once you are approved, your address appears on the Watchers page. It shows "never" until you sign something, which is
-  normal: signatures only happen when an incident looks real.
+- Once you are approved, your address appears on the Watchers page. For the first 2 days it is marked as not counting
+  yet, because the AlarmBook ignores a new watcher until then (see [how approval works](#how-approval-works)). It shows
+  "never" until you sign something, which is normal: signatures only happen when an incident looks real.
 
 ## Key handling
 
@@ -158,20 +161,36 @@ catch up.
    when to sign. It does **not** ask for your name, your ID or any private detail, and you shouldn't give any.
 3. A maintainer replies in the issue and may ask questions. We look at the setup, the signing policy, and whether your
    watcher is running and reading the same feeds.
-4. If we agree, the admin Safe adds you: 2 of its 3 signers approve `setWatcher(yourAddress, true)` on the AlarmBook,
-   through the Timelock. The change shows up as a `WatcherSet` event on chain, as an alert to the operator chat, and
-   on the Watchers page.
+4. If we agree, the admin Safe adds you: 2 of its 3 signers approve `setWatcher(yourAddress, until)` on the AlarmBook,
+   through the Timelock, with `until` at most 365 days away. The change shows up as a `WatcherSet(watcher, since,
+   until)` event on chain, as an alert to the operator chat, and on the Watchers page.
 5. Our services accept signatures only from the addresses in their `WATCHERS` setting, so we add yours there too. Add
    the final list to your own `WATCHERS`.
 
 There is no promised timeline and no payment for running a watcher. Approval is not a right. It is a decision by the
 Safe signers.
 
+## How approval works
+
+The AlarmBook (version 2) approves a watcher with `setWatcher(address, uint64 until)`. Three rules follow from it:
+
+- **A new watcher counts only 2 days after it is approved.** Its `since` is the approval time plus 2 days
+  (`WATCHER_DELAY`). Signatures made before that are refused by the contract, so a bad approval can be caught before
+  it matters.
+- **Every approval ends.** `until` is at most 365 days after the call (`MAX_WATCHER_TERM`), and from `until` on the
+  watcher's signatures no longer count. The admin extends an active watcher with another `setWatcher` call, and the new
+  end applies at once. Plan to ask for an extension well before the date on the Watchers page ("Approval ends").
+- **Signatures are bound to version 2 of the AlarmBook.** A watcher signs an EIP-712 message under the domain name
+  `Canopy AlarmBook`, version `"2"`, your chain id and the AlarmBook's address. A signature made for the old (v1)
+  AlarmBook is rejected. The code in `services/src/watcher/attest.ts` sets this up, so use the current code from
+  `main` and point `ALARM_BOOK` at the v2 AlarmBook.
+
 ## How removal works
 
 The AlarmBook admin (the Timelock, run by a 2-of-3 Safe) can remove any watcher at any time with
-`setWatcher(address, false)`. That power does not expire with the router admin's `ADMIN_EXPIRY`, so a bad watcher can
-always be removed. From the moment the change is executed, that address's signatures no longer count on chain.
+`setWatcher(address, 0)`. That power does not expire with the router admin's `ADMIN_EXPIRY`, so a bad watcher can
+always be removed. From the moment the change is executed, that address's signatures no longer count on chain. An
+approval that is simply left to run out ends on its own at `until`.
 
 We may ask for removal when:
 

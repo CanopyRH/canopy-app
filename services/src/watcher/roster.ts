@@ -28,9 +28,12 @@ export async function recordWatcherSet(db: Db, e: AdminEvent, now: number): Prom
   const arg = (name: string) => e.args.find(([n]) => n === name)?.[1];
   const watcher = arg("watcher");
   if (!watcher || !isAddress(watcher, { strict: false })) return false;
+  // v2: WatcherSet(watcher, since, until), both Unix seconds. Both zero is a removal.
+  const since = arg("since"), until = arg("until");
+  if (!since || !until || !/^\d{1,19}$/.test(since) || !/^\d{1,19}$/.test(until)) return false;
   await db.query(
-    `INSERT INTO watcher_events (tx, log_index, watcher, allowed, block, recorded_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-    [e.tx ?? "", e.logIndex ?? 0, watcher.toLowerCase(), arg("allowed") === "true", (e.block ?? 0n).toString(), now],
+    `INSERT INTO watcher_events (tx, log_index, watcher, since, until, block, recorded_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+    [e.tx ?? "", e.logIndex ?? 0, watcher.toLowerCase(), since, until, (e.block ?? 0n).toString(), now],
   );
   return true;
 }
@@ -62,8 +65,17 @@ export interface RosterWatcher {
   address: string;
   /** "chain" when a WatcherSet event was recorded for it, "config" when it is only in this operator's WATCHERS setting. */
   source: "chain" | "config";
+  /**
+   * "active": its approval counts now. "pending": approved, but a new watcher only counts 2 days after approval (see `activeFrom`).
+   * "listed": only in this operator's WATCHERS setting, so the chain's dates are not known.
+   */
+  status: "active" | "pending" | "listed";
   /** When the indexer read the event that approved it. Null for a "config" watcher. */
   approvedAt: number | null;
+  /** When the approval starts to count (AlarmBook's `since`), or null for a "listed" watcher. */
+  activeFrom: number | null;
+  /** When the approval ends (AlarmBook's `until`, at most 365 days after it was given), or null for a "listed" watcher. */
+  expiresAt: number | null;
   lastAttestedAt: number | null;
   attestations30d: number;
   matched30d: number;
@@ -77,22 +89,28 @@ export interface Roster {
 }
 
 /**
- * Who is approved and what each has signed. Approved means the latest WatcherSet event for the address says allowed. An
- * address with no recorded event counts if this operator lists it in WATCHERS, which covers a list set before the indexer
- * began recording these events. A removal event wins over the setting.
+ * Who is approved and what each has signed. The latest WatcherSet event for an address gives its window: it counts from
+ * `since` until `until`, and an approval always ends within 365 days. A watcher is listed while that window is open or still
+ * to come; one that has expired or been removed (both zero) is not listed. An address with no recorded event counts if this
+ * operator lists it in WATCHERS, which covers a list set before the indexer began recording these events. An expiry or
+ * removal wins over the setting.
  */
 export async function rosterReport(db: Db, configured: readonly string[], now: number): Promise<Roster> {
   const since = now - WINDOW_DAYS * DAY;
-  const events = await db.query<{ watcher: string; allowed: boolean; recorded_at: string }>(
-    `SELECT DISTINCT ON (watcher) watcher, allowed, recorded_at FROM watcher_events ORDER BY watcher, block DESC, log_index DESC`,
+  const events = await db.query<{ watcher: string; since: string; until: string; recorded_at: string }>(
+    `SELECT DISTINCT ON (watcher) watcher, since::text AS since, until::text AS until, recorded_at FROM watcher_events ORDER BY watcher, block DESC, log_index DESC`,
   );
-  const approved = new Map<string, { source: "chain" | "config"; approvedAt: number | null }>();
-  const removed = new Set<string>();
+  type Info = Pick<RosterWatcher, "source" | "status" | "approvedAt" | "activeFrom" | "expiresAt">;
+  const approved = new Map<string, Info>();
+  const ended = new Set<string>();
   for (const ev of events) {
-    if (ev.allowed) approved.set(ev.watcher, { source: "chain", approvedAt: Number(ev.recorded_at) });
-    else removed.add(ev.watcher);
+    const from = Number(ev.since), to = Number(ev.until);
+    if (to === 0 || now >= to) ended.add(ev.watcher);
+    else approved.set(ev.watcher, { source: "chain", status: now >= from ? "active" : "pending", approvedAt: Number(ev.recorded_at), activeFrom: from, expiresAt: to });
   }
-  for (const w of configured.map((x) => x.toLowerCase())) if (!approved.has(w) && !removed.has(w)) approved.set(w, { source: "config", approvedAt: null });
+  for (const w of configured.map((x) => x.toLowerCase())) {
+    if (!approved.has(w) && !ended.has(w)) approved.set(w, { source: "config", status: "listed", approvedAt: null, activeFrom: null, expiresAt: null });
+  }
 
   const stats = await db.query<{ signer: string; last: string; n: string; matched: string }>(
     `SELECT l.signer, MAX(l.seen_at)::text AS last,
@@ -116,8 +134,7 @@ export async function rosterReport(db: Db, configured: readonly string[], now: n
       : [];
     watchers.push({
       address,
-      source: info.source,
-      approvedAt: info.approvedAt,
+      ...info,
       lastAttestedAt: s ? Number(s.last) : null,
       attestations30d: Number(s?.n ?? 0),
       matched30d: Number(s?.matched ?? 0),

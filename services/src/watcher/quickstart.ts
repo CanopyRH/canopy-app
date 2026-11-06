@@ -2,13 +2,16 @@ import { isAddress } from "viem";
 import { allowedFeed } from "./feeds";
 
 /**
- * Settings a watcher never reads. It signs with its key, reads feeds, and posts to its peers: it sends no Telegram message,
- * serves no webhook and makes no chain call. The shared env check still wants a value for each, so ROLE=watcher gets a
- * placeholder for any of these left blank. They point nowhere, so a future change that starts using one fails loudly.
+ * Settings a watcher never reads. It signs with its key, reads feeds, and posts to its peers: it sends no Telegram message
+ * and serves no webhook. The shared env check still wants a value for each, so ROLE=watcher gets a placeholder for any of
+ * these left blank. They point nowhere, so a future change that starts using one fails loudly.
+ *
+ * RPC_URL is not here: every service checks at start that its AlarmBook is the v2 contract (a v1 address would make the
+ * watcher sign under the wrong EIP-712 domain, and nothing would accept its signatures), so a watcher needs one real
+ * endpoint. RPC_URL_BACKUP follows RPC_URL when left blank.
  */
 export const WATCHER_UNUSED: Record<string, string> = {
   PUBLIC_URL: "http://127.0.0.1",
-  RPC_URL: "http://127.0.0.1:1",
   RPC_URL_BACKUP: "http://127.0.0.1:1",
   TELEGRAM_BOT_TOKEN: "0:watcher-role-unused",
   TELEGRAM_WEBHOOK_SECRET: "watcher-role-unused-secret",
@@ -16,7 +19,7 @@ export const WATCHER_UNUSED: Record<string, string> = {
 
 /** Fills the unused settings for ROLE=watcher only. Every other role gets its settings back untouched. */
 export function withWatcherDefaults<T extends Record<string, string | undefined>>(raw: T): T {
-  return raw.ROLE === "watcher" ? { ...WATCHER_UNUSED, ...raw } : raw;
+  return raw.ROLE === "watcher" ? { ...WATCHER_UNUSED, ...(raw.RPC_URL ? { RPC_URL_BACKUP: raw.RPC_URL } : {}), ...raw } : raw;
 }
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);

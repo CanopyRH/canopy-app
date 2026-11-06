@@ -1,8 +1,11 @@
 // A watcher run from the shared image with ROLE=watcher and only the settings it uses. The env check used to want a
-// Telegram token, a public URL, two RPC endpoints and the router, adapter and plan payment addresses it never reads.
+// Telegram token, a public URL, a second RPC endpoint and the router, adapter and plan payment addresses it never reads.
+// It keeps one RPC endpoint: the startup check that the AlarmBook is v2 reads the chain.
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { encodeFunctionResult, type Abi } from "viem";
 import { generatePrivateKey } from "viem/accounts";
+import { alarmBookAbi } from "../src/chain/abi";
 import { loadEnv } from "../src/env";
 import type { Db } from "../src/store/db";
 import { WATCHER_UNUSED, watcherProblems } from "../src/watcher/quickstart";
@@ -17,6 +20,7 @@ const minimal = {
   DATABASE_URL: "postgres://watcher:pw@db.invalid:5432/watcher",
   CHAIN_ID: "4663",
   ALARM_BOOK: BOOK,
+  RPC_URL: "http://rpc.test/a",
   WATCHER_PRIVATE_KEY: KEY,
   ANTHROPIC_API_KEY: "test-key-not-real",
   WATCHERS: `${ME},0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd`,
@@ -31,7 +35,8 @@ describe("the env check for ROLE=watcher", () => {
     expect(e.ROLE).toBe("watcher");
     expect(e.PUBLIC_URL).toBe(WATCHER_UNUSED.PUBLIC_URL!);
     expect(e.TELEGRAM_BOT_TOKEN).toBe(WATCHER_UNUSED.TELEGRAM_BOT_TOKEN!);
-    expect(e.RPC_URL).toBe(WATCHER_UNUSED.RPC_URL!);
+    expect(e.RPC_URL).toBe(minimal.RPC_URL); // the one setting a watcher reads that the other roles also have: the v2 check needs a node
+    expect(e.RPC_URL_BACKUP).toBe(minimal.RPC_URL);
     expect(e.ROUTER).toBeUndefined();
     expect(e.PLAN_TOKEN).toBeUndefined();
   });
@@ -39,6 +44,8 @@ describe("the env check for ROLE=watcher", () => {
   test("keeps any value the operator does set, and treats a blank line as not set", () => {
     const e = loadEnv({ ...minimal, RPC_URL: "https://rpc.invalid", PUBLIC_URL: "", TELEGRAM_BOT_TOKEN: "" });
     expect(e.RPC_URL).toBe("https://rpc.invalid");
+    expect(e.RPC_URL_BACKUP).toBe("https://rpc.invalid"); // follows RPC_URL when left blank
+    expect(loadEnv({ ...minimal, RPC_URL_BACKUP: "https://rpc2.invalid" }).RPC_URL_BACKUP).toBe("https://rpc2.invalid");
     expect(e.PUBLIC_URL).toBe(WATCHER_UNUSED.PUBLIC_URL!);
     expect(e.TELEGRAM_BOT_TOKEN).toBe(WATCHER_UNUSED.TELEGRAM_BOT_TOKEN!);
   });
@@ -53,6 +60,7 @@ describe("the env check for ROLE=watcher", () => {
       }
     };
     expect(missing({ ALARM_BOOK: undefined })).toEqual(["ALARM_BOOK"]);
+    expect(missing({ RPC_URL: undefined })).toEqual(["RPC_URL"]); // the v2 check at start needs a node
     expect(missing({ WATCHER_PRIVATE_KEY: undefined })).toEqual(["WATCHER_PRIVATE_KEY"]);
     expect(missing({ WATCHER_PRIVATE_KEY: "0x1234" })).toEqual(["WATCHER_PRIVATE_KEY"]);
     expect(missing({ ANTHROPIC_API_KEY: undefined })).toEqual(["ANTHROPIC_API_KEY"]);
@@ -79,8 +87,8 @@ describe("the env check for ROLE=watcher", () => {
     };
     const telegram = { PUBLIC_URL: "https://api.invalid", RPC_URL: "https://rpc.invalid", RPC_URL_BACKUP: "https://rpc2.invalid", TELEGRAM_BOT_TOKEN: "1:x", TELEGRAM_WEBHOOK_SECRET: "x".repeat(16) };
     for (const role of ["all", "api", "bot", "indexer", "detector", "keeper"]) {
-      // The watcher's own settings are not enough: the role still wants Telegram, the public URL and both RPC endpoints...
-      expect(issues({ ...minimal, ROLE: role })).toEqual(["PUBLIC_URL", "RPC_URL", "RPC_URL_BACKUP", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]);
+      // The watcher's own settings are not enough: the role still wants Telegram, the public URL and the second RPC endpoint...
+      expect(issues({ ...minimal, ROLE: role })).toEqual(["PUBLIC_URL", "RPC_URL_BACKUP", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]);
       // ...and then the router, adapter and plan payment addresses.
       expect(issues({ ...minimal, ...telegram, ROLE: role })).toEqual(["ROUTER", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
     }
@@ -118,6 +126,19 @@ describe("starting the service with only those settings", () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const req = new Request(input, init);
       asked.push(req.url);
+      if (new URL(req.url).host === "rpc.test") {
+        // The startup check reads REBASE_AFTER() on the AlarmBook, and never the router, which this watcher does not have.
+        const call = async (m: { id: number; method: string; params?: { data?: string }[] }) => {
+          if (m.method === "eth_chainId") return { jsonrpc: "2.0", id: m.id, result: "0x1237" };
+          if (m.method === "eth_call") {
+            asked.push(`eth_call ${m.params?.[0]?.data?.slice(0, 10)}`);
+            return { jsonrpc: "2.0", id: m.id, result: encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "REBASE_AFTER", result: 604_800n }) };
+          }
+          return { jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `no ${m.method} in this test` } };
+        };
+        const body = (await req.json()) as never;
+        return Response.json(Array.isArray(body) ? await Promise.all((body as Parameters<typeof call>[0][]).map(call)) : await call(body));
+      }
       if (req.url.startsWith("http://127.0.0.1:9/feed.xml")) {
         return new Response(`<rss><channel><item><title>Report</title><description>A sample report.</description></item></channel></rss>`);
       }
@@ -141,6 +162,7 @@ describe("starting the service with only those settings", () => {
       expect(rows).toHaveLength(1);
       expect(svc.server).toBeUndefined(); // a watcher opens no port
       expect(asked.some((u) => u.includes("telegram"))).toBe(false);
+      expect(asked.some((u) => u.startsWith("eth_call"))).toBe(true); // the AlarmBook version check ran (other files' loops may add calls)
     } finally {
       svc.stop();
     }
