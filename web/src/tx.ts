@@ -1,5 +1,5 @@
 import { encodeFunctionData, getAddress, isAddress, keccak256, maxUint256, parseAbi, stringToHex, type Address, type Hex } from "viem";
-import type { Detector } from "../../services/src/api/presets";
+import { Kind, type Detector } from "../../services/src/api/presets";
 import { TERMS } from "./copy/text";
 import sanctioned from "./sanctioned.json";
 
@@ -36,8 +36,12 @@ export const termsHash = () => keccak256(stringToHex(TERMS));
 export const isBlocked = (a: string) => blocked.has(a.toLowerCase());
 export const parseWallet = (s: string): Address | null => (isAddress(s.trim(), { strict: false }) ? getAddress(s.trim().toLowerCase()) : null);
 
+/** A DRAIN window under 20 minutes rolls its reference every few seconds, so one flash deposit can move it. The app refuses those. */
+export const MIN_DRAIN_WINDOW = 1_200;
+
 /** Registration is open to anyone. A key that was never registered can never fire. */
 export function registerTx(book: Address, d: Detector): Tx {
+  if (d.kind === Kind.DRAIN && d.window < MIN_DRAIN_WINDOW) throw new Error(`A drain alarm needs a window of at least ${MIN_DRAIN_WINDOW} seconds.`);
   return { to: book, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "register", args: [d] }) };
 }
 

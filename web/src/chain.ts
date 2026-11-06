@@ -3,6 +3,8 @@ import { CONFIG, type Vault } from "./config";
 import { exitBlocked, gateAbi, type Read } from "./gates";
 import { sendTx, type Eip1193 } from "./wallet";
 import { Kind, keyOf, presetsFor, registrationOrder, type Detector, type Preset } from "../../services/src/api/presets";
+import { presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
+import { COPY } from "./copy/text";
 import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
 
 const vaultAbi = parseAbi([
@@ -65,7 +67,14 @@ export async function armState(owner: Address, vault: Address): Promise<{ posId:
   return { posId, armed };
 }
 
-export interface PresetView { preset: Preset; tripped: boolean }
+export interface PresetView { preset: Preset; status: AlarmStatus }
+
+/** AlarmBook reads for the going-off check. The time is the chain's, so a wrong browser clock can't hide a recent firing. */
+const alarmIo: AlarmIo = {
+  check: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "check", args: [key] }),
+  firedAt: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => BigInt(s[1])),
+  now: () => client.getBlock().then((b) => b.timestamp),
+};
 
 /** The presets this vault can use. Worked out here, not fetched, so a compromised server can't swap in different alarm keys. */
 export async function presetViews(vault: Address): Promise<PresetView[]> {
@@ -75,12 +84,8 @@ export async function presetViews(vault: Address): Promise<PresetView[]> {
       const ok = await client.readContract({ address: vault, abi: pausedAbi, functionName: "paused" }).then(() => true, () => false);
       if (!ok) return null;
     }
-    // A tripped alarm could exit this position at any moment, for something that happened before the owner arrived.
-    const tripped = await Promise.all([
-      client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "check", args: [preset.key] }),
-      client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "isLive", args: [preset.key, 86_400n] }),
-    ]).then(([t, f]) => t || f, () => false);
-    return { preset, tripped };
+    // An alarm that is going off now, or fired in the last day, would exit this position for something that happened before the owner arrived.
+    return { preset, status: await presetStatus(alarmIo, preset) };
   }));
   return views.filter((v) => v !== null);
 }
@@ -100,6 +105,8 @@ function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
 /** Registers any missing alarms, approves the shares if needed, then arms. Each step is its own wallet signature. */
 export async function arm(s: Signer, vault: Address, keys: Hex[]) {
   const presets = presetsFor(vault);
+  // Read again at the moment of arming: the list on screen may be minutes old. Nothing is sent if any key is going off.
+  if (keys.some((k) => !presets.some((p) => p.key === k)) || (await refusedPresets(alarmIo, presets, keys)).length > 0) throw new Error(COPY.armRefused);
   for (const d of registrationOrder(vault).filter((d) => needed(presets, keys, d))) {
     const known = await client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [keyOf(d)] });
     if (!known[0]) await send(s, registerTx(CONFIG.alarmBook!, d));
