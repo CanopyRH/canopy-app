@@ -71,6 +71,12 @@ function answer(method: string, params: unknown[]): unknown {
   switch (method) {
     case "eth_chainId": return "0x1237";
     case "eth_blockNumber": return numberToHex(HEAD);
+    case "eth_getBlockByNumber": {
+      // The indexer remembers block hashes, to notice a reorg. This chain never reorgs, so a hash is just the number.
+      const n = BigInt(params[0] as Hex);
+      if (n > HEAD) return null;
+      return { number: numberToHex(n), hash: `0x${n.toString(16).padStart(64, "0")}`, parentHash: `0x${"00".repeat(32)}`, timestamp: "0x1", transactions: [] };
+    }
     case "eth_getBalance": return "0xde0b6b3a7640000";
     case "eth_getCode": return "0x";
     case "eth_getTransactionCount": return "0x0";
