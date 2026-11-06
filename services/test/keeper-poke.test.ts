@@ -18,9 +18,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { decodeFunctionData, encodeFunctionResult, type Address, type Hex } from "viem";
 import { alarmBookAbi } from "../src/chain/abi";
-import { MISS_QUARANTINE_SEC, pokeTripped, QUARANTINE_SEC, SPLIT_BELOW, type KeeperDeps } from "../src/keeper/keeper";
+import { CHECKS_PER_CALL, MISS_QUARANTINE_SEC, pokeTripped, QUARANTINE_SEC, SPLIT_BELOW, type KeeperDeps } from "../src/keeper/keeper";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
+import { checkNode, type CheckRequest } from "./check-node";
 import { freshDb } from "./db";
 
 const BOOK = "0x00000000000000000000000000000000000000b0" as Address;
@@ -60,7 +61,7 @@ describe("a key that trips only in eth_call", () => {
       repo: r, alarmBook: BOOK, multicall3: BOOK, account: KEEPER, paidOnly: true, now: o.now, quarantine, misses: new Map(),
       fees: async () => ({ maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 1_000_000n }),
       client: {
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) => contracts.map(({ args }) => ({ status: "success", result: !fired.has(args[0]!) })),
+        call: checkNode({ answer: (key) => !fired.has(key) }),
         readContract: async ({ functionName, args }: { functionName: string; args: Hex[] }) => {
           if (functionName === "isLive") return fired.has(args[0]!);
           throw new Error(functionName);
@@ -135,16 +136,15 @@ describe("a key that burns gas only inside the shared check", () => {
     return {
       repo: r, alarmBook: BOOK, multicall3: BOOK, paidOnly: false, now: () => 1000, quarantine,
       client: {
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) => {
-          counts.shared++;
-          const sunk = contracts.some(({ args }) => args[0] === burner);
-          return contracts.map(() => (sunk ? { status: "failure", error: new Error("out of gas") } : { status: "success", result: false }));
-        },
-        readContract: async ({ args }: { args: Hex[] }) => {
-          counts.alone++;
-          if (args[0] === PLAIN) throw new Error("out of gas"); // a plain burner fails alone too
-          return false; // the selective one answers false alone, like every honest key that hasn't tripped
-        },
+        call: checkNode({
+          seen: { push: (q: CheckRequest) => void (q.shared ? counts.shared++ : counts.alone++) },
+          // A burner in a shared request takes the gas, so every check in that request fails.
+          answer: (key, req) => {
+            if (req.shared && req.keys.includes(burner)) return "revert";
+            if (!req.shared && key === PLAIN) return "revert"; // a plain burner fails alone too
+            return false; // the selective one answers false alone, like every honest key that hasn't tripped
+          },
+        }),
       },
       send: async () => TX,
     } as unknown as KeeperDeps;
@@ -161,7 +161,7 @@ describe("a key that burns gas only inside the shared check", () => {
     counts.alone = 0;
     counts.shared = 0;
     await pokeTripped(deps(PLAIN, q, counts));
-    expect(counts).toEqual({ shared: 1, alone: 0 });
+    expect(counts).toEqual({ shared: Math.ceil(300 / CHECKS_PER_CALL), alone: 0 });
   });
 
   test("a selective burner is left out after one pass, though it passes alone, and later passes are one shared request", async () => {
@@ -177,7 +177,7 @@ describe("a key that burns gas only inside the shared check", () => {
       counts.alone = 0;
       counts.shared = 0;
       await pokeTripped(deps(SELECTIVE, q, counts));
-      expect(counts).toEqual({ shared: 1, alone: 0 });
+      expect(counts).toEqual({ shared: Math.ceil(300 / CHECKS_PER_CALL), alone: 0 });
     }
   });
 
@@ -189,12 +189,14 @@ describe("a key that burns gas only inside the shared check", () => {
     const d = {
       repo: r, alarmBook: BOOK, multicall3: BOOK, paidOnly: false, now: () => 1000, quarantine: q,
       client: {
-        multicall: async ({ contracts }: { contracts: unknown[] }) => {
-          const blip = first;
-          first = false;
-          return contracts.map(() => (blip ? { status: "failure", error: new Error("timeout") } : { status: "success", result: false }));
-        },
-        readContract: async () => false,
+        call: checkNode({
+          answer: () => false,
+          refuse: () => {
+            const blip = first;
+            first = false;
+            return blip;
+          },
+        }),
       },
       send: async () => TX,
     } as unknown as KeeperDeps;

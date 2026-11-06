@@ -13,7 +13,7 @@ import { Kind, presetsFor } from "../src/api/presets";
 import { erc20Abi, routerAbi } from "../src/chain/abi";
 import {
   ALARM_TTL, checkpointKeys, claimOwed, drainExits, limitFromSim, MAX_CHECKPOINTS_PER_PASS, MAX_OWED_PER_PASS, MAX_STRIKES, onFired,
-  RETRY_SEC, SMALL_CALL_GAS, UNLISTED_EXIT_GAS, type KeeperDeps,
+  EXIT_SWAP_HEADROOM, READ_GAS_FLOOR, RETRY_SEC, SMALL_CALL_GAS, UNLISTED_EXIT_GAS, type KeeperDeps,
 } from "../src/keeper/keeper";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
@@ -92,7 +92,7 @@ describe("exits from a vault built to burn the keeper's gas", () => {
     await run(3600);
     // Before: 120 an hour, 2,880 a day, each with no gas limit at all.
     expect(sends.length).toBe(MAX_STRIKES);
-    expect(sends.every((s) => s.gas === limitFromSim(BURN))).toBe(true);
+    expect(sends.every((s) => s.gas === limitFromSim(BURN) + EXIT_SWAP_HEADROOM)).toBe(true);
     await run(ALARM_TTL - 3600);
     expect(sends.length).toBe(MAX_STRIKES);
     expect(await jobRow()).toMatchObject({ done: true, strikes: MAX_STRIKES });
@@ -120,7 +120,7 @@ describe("exits from a vault built to burn the keeper's gas", () => {
     const { sends, run } = await exitScenario(LISTED, UNLISTED_EXIT_GAS * 2n);
     await run(10 * RETRY_SEC);
     expect(sends.length).toBe(10);
-    expect(sends.every((s) => s.gas === limitFromSim(UNLISTED_EXIT_GAS * 2n))).toBe(true);
+    expect(sends.every((s) => s.gas === limitFromSim(UNLISTED_EXIT_GAS * 2n) + EXIT_SWAP_HEADROOM)).toBe(true);
     expect((await jobRow()).strikes).toBe(0);
   });
 
@@ -191,7 +191,7 @@ describe("checkpoints", () => {
     // Before: 200 transactions in one hourly pass, none with a gas limit.
     expect(sends.length).toBe(1 + MAX_CHECKPOINTS_PER_PASS);
     expect(sends[0]!.data).toBe(checkpointOf(listedLoss.key));
-    expect(sends.every((s) => s.gas === limitFromSim(80_000n) && s.gas <= SMALL_CALL_GAS)).toBe(true);
+    expect(sends.every((s) => s.gas === READ_GAS_FLOOR)).toBe(true);
   });
 
   test("the cap rotates, so every key is reached in time", async () => {

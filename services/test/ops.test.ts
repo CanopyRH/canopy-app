@@ -10,7 +10,7 @@ import { drainVelocity } from "../src/detectors";
 import { scanVault } from "../src/detectors/scan";
 import { Env, loadEnv } from "../src/env";
 import { applyRouterLog, type Log } from "../src/indexer/indexer";
-import { BUNDLE_GAS, claimOwed, drainExits, pokeTripped, runExit, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
+import { BUNDLE_GAS, CHECK_CALL_GAS, CHECKS_PER_CALL, claimOwed, EXIT_SWAP_HEADROOM, drainExits, pokeTripped, runExit, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
 import { serialSender, withMargin } from "../src/keeper/sender";
 import { opsProblems } from "../src/keeper/ops";
 import type { Db } from "../src/store/db";
@@ -18,6 +18,7 @@ import { repo, type Repo } from "../src/store/repo";
 import { feedItems } from "../src/watcher/feeds";
 import { ingestFeed, isHighS, matchVaults, recentReports } from "../src/watcher/watcher";
 import { findBanned } from "../../tools/banned-words";
+import { checkNode, type CheckRequest } from "./check-node";
 import { freshDb } from "./db";
 
 const V = "0x00000000000000000000000000000000000000c3" as Address;
@@ -413,35 +414,32 @@ describe("keeper resilience", () => {
     const deps = {
       repo: r, alarmBook: B, paidOnly: false, now: () => 1,
       client: {
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) =>
-          contracts.map(({ args }) => (args[0]!.startsWith("0xa1") ? { status: "failure", error: new Error("reverted") } : { status: "success", result: true })),
+        call: checkNode({ answer: (key) => (key.startsWith("0xa1") ? "revert" : true) }),
       },
       send: async (tx: { data: string }) => { poked.push(tx.data); return TX; },
     } as unknown as KeeperDeps;
     expect(await pokeTripped(deps)).toEqual([`0x${"b2".repeat(32)}`]);
   });
 
-  test("checking many armed keys takes one request per few hundred keys, not one per key", async () => {
+  test("checking many armed keys takes one request per twenty keys, not one per key, each with an explicit gas", async () => {
     await db.query(`INSERT INTO plans (wallet, paid_until) VALUES ($1, 9999999999)`, [A]);
     const n = 300;
     for (let i = 0; i < n; i++) {
       const hex = i.toString(16).padStart(4, "0");
       await r.upsertPosition({ posId: `0x${hex.repeat(16)}`, owner: A, adapter: B, target: V, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "x", keys: [`0x${"c".repeat(60)}${hex}`] });
     }
-    const requests: number[] = [];
+    const seen: CheckRequest[] = [];
     const deps = {
       repo: r, alarmBook: B, multicall3: A, paidOnly: false, now: () => 1,
       client: {
         readContract: async () => { throw new Error("checks must be batched"); },
-        multicall: async ({ contracts, batchSize }: { contracts: unknown[]; batchSize: number }) => {
-          requests.push(Math.ceil((contracts.length * 36) / batchSize));
-          return contracts.map(() => ({ status: "success", result: false }));
-        },
+        call: checkNode({ answer: () => false, seen }),
       },
       send: async () => TX,
     } as unknown as KeeperDeps;
     expect(await pokeTripped(deps)).toEqual([]);
-    expect(requests).toEqual([2]);
+    expect(seen.map((q) => q.keys.length)).toEqual(Array.from({ length: n / CHECKS_PER_CALL }, () => CHECKS_PER_CALL));
+    expect(seen.every((q) => q.shared && q.gas === CHECK_CALL_GAS)).toBe(true);
   });
 
   test("an unpaid key costs Canopy's keeper nothing", async () => {
@@ -514,7 +512,8 @@ describe("exit bundles", () => {
     expect(sent.length).toBe(1);
     expect(bundled(sent[0]!).length).toBe(3);
     // An estimate could settle on a limit where the exits fail and the bundle still succeeds.
-    expect(sent[0]!.gas).toBe((1_500_000n * 3n) / 2n + 100_000n);
+    // Each exit in it also gets room for its own swap quote, which skips if it cannot get its gas.
+    expect(sent[0]!.gas).toBe((1_500_000n * 3n) / 2n + 100_000n + 3n * EXIT_SWAP_HEADROOM);
     expect(await r.dueJobs("exit", 2000)).toEqual([]);
   });
 

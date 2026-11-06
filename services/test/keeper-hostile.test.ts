@@ -4,6 +4,7 @@ import { drainExits, pokeTripped, QUARANTINE_SEC, SLOW_RETRY_SEC, type ExitJob, 
 import { deallocateCalls, MAX_MARKETS } from "../src/keeper/liquidity";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
+import { checkNode, type CheckRequest } from "./check-node";
 import { freshDb } from "./db";
 
 // Arming is open to anyone, so these tests play an attacker who arms positions on contracts built to stall the keeper.
@@ -89,17 +90,12 @@ describe("an alarm key that burns all the gas in the shared check", () => {
     const deps = {
       repo: r, alarmBook: BOOK, multicall3: BOOK, paidOnly: false, now: () => 1000, quarantine,
       client: {
-        // The burner takes the gas, so every check in its request comes back failed.
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) => {
-          sharedSizes.push(contracts.length);
-          const sunk = contracts.some(({ args }) => args[0] === BURNER);
-          return contracts.map(() => (sunk ? { status: "failure", error: new Error("out of gas") } : { status: "success", result: true }));
-        },
-        // On its own, each key gets the node's whole gas cap: honest keys answer, the burner still fails.
-        readContract: async ({ args }: { args: Hex[] }) => {
-          if (args[0] === BURNER) throw new Error("out of gas");
-          return true;
-        },
+        // The burner takes the gas, so every check in its request comes back failed. On its own, each key gets its
+        // own gas: honest keys answer, the burner still fails.
+        call: checkNode({
+          seen: { push: (q: CheckRequest) => void (q.shared && sharedSizes.push(q.keys.length)) },
+          answer: (key, req) => (req.shared ? (req.keys.includes(BURNER) ? "revert" : true) : key === BURNER ? "revert" : true),
+        }),
       },
       send: async (tx: { data: string }) => {
         poked.push(tx.data);
@@ -118,10 +114,7 @@ describe("an alarm key that burns all the gas in the shared check", () => {
     const deps = {
       repo: r, alarmBook: BOOK, multicall3: BOOK, paidOnly: false, now: () => 1000, quarantine: new Map(),
       client: {
-        multicall: async () => {
-          throw new Error("gas cap reached");
-        },
-        readContract: async () => true,
+        call: checkNode({ answer: () => true, refuse: (req) => req.shared }),
       },
       send: async () => TX,
     } as unknown as KeeperDeps;
@@ -134,7 +127,7 @@ describe("an alarm key that burns all the gas in the shared check", () => {
     let now = 1000;
     const deps = {
       repo: r, alarmBook: BOOK, multicall3: BOOK, paidOnly: false, now: () => now, quarantine,
-      client: { multicall: async ({ contracts }: { contracts: unknown[] }) => contracts.map(() => ({ status: "success", result: true })) },
+      client: { call: checkNode({ answer: () => true }) },
       send: async () => TX,
     } as unknown as KeeperDeps;
     expect(await pokeTripped(deps)).toEqual([]);

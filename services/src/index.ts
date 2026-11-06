@@ -111,6 +111,7 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
         listed: new Set(listed),
         fees,
         unlistedExitGas: env.KEEPER_UNLISTED_EXIT_GAS,
+        checkGas: env.KEEPER_CHECK_GAS,
       };
     })()
   : null;

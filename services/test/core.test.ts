@@ -120,7 +120,7 @@ describe("attestations", () => {
       [{ type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "address" }],
       [typeHash, keccak256(stringToHex("Canopy AlarmBook")), keccak256(stringToHex("2")), 8453n, book],
     ));
-    expect(hashDomain({ domain: attestDomain(book, 8453), types: { EIP712Domain: [
+    expect(hashDomain({ domain: attestDomain(book, 8453) as never, types: { EIP712Domain: [
       { name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" },
     ] } })).toBe(expected);
   });
