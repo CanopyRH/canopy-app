@@ -23,9 +23,15 @@ const FORK = process.argv[2]!;
 const SPLIT = process.env.STACK_SPLIT === "1";
 const ROOT = join(import.meta.dir, "../..");
 const BUN = join(ROOT, ".tools/bun/v1.4.4/bun");
-const RPC_PORT = 18546, API_A = 18443, API_B = 18444, MOCK = 18600;
+// STACK_PORT_OFFSET and STACK_DB let two runs share one machine and one Postgres server: every port moves by the offset, and
+// the operators' databases are <STACK_DB>_a and <STACK_DB>_b (default canopy_a and canopy_b), dropped and made fresh each run.
+const OFF = Number(process.env.STACK_PORT_OFFSET ?? 0);
+const RPC_PORT = 18546 + OFF, API_A = 18443 + OFF, API_B = 18444 + OFF, MOCK = 18600 + OFF;
 const RPC = `http://127.0.0.1:${RPC_PORT}`;
 const PG = "postgres://canopy@127.0.0.1:15432";
+const DB_PREFIX = process.env.STACK_DB ?? "canopy";
+if (!/^[a-z][a-z0-9_]{0,40}$/.test(DB_PREFIX)) throw new Error("STACK_DB must be a plain lower-case name");
+const DB_A = `${DB_PREFIX}_a`, DB_B = `${DB_PREFIX}_b`;
 // Real vaults and real holders. Morpho Blue holds the stablecoin on both chains, so it funds the plan payments.
 interface Profile { chain: Chain; stable: Address; weth: Address; swapRouter: Address; feed: Address; morpho: Address; symbol: string; explorer: string; vault: Address; hard: Address; quorum: Address }
 const PROFILES: Record<string, Profile> = {
@@ -123,15 +129,15 @@ try {
 
   // Fresh databases, one per operator.
   const admin_db = postgres(`${PG}/postgres`);
-  for (const d of ["canopy_a", "canopy_b"]) {
+  for (const d of [DB_A, DB_B]) {
     await admin_db.exec(`DROP DATABASE IF EXISTS ${d} WITH (FORCE)`);
     await admin_db.exec(`CREATE DATABASE ${d}`);
   }
-  const dbA = postgres(`${PG}/canopy_a`);
-  const dbB = postgres(`${PG}/canopy_b`);
+  const dbA = postgres(`${PG}/${DB_A}`);
+  const dbB = postgres(`${PG}/${DB_B}`);
 
   const common = {
-    ...process.env, PUBLIC_URL: "http://127.0.0.1:18443", CHAIN_ID: String(P.chain.id), RPC_URL: SPLIT ? "http://127.0.0.1:1" : RPC, RPC_URL_BACKUP: RPC, ROUTER: router, ALARM_BOOK: book, ADAPTER_4626: adapter,
+    ...process.env, PUBLIC_URL: `http://127.0.0.1:${API_A}`, CHAIN_ID: String(P.chain.id), RPC_URL: SPLIT ? "http://127.0.0.1:1" : RPC, RPC_URL_BACKUP: RPC, ROUTER: router, ALARM_BOOK: book, ADAPTER_4626: adapter,
     START_BLOCK: (start + 1n).toString(), PLAN_PAY_ADDRESS: PAY_TO, PLAN_TOKEN: P.stable, WATCHERS: watchers.join(","),
     CARD_VAULTS: VAULT, WATCHER_PEERS: `http://127.0.0.1:${API_A},http://127.0.0.1:${API_B}`, FEED_URLS: `http://127.0.0.1:${MOCK}/feed`,
     ANTHROPIC_API_KEY: "local", ANTHROPIC_BASE_URL: `http://127.0.0.1:${MOCK}`, TELEGRAM_BOT_TOKEN: "1:local", TELEGRAM_API_ROOT: `http://127.0.0.1:${MOCK}`,
@@ -139,21 +145,21 @@ try {
     // The fork mines a block a second, so a short confirmation depth still exercises the wait. Admin alerts go to the mock Telegram.
     CONFIRMATIONS: "2", OPS_CHAT_ID: "1",
   };
-  const logDir = process.env.TMPDIR ?? "/tmp/";
+  const logDir = `${process.env.TMPDIR ?? "/tmp/"}${DB_PREFIX === "canopy" ? "" : `${DB_PREFIX}-`}`;
   const ROLES = ["api", "indexer", "detector", "watcher", "keeper"] as const;
   const names = ["operator-a", "operator-a2", "operator-b", ...ROLES.map((x) => `operator-a-${x}`)];
   for (const n of names) for (const ext of ["log", "err"]) rmSync(`${logDir}${n}.${ext}`, { force: true });
   const launch = (name: string, env: Record<string, string>) => {
-    const p = spawn([BUN, "src/index.ts"], { cwd: join(ROOT, "services"), env: { ...common, ...env }, stdout: Bun.file(`${process.env.TMPDIR ?? "/tmp/"}${name}.log`), stderr: Bun.file(`${process.env.TMPDIR ?? "/tmp/"}${name}.err`) });
+    const p = spawn([BUN, "src/index.ts"], { cwd: join(ROOT, "services"), env: { ...common, ...env }, stdout: Bun.file(`${logDir}${name}.log`), stderr: Bun.file(`${logDir}${name}.err`) });
     procs.push(p);
     return p;
   };
-  const envA = { DATABASE_URL: `${PG}/canopy_a`, PORT: String(API_A) };
+  const envA = { DATABASE_URL: `${PG}/${DB_A}`, PORT: String(API_A) };
   const startA = (tag: string) => SPLIT
     ? ROLES.map((role) => launch(`${tag}-${role}`, { ...envA, ROLE: role, ...(role === "keeper" ? { KEEPER_PRIVATE_KEY: keeperKey } : {}), ...(role === "watcher" ? { WATCHER_PRIVATE_KEY: wA } : {}) }))
     : [launch(tag, { ...envA, KEEPER_PRIVATE_KEY: keeperKey, WATCHER_PRIVATE_KEY: wA })];
   const pA = startA("operator-a");
-  const pB = launch("operator-b", { DATABASE_URL: `${PG}/canopy_b`, PORT: String(API_B), WATCHER_PRIVATE_KEY: wB });
+  const pB = launch("operator-b", { DATABASE_URL: `${PG}/${DB_B}`, PORT: String(API_B), WATCHER_PRIVATE_KEY: wB });
   const ok = await waitFor("both APIs", async () => (await fetch(`http://127.0.0.1:${API_A}/alarms/live`)).ok && (await fetch(`http://127.0.0.1:${API_B}/alarms/live`)).ok);
   check("two operators started as separate processes on real Postgres", ok && pA.every((p) => p.exitCode === null) && pB.exitCode === null);
 
