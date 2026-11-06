@@ -37,7 +37,8 @@ jobs:
         working-directory: contracts
       - run: bun install --frozen-lockfile
         working-directory: web
-      - run: bun install --frozen-lockfile && bun ../tools/export-abi.ts && bun test && bunx tsc --noEmit
+      # The services tests run once, on the real Postgres above (the step after this one).
+      - run: bun install --frozen-lockfile && bun ../tools/export-abi.ts && bunx tsc --noEmit
         working-directory: services
       - run: bun test
         working-directory: services
@@ -137,7 +138,7 @@ jobs:
           echo "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b  osv-scanner" | sha256sum -c -
           chmod +x osv-scanner
           code=0
-          ./osv-scanner scan source --lockfile=services/bun.lock --lockfile=web/bun.lock --format json --output-file osv-results.json || code=$?
+          ./osv-scanner scan source --config=osv-scanner.toml --lockfile=services/bun.lock --lockfile=web/bun.lock --format json --output-file osv-results.json || code=$?
           rm osv-scanner
           # Exit 1 means advisories were found, which the next steps judge. Anything else is the scan itself failing.
           test "$code" -le 1

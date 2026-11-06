@@ -1,0 +1,18 @@
+# Advisories reviewed and set aside, each with its reason and a date when it comes back. The CI advisory job reads this
+# file; anything not listed here that is High or Critical fails the build.
+
+[[IgnoredVulns]]
+id = "GHSA-mrwp-f3q8-3g9p"
+ignoreUntil = 2026-11-09T00:00:00Z
+reason = """follow-redirects 1.16.1, pulled in by @coinbase/cdp-sdk through axios inside the WalletConnect dependencies.
+It is not in the shipped web bundle (app.js, wc.js and site.js contain none of it), and axios in a browser uses XHR, not
+follow-redirects. The fix, 1.16.2, was published on 2026-10-25, so the 14-day release-age rule allows it from
+2026-11-08; on that date it is pinned through an override and this entry is removed."""
+
+[[IgnoredVulns]]
+id = "GHSA-mrhx-c7xc-m3w5"
+ignoreUntil = 2026-12-06T00:00:00Z
+reason = """zod 3.22.4 and 3.25.76, pulled in by @coinbase/cdp-sdk inside the WalletConnect dependencies. The advisory is
+memory use while validating oversized collections; only zod 4.6.6 fixes it and those packages need zod 3. zod is not in
+the shipped web bundle, and nothing in Canopy validates untrusted input with it. Reviewed again on 2026-12-06, or
+earlier when the WalletConnect packages move to zod 4."""

@@ -133,7 +133,8 @@ describe("the contract switch", () => {
     expect(await r.cursor(routerCursor(V2.router))).toBe(0n);
   });
 
-  test("two services starting at once switch only once", async () => {
+  // Needs real Postgres: seven separate connections racing for one advisory lock, which the in-process stand-in serialises.
+  test.skipIf(!process.env.TEST_DATABASE_URL)("two services starting at once switch only once", async () => {
     await seed();
     await db.query(`INSERT INTO meta (key, value) VALUES ('router',$1), ('alarm_book',$2)`, [V1.router, V1.alarmBook]);
     // Separate connections when there is a real server, as the services have.
