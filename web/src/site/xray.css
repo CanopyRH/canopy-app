@@ -1,0 +1,15 @@
+/* The X-ray page. The shared page frame comes from pages.css and docs.css. */
+.xr-main{max-width:1000px;margin:0 auto;padding:40px 5vw 64px;display:grid;gap:22px}
+.xr-main h1{margin:0;font-size:clamp(30px,5vw,44px);letter-spacing:-.02em}
+.xr-main p{margin:0;color:#555;line-height:1.6}
+.xr-form{display:flex;gap:10px;flex-wrap:wrap}
+.xr-form input{flex:1;min-width:240px;padding:14px 18px;border:1px solid #d8d8d8;border-radius:30px;font:inherit;font-size:15px;background:#fff}
+.xr-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 22px;border-radius:30px;border:1px solid #242424;background:#242424;color:#fff;font:inherit;font-size:15px;cursor:pointer;text-decoration:none}
+.xr-btn.light{background:#fff;color:#242424;border-color:#d8d8d8}
+.xr-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.xr-list a{padding:8px 14px;border:1px solid #ddd;border-radius:24px;font-size:14px;color:#333;background:#fff;text-decoration:none}
+.xr-card{width:100%;height:auto;aspect-ratio:1200/675;display:block;border-radius:18px;border:1px solid #e2e2e6;background:#f4f4f7}
+.xr-actions{display:flex;gap:10px;flex-wrap:wrap}
+.xr-msg{padding:14px 18px;border-radius:14px;background:#f4f4f7;color:#333}
+.xr-link{font-size:13px;color:#666;word-break:break-all}
+.xr-note{font-size:13px}

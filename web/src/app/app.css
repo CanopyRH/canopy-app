@@ -9,6 +9,7 @@
 .cd-wallet-picker button{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--cd-line);border-radius:12px;background:#fff;font:inherit;color:var(--cd-ink);cursor:pointer;text-align:left}
 .cd-wallet-picker button:hover{background:#f3f3f5}
 .cd-wallet-picker img{width:22px;height:22px;border-radius:6px}
+.cd-risk-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.cd-risk-heading h3{margin:0}
 .cd-risk-text{margin:0;white-space:pre-wrap;font:inherit;font-size:13px;line-height:1.6;color:var(--cd-ink)}
 .cd-terms{display:flex;gap:8px;align-items:center;margin:14px 0 4px;font-size:13px}
 .cd-toast-error{background:#4a2f2ff5;border-color:#7a5050}

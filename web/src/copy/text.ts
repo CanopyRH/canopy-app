@@ -88,6 +88,7 @@ export const COPY = {
   planScreen: "Your plan and controls.",
   planScreenHelp: "Pay for the Armed plan, or stop everything in one transaction.",
   riskTab: "Risk card",
+  shareXray: "Share X-ray",
   alarmsTab: "Alarms",
   noRisk: "No risk card for this vault yet.",
   connectToAct: "Connect this wallet to arm or exit it.",
