@@ -18,6 +18,7 @@ import { checkpointKeys, drainExits, MAX_CHECKPOINTS_PER_PASS, onFired, pokeTrip
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
 import { quorumScopeNow } from "../src/watcher/scope";
+import { checkNode } from "./check-node";
 import { freshDb } from "./db";
 
 const LISTED = "0x00000000000000000000000000000000000000a1" as Address;
@@ -236,15 +237,14 @@ describe("pokes: a paid level is poked among hostile keys", () => {
     const d = {
       repo: r, alarmBook: ROUTER, multicall3: MC3, account: KEEPER, paidOnly: true, now: () => 1000, quarantine: new Map<string, number>(), misses: new Map<string, number>(),
       client: {
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) => {
-          if (contracts.some((c) => sinks.has(c.args[0]!))) throw new Error("request ran out of gas");
-          return contracts.map((c) => ({ status: "success", result: tripped.has(c.args[0]!) && !fired.has(c.args[0]!) }));
-        },
+        // The keeper's checks are eth_calls: a shared request that holds a sink fails whole, and a sink alone fails too.
+        call: checkNode({
+          answer: (key, req) => {
+            if (req.shared ? req.keys.some((k) => sinks.has(k)) : sinks.has(key)) return "revert";
+            return tripped.has(key) && !fired.has(key);
+          },
+        }),
         readContract: async ({ functionName, args }: { functionName: string; args: Hex[] }) => {
-          if (functionName === "check") {
-            if (sinks.has(args[0]!)) throw new Error("out of gas");
-            return tripped.has(args[0]!) && !fired.has(args[0]!);
-          }
           if (functionName === "isLive") return fired.has(args[0]!);
           throw new Error(functionName);
         },
@@ -344,6 +344,16 @@ describe("exits: a paid level on a listed vault exits ahead of attacker jobs", (
     const { d, sent, victimPos } = await scenario(level(200), PAID);
     await drainExits(d, "listed");
     expect(sent).toEqual([victimPos]);
+  });
+
+  test("a SHARE_DROP key an attacker minted on the listed vault (threshold off the list) gets no listed treatment, even from a paid wallet", async () => {
+    const minted = keyOf({ ...levelDetector(LISTED, 100), threshold: 101n });
+    expect(isOwnKey(LISTED, minted)).toBe(false);
+    const { d, sent, victimPos } = await scenario(minted, PAID);
+    await drainExits(d, "listed");
+    expect(sent).toEqual([]); // the listed loop does not run it
+    for (let pass = 0; pass < 3; pass++) await drainExits(d, "unlisted"); // behind the other owner-chosen keys, as any such job is
+    expect(sent).toContain(victimPos);
   });
 
   test("an unpaid wallet's level is never queued by the paid-only keeper", async () => {

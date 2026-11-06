@@ -51,7 +51,7 @@ contract AlarmLevelsTest is Base {
             vm.prank(ATTACKER);
             bytes32 key = book.register(d);
             assertTrue(key == book.keyOf(d), "the key is the hash of the detector");
-            (bool exists,,, uint256 baseline,) = book.state(key);
+            (bool exists,,, uint256 baseline,,,,) = book.state(key);
             assertTrue(exists, "registered");
             assertEq(baseline, ONE, "the high-water mark starts at the current price");
             vm.prank(OWNER);
@@ -126,9 +126,12 @@ contract AlarmLevelsTest is Base {
         router.exit(id, k1000, 0); // the armed level has not fired
     }
 
-    function test_aLevelCannotFireAgainForADay_andAKeeperCannotExitOnYesterdaysFiring() public {
+    /// @dev v2: arm refuses a key that fired in the last day (AlarmNotClear), so a keeper can never be asked to exit on yesterday's firing.
+    function test_aLevelCannotFireAgainForADay_andCannotBeArmedAfterFiring() public {
         bytes32 key = book.register(_level(address(vault), 100));
+        assertTrue(book.armable(key), "a registered level that is clear is armable");
         vault.setPrice(0.98e6);
+        assertTrue(!book.armable(key), "tripped, so not armable");
         assertTrue(book.poke(key), "fires");
         assertTrue(!book.poke(key), "not again at once");
         vault.deposit(OWNER, 100e18);
@@ -136,10 +139,26 @@ contract AlarmLevelsTest is Base {
         vault.approve(address(router), type(uint256).max);
         vm.warp(block.timestamp + 1);
         vm.prank(OWNER);
-        bytes32 id = router.arm(_params(address(vault), RAW, 0, _keys(key))); // armed after the firing: the app refuses this
-        vm.prank(KEEPER);
-        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
-        router.exit(id, key, 0);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.AlarmNotClear.selector, key));
+        router.arm(_params(address(vault), RAW, 0, _keys(key)));
+    }
+
+    /// @dev Arming needs the key registered first: an unknown key is not armable, which is why the app registers a level when the user picks it.
+    function test_anUnregisteredLevelIsNotArmable_untilItIsRegistered() public {
+        AlarmBook.Detector memory d = _level(address(vault), 500);
+        bytes32 key = book.keyOf(d);
+        assertTrue(!book.armable(key), "unknown");
+        vault.deposit(OWNER, 100e18);
+        vm.prank(OWNER);
+        vault.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.AlarmNotClear.selector, key));
+        router.arm(_params(address(vault), RAW, 0, _keys(key)));
+        vm.prank(ATTACKER);
+        book.register(d);
+        assertTrue(book.armable(key), "registered by anyone, then armable");
+        vm.prank(OWNER);
+        router.arm(_params(address(vault), RAW, 0, _keys(key)));
     }
 
     function test_aLevelMustBeBetweenZeroAndTenThousandBasisPoints() public {

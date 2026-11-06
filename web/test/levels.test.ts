@@ -137,6 +137,12 @@ describe("registering the levels", () => {
     }
   });
 
+  test("a chosen level is a key arming asks the contract about, and a level it turns down is refused", async () => {
+    const { notArmable } = await import("../src/alarms");
+    expect(await notArmable(async (k) => k !== key(200), [key(200)])).toEqual([key(200)]);
+    expect(await notArmable(async () => true, [key(200)])).toEqual([]);
+  });
+
   test("every DRAIN the app registers still has a window of 1,200 seconds or more, and a shorter one is still refused", () => {
     const drains = all.filter((d) => d.kind === Kind.DRAIN);
     expect(drains.length).toBeGreaterThan(0);
