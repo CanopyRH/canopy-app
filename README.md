@@ -62,7 +62,9 @@ Robinhood Chain (4663), deployed at block 106087816:
 | ExitRouter | [`0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C`](https://robinhoodchain.blockscout.com/address/0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C) | `QmYkZvKCayuPRdYZVAQGruETkyTLBiAeTY8gQWUVDMtpui` |
 | ERC4626Adapter | [`0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC`](https://robinhoodchain.blockscout.com/address/0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC) | `QmX5Umk9JxzSph7RKE8dtxy7xP1nquDb4kcFK4SrZNLNSi` |
 
-Each metadata hash is the one at the end of the deployed bytecode, and `forge build` produces the same hash from `contracts/src`.
+Each metadata hash is the one at the end of the deployed bytecode, and `forge build` on the tag [`v1-deployed`](../../tree/v1-deployed) produces the same hash.
+
+> **v2 in progress.** `contracts/src` on `main` is now v2, which closes the contract findings of the internal reviews: no admin swap settings, arming only on a clear alarm, resettable detectors, a confirmed and quorum-paired vault drain, expiring watchers and gas-capped reads. It is being reviewed and rehearsed on a mainnet copy, and isn't deployed yet. Until it is, the contracts above are v1, and their source is the `v1-deployed` tag.
 
 The broadcast record is in `contracts/broadcast/`, and `services/deploy/verify.ts` checks that the deployed bytecode matches this source.
 

@@ -25,3 +25,11 @@ runs = 512
 depth = 256
 fail_on_revert = false
 show_metrics = true
+
+# Symbolic checks for halmos (test/review/RouterSymbolic.t.sol, the `check_` functions; forge only compiles them).
+# halmos needs shanghai bytecode, and real `new` creations in tests rather than forge's dynamic test linking (which
+# turns them into a deployCode cheatcode halmos doesn't support). Contracts compile as in the default profile otherwise:
+#   FOUNDRY_PROFILE=halmos halmos --root contracts --match-contract RouterSymbolic
+[profile.halmos]
+evm_version = "shanghai"
+dynamic_test_linking = false
