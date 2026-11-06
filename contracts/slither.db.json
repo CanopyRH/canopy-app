@@ -18,7 +18,7 @@
     "check": "arbitrary-send-eth",
     "impact": "High",
     "description": "ExitRouter._pay(uint256,address,address,uint256,bool) (src/ExitRouter.sol#455-483) sends eth to arbitrary user\n\tDangerous calls:\n\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n",
-    "reason": "By design: the ETH only goes to the position owner (or the owner's owed balance); there is no recipient argument."
+    "reason": "By design: the call is to the immutable WETH contract, which wraps ETH that the router holds for the owner. The WETH is then sent to the owner, or booked as owed to the owner. There is no recipient argument."
   },
   {
     "id": "8e7d90ffbb60a734c286021a88c1641aa4ac264dcf4d0b9be8679defc1d23c81",
@@ -32,77 +32,77 @@
     "check": "incorrect-exp",
     "impact": "High",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) has bitwise-xor operator ^ instead of the exponentiation operator **: \n\t - inverse = (3 * denominator) ^ 2 (src/lib/FullMath.sol#33)\n",
-    "reason": "False positive: the XOR is the intended Newton-Raphson seed from the Uniswap FullMath.mulDiv."
+    "reason": "False positive: the XOR is the intended Newton-Raphson seed of the 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library)."
   },
   {
     "id": "6555074b6f70201dc6341b48b931b57f69dbf4841b33d5a28dbbfa085a0693e2",
     "check": "reentrancy-eth",
     "impact": "High",
     "description": "Reentrancy in ExitRouter._settle(uint256,ExitRouter.Position,address[],uint256[],bool) (src/ExitRouter.sol#395-423):\n\tExternal calls:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#407)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\t- _trySwap(t,d,slip) (src/ExitRouter.sol#413)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#42)\n\t\t- ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#436)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#440-451)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#452)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#419)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\tExternal calls sending eth:\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#407)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#419)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#407)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#464)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#479)\n\tExitRouter.owed (src/ExitRouter.sol#92) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#92)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#419)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#464)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#479)\n\tExitRouter.owed (src/ExitRouter.sol#92) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#92)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#407)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#465)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#480)\n\tExitRouter.totalOwed (src/ExitRouter.sol#93) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#93)\n\t- _pay(exitId,p.owner,t,d,false) (src/ExitRouter.sol#419)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#465)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#480)\n\tExitRouter.totalOwed (src/ExitRouter.sol#93) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#93)\n",
-    "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that reads or pays the owed balances."
+    "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that books or pays owed balances. arm, disarm and disarmAll are not guarded and can be reached from a callback. That is harmless, because exit works from a memory copy of the position and never reads it from storage again."
   },
   {
     "id": "e8e8cc360e6c60f97662e452c3ddae8c3815203f4cd0be87bcf30054ad256c37",
     "check": "reentrancy-eth",
     "impact": "High",
     "description": "Reentrancy in ExitRouter.exit(bytes32,bytes32,uint256) (src/ExitRouter.sol#228-259):\n\tExternal calls:\n\t- amountOrId = _pull(p,amount) (src/ExitRouter.sol#233)\n\t\t- IERC721(p.asset).transferFrom(p.owner,p.adapter,p.tokenId) (src/ExitRouter.sol#366)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x23b872dd,from,to,amount)) (src/lib/SafeTransferLib.sol#33)\n\t\t- p.asset.safeTransferFrom(p.owner,p.adapter,amt) (src/ExitRouter.sol#374)\n\t- IExitAdapter(p.adapter).unwind(p.target,amountOrId) (src/ExitRouter.sol#242)\n\t- IERC721(p.asset).transferFrom(address(this),p.owner,p.tokenId) (src/ExitRouter.sol#246)\n\t- delivered = _settle(exitId,p,outs,before,viaAlarm) (src/ExitRouter.sol#249)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#42)\n\t\t- ! token.tryApprove(SWAP_ROUTER,amount) (src/ExitRouter.sol#436)\n\t\t- IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#440-451)\n\t\t- token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#452)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#253)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\tExternal calls sending eth:\n\t- delivered = _settle(exitId,p,outs,before,viaAlarm) (src/ExitRouter.sol#249)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#253)\n\t\t- (ok,None) = owner.call{value: amount}() (src/ExitRouter.sol#458)\n\t\t- IWETH(WETH).deposit{value: amount}() (src/ExitRouter.sol#461-471)\n\tState variables written after the call(s):\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#253)\n\t\t- owed[owner][WETH] += amount (src/ExitRouter.sol#464)\n\t\t- owed[owner][token] += amount (src/ExitRouter.sol#479)\n\tExitRouter.owed (src/ExitRouter.sol#92) can be used in cross function reentrancies:\n\t- ExitRouter.owed (src/ExitRouter.sol#92)\n\t- _pay(exitId,p.owner,STABLE,stableOut,p.harbour == HARBOUR_STABLE) (src/ExitRouter.sol#253)\n\t\t- totalOwed[WETH] += amount (src/ExitRouter.sol#465)\n\t\t- totalOwed[token] += amount (src/ExitRouter.sol#480)\n\tExitRouter.totalOwed (src/ExitRouter.sol#93) can be used in cross function reentrancies:\n\t- ExitRouter.totalOwed (src/ExitRouter.sol#93)\n",
-    "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that reads or pays the owed balances."
+    "reason": "Accepted: exit and claimOwed are nonReentrant, so a callback cannot re-enter the code that books or pays owed balances. arm, disarm and disarmAll are not guarded and can be reached from a callback. That is harmless, because exit works from a memory copy of the position and never reads it from storage again."
   },
   {
     "id": "096882c6321a85eaa5e9d208a566d0b9ab7fa5259d255003c6acf3f2530a7c11",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#35)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "23766e5becbfb7555f623b34670b67eb00a9be7666905587f4b557fa26a0ad96",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#36)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "320087273e13726b56950e2b4946b2887c86b2cef38f0946f0fc85ff309b37cf",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#34)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "5a8787196785323066dba33a182fd5b8104aca310360e18067584f5f9c7a5e72",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#39)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "82165320595cd6edc0e6ef3355261b33e97042373384c15c34851b5b2ae1633a",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#37)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "8255fe36385b80438fbe1804e4f51ed943f814b5d1daa62303a21f8734731841",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse = (3 * denominator) ^ 2 (src/lib/FullMath.sol#33)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "f5edcb977449500e09d34b63dc4c794f0c9b7dd0f78c81f5974724666db57efa",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- prod0 = prod0 / twos (src/lib/FullMath.sol#29)\n\t- result = prod0 * inverse (src/lib/FullMath.sol#40)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "fb865eef029999342fdb99c077c4688c3a4d19c2fcfb496df629fd205533e991",
     "check": "divide-before-multiply",
     "impact": "Medium",
     "description": "FullMath.mulDiv(uint256,uint256,uint256) (src/lib/FullMath.sol#6-43) performs a multiplication on the result of a division:\n\t- denominator = denominator / twos (src/lib/FullMath.sol#28)\n\t- inverse *= 2 - denominator * inverse (src/lib/FullMath.sol#38)\n",
-    "reason": "False positive: this is the exact-division step of the Uniswap FullMath.mulDiv (the divisor is a power of two)."
+    "reason": "False positive: this is the exact-division step of 512-bit mulDiv, as in OpenZeppelin v4.9 Math.mulDiv, which FullMath follows (not the Uniswap library). The divisor is the largest power of two in the denominator, so the division loses nothing."
   },
   {
     "id": "9189e342e2894784dc51f7dd6ca7a4e0ad173ce23414577b1f5b41c13284e6f8",
@@ -144,41 +144,41 @@
     "check": "unused-return",
     "impact": "Medium",
     "description": "ExitRouter._trySwap(address,uint256,uint16) (src/ExitRouter.sol#427-453) ignores return value by IV3SwapRouter(SWAP_ROUTER).exactInput(IV3SwapRouter.ExactInputParams({path:path,recipient:address(this),amountIn:amount,amountOutMinimum:minOut})) (src/ExitRouter.sol#440-451)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: the swap's reported output is not used. The router measures what it received by the change in its own balance."
   },
   {
     "id": "61de9ce8d5e54fad5e9f2520fc13eab71f56f6bfff1af743556f899064bf8591",
     "check": "unused-return",
     "impact": "Medium",
     "description": "AlarmBook._tripped(bytes32,AlarmBook.State) (src/AlarmBook.sol#250-283) ignores return value by (ans,upd) = IAggregatorV3(d.target).latestRoundData() (src/AlarmBook.sol#254-259)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: answeredInRound is deprecated by Chainlink. The checks use the answer (it must be positive) and updatedAt (it must be recent)."
   },
   {
     "id": "a9e5828c43203ced4503306b2027881cff5fcd8658bc7d74e3033ec54f7dd17c",
     "check": "unused-return",
     "impact": "Medium",
     "description": "ExitRouter._price(address,uint32) (src/ExitRouter.sol#485-500) ignores return value by (answer,updatedAt) = IAggregatorV3(feed).latestRoundData() (src/ExitRouter.sol#486-492)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: answeredInRound is deprecated by Chainlink. The checks use the answer (it must be positive) and updatedAt (it must be recent)."
   },
   {
     "id": "c904e71bb80bb202ad24ecc966cbd458805f8fa9e6622127ed5e24e64f4db005",
     "check": "unused-return",
     "impact": "Medium",
     "description": "ExitRouter._trySwap(address,uint256,uint16) (src/ExitRouter.sol#427-453) ignores return value by token.tryApprove(SWAP_ROUTER,0) (src/ExitRouter.sol#452)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: resetting the approval is best effort. If it fails, the allowance left over is only to SWAP_ROUTER, the immutable Uniswap router the swap already trusts, and the exit is unaffected."
   },
   {
     "id": "d56df8513694182e8dbd38ccc76cfb0660640f00f4058fae3fae4062b8b437fe",
     "check": "unused-return",
     "impact": "Medium",
     "description": "ERC4626Adapter.unwind(address,uint256) (src/adapters/ERC4626Adapter.sol#28-44) ignores return value by IERC4626(target).redeem(m,ROUTER,address(this)) (src/adapters/ERC4626Adapter.sol#39)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: the redeem result is not used. The router measures what it received by the change in its own balance."
   },
   {
     "id": "ecd87f305dc4ce2e6a02b790cbb303ab452c5726fcbe1c2cc7e92550dcf1ea4e",
     "check": "unused-return",
     "impact": "Medium",
     "description": "ERC4626Adapter.unwind(address,uint256) (src/adapters/ERC4626Adapter.sol#28-44) ignores return value by IERC4626(target).redeem(shares,ROUTER,address(this)) (src/adapters/ERC4626Adapter.sol#30-32)\n",
-    "reason": "Accepted by design: payouts are measured by balance change, and the feed checks use the answer and timestamp fields."
+    "reason": "Accepted by design: the redeem result is not used. The router measures what it received by the change in its own balance."
   }
 ]
