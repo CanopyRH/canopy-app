@@ -10,6 +10,8 @@ The exit contract has no "send to" field. Every exit pays the position owner and
 
 Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
+**CA (CNPY):** [`0xDADa6B2D163970a7c0409fE81DFBE71FD800b8cE`](https://robinhoodchain.blockscout.com/token/0xDADa6B2D163970a7c0409fE81DFBE71FD800b8cE) on Robinhood Chain
+
 > **Status:** live on Robinhood Chain mainnet since 2026-11-04. The contracts have **not had an external audit yet**. Use small amounts until one is published here.
 
 ## How it works
