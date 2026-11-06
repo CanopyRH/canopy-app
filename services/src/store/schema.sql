@@ -25,3 +25,5 @@ CREATE TABLE IF NOT EXISTS sent_alerts (target TEXT, kind TEXT, at BIGINT NOT NU
 CREATE TABLE IF NOT EXISTS owed (owner TEXT, token TEXT, amount NUMERIC NOT NULL, PRIMARY KEY (owner, token));
 CREATE TABLE IF NOT EXISTS owed_logs (tx TEXT, log_index INT, PRIMARY KEY (tx, log_index));
 CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value NUMERIC NOT NULL);
+CREATE TABLE IF NOT EXISTS log_retries (source TEXT NOT NULL, tx TEXT NOT NULL, log_index INT NOT NULL, subject TEXT NOT NULL DEFAULT '', block BIGINT NOT NULL, log JSONB NOT NULL,
+  attempts INT NOT NULL DEFAULT 0, first_failed_at BIGINT NOT NULL, next_at BIGINT NOT NULL, last_error TEXT NOT NULL DEFAULT '', alerted BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY (source, tx, log_index));

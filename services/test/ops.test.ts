@@ -9,7 +9,7 @@ import { isPreset, keyOf, registrationOrder } from "../src/api/presets";
 import { drainVelocity } from "../src/detectors";
 import { scanVault } from "../src/detectors/scan";
 import { Env, loadEnv } from "../src/env";
-import { applyRouterLog, syncLogs, type Log } from "../src/indexer/indexer";
+import { applyRouterLog, type Log } from "../src/indexer/indexer";
 import { BUNDLE_GAS, claimOwed, drainExits, pokeTripped, runExit, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
 import { serialSender, withMargin } from "../src/keeper/sender";
 import { opsProblems } from "../src/keeper/ops";
@@ -271,7 +271,7 @@ describe("operator checks", () => {
     await r.setCursor("router", 5n);
     await applyRouterLog(r, exited());
     const h = await r.health(1000);
-    expect(h).toEqual({ openJobs: 1, oldestJobSec: 100, alarmExits: 1, watchersSeen7d: 0, counters: { poke_ok: "2" }, cursors: { router: "5" } });
+    expect(h).toEqual({ retryingLogs: 0, oldestRetryingLogSec: 0, openJobs: 1, oldestJobSec: 100, alarmExits: 1, watchersSeen7d: 0, counters: { poke_ok: "2" }, cursors: { router: "5" } });
     expect(JSON.stringify(h)).not.toContain(A.slice(2));
   });
 });
@@ -600,25 +600,12 @@ describe("exit bundles", () => {
 });
 
 describe("indexer resilience", () => {
-  const client = (logs: unknown[]) => ({ getBlockNumber: async () => 10n, getLogs: async () => logs }) as never;
-  const l = (i: number) => ({ transactionHash: TX, logIndex: i }) as never;
-
   test("a window as large as the contract allows fits", async () => {
     await db.query(`INSERT INTO detectors (key, kind, target, threshold, window_s, a, b) VALUES ($1,2,$2,0,$3,'','')`, [KEY, V, 4_294_967_295]);
     expect(await r.detectorKind(KEY)).toBe(2);
   });
 
-  test("a log that keeps failing is skipped and counted, and the logs after it still land", async () => {
-    const seen: number[] = [];
-    const opts = { name: "x", address: A, startBlock: 0n, onLog: async (x: { logIndex: number }) => {
-      if (x.logIndex === 901) throw new Error("bad log");
-      seen.push(x.logIndex);
-    } } as never;
-    for (let i = 0; i < 2; i++) await expect(syncLogs(client([l(900), l(901), l(902)]), r, opts)).rejects.toThrow("bad log");
-    await syncLogs(client([l(900), l(901), l(902)]), r, opts);
-    expect(seen.filter((x) => x === 902)).toHaveLength(1);
-    expect((await r.health(0)).counters.log_skipped).toBe("1");
-  });
+  // A log that keeps failing is parked and retried, never skipped: see retry.test.ts.
 
   test("a payment survives a failure between recording it and applying it", async () => {
     const p = { tx: TX, logIndex: 1, wallet: A, amount: 15n, credited: true, at: 1 };

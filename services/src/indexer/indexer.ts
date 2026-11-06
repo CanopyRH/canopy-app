@@ -4,6 +4,7 @@ import { daysFor, extendPlan } from "../billing/prepaid";
 import type { Db } from "../store/db";
 import type { Repo } from "../store/repo";
 import { adminEventOf, type AdminEvent } from "./admin";
+import { backoffSec, cleanError, fromStored, RETRY_BASE_SEC, RETRY_MAX_SEC, STUCK_AFTER_SEC, subjectOf, toStored, type RetryTuning, type StuckLog } from "./retry";
 
 const lc = (a: string) => a.toLowerCase();
 
@@ -101,46 +102,102 @@ export function decodeFired(log: Log): FiredAlarm | null {
   return { key: a.key, target: a.target, evidence: a.evidence, tx: log.transactionHash };
 }
 
-const MAX_LOG_TRIES = 3;
-const logTries = new Map<string, number>();
+export interface SyncOptions {
+  name: string;
+  address: Address | Address[];
+  startBlock: bigint;
+  step?: bigint;
+  /** Narrows a busy contract, such as plan payments on the stablecoin. */
+  filter?: { event: AbiEvent; args: Record<string, unknown> };
+  onLog: (l: Log) => Promise<void>;
+  /** Called once for a log that has been failing for a while. It should only queue a message. */
+  onStuck?: (s: StuckLog) => Promise<unknown>;
+  /** Seconds. Defaults to the clock. */
+  now?: () => number;
+  /** Overrides the retry timing, for tests. */
+  retry?: Partial<RetryTuning>;
+}
 
 /**
  * Reads logs from the saved cursor in small ranges, so a restart resumes where it stopped.
- * A log that keeps failing is skipped and counted, because registering a detector is open to anyone and one bad log must not stop the indexer.
+ *
+ * A log that fails is never dropped. It goes on a durable retry list in the database, the cursor moves past it, and the
+ * logs after it still land. Each pass retries the due ones, waiting longer after every failure. Logs about the same thing
+ * (the same position, owner or key) stay in order, so one waits behind an earlier failed one. A log that keeps failing is
+ * reported through `onStuck`. This matters because registering a detector is open to anyone, so one bad log must never
+ * stop the indexer, and a pruned or lagging node must never cost an alarm's exits.
  */
-export async function syncLogs(
-  client: Pick<PublicClient, "getBlockNumber" | "getLogs">,
-  r: Repo,
-  opts: {
-    name: string;
-    address: Address | Address[];
-    startBlock: bigint;
-    step?: bigint;
-    /** Narrows a busy contract, such as plan payments on the stablecoin. */
-    filter?: { event: AbiEvent; args: Record<string, unknown> };
-    onLog: (l: Log) => Promise<void>;
-  },
-) {
+export async function syncLogs(client: Pick<PublicClient, "getBlockNumber" | "getLogs">, r: Repo, opts: SyncOptions) {
+  const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
+  const tune: RetryTuning = { baseSec: RETRY_BASE_SEC, maxSec: RETRY_MAX_SEC, stuckAfterSec: STUCK_AFTER_SEC, ...opts.retry };
+  await retryParked(r, opts, now, tune);
+
   const tip = await client.getBlockNumber();
   const step = opts.step ?? 2_000n;
   let from = (await r.cursor(opts.name)) ?? opts.startBlock;
+  const waiting = new Set((await r.parkedLogs(opts.name)).map((p) => p.subject).filter(Boolean));
   while (from <= tip) {
     const to = from + step - 1n > tip ? tip : from + step - 1n;
-    const logs = await client.getLogs({ address: opts.address, fromBlock: from, toBlock: to, ...opts.filter } as never);
+    const logs = (await client.getLogs({ address: opts.address, fromBlock: from, toBlock: to, ...opts.filter } as never)) as unknown as Log[];
     for (const l of logs) {
+      const subject = subjectOf(l);
+      if (subject && waiting.has(subject)) {
+        await park(r, opts, l, now(), new Error("waiting behind an earlier log about the same thing"), tune);
+        continue;
+      }
       try {
-        await opts.onLog(l as unknown as Log);
+        await opts.onLog(l);
       } catch (e) {
-        const id = `${l.transactionHash}:${l.logIndex}`;
-        const n = (logTries.get(id) ?? 0) + 1;
-        logTries.set(id, n);
-        if (n < MAX_LOG_TRIES) throw e;
-        console.error("skipped log", id, (e as Error).message);
-        await r.bump("log_skipped");
+        await park(r, opts, l, now(), e, tune);
+        if (subject) waiting.add(subject);
       }
     }
     await r.setCursor(opts.name, to + 1n);
     from = to + 1n;
   }
+  await reportStuck(r, opts, now(), tune);
   return tip;
+}
+
+async function park(r: Repo, opts: SyncOptions, l: Log, at: number, error: unknown, tune: RetryTuning) {
+  console.warn("log parked for retry", opts.name, `${l.transactionHash}:${l.logIndex}`, cleanError(error));
+  await r.bump("log_parked");
+  await r.parkLog({
+    source: opts.name, tx: l.transactionHash!, logIndex: l.logIndex!, subject: subjectOf(l), block: l.blockNumber ?? 0n, log: toStored(l), now: at,
+    nextAt: at + backoffSec(0, tune.baseSec, tune.maxSec), error: cleanError(error),
+  });
+}
+
+/** Retries the parked logs that are due, oldest first. A log that still fails keeps every later log about the same thing waiting. */
+async function retryParked(r: Repo, opts: SyncOptions, now: () => number, tune: RetryTuning) {
+  const blocked = new Set<string>();
+  for (const p of await r.parkedLogs(opts.name)) {
+    if (p.subject && blocked.has(p.subject)) continue;
+    if (p.next_at > now()) {
+      if (p.subject) blocked.add(p.subject);
+      continue;
+    }
+    try {
+      await opts.onLog(fromStored(p.log) as Log);
+      await r.logRetried(opts.name, p.tx, p.log_index);
+      await r.bump("log_recovered");
+    } catch (e) {
+      if (p.subject) blocked.add(p.subject);
+      await r.logRetryFailed(opts.name, p.tx, p.log_index, now() + backoffSec(p.attempts + 1, tune.baseSec, tune.maxSec), cleanError(e));
+    }
+  }
+}
+
+/** Tells the operator once about each log that has been failing for a while. */
+async function reportStuck(r: Repo, opts: SyncOptions, at: number, tune: RetryTuning) {
+  if (!opts.onStuck) return;
+  for (const p of await r.parkedLogs(opts.name)) {
+    if (p.alerted || at - p.first_failed_at < tune.stuckAfterSec) continue;
+    try {
+      await opts.onStuck({ source: opts.name, tx: p.tx, logIndex: p.log_index, block: BigInt((p.log as { blockNumber?: string | null }).blockNumber ?? 0), attempts: p.attempts, sinceSec: at - p.first_failed_at, error: p.last_error });
+      await r.logRetryAlerted(opts.name, p.tx, p.log_index);
+    } catch (e) {
+      console.warn("stuck log alert", cleanError(e));
+    }
+  }
 }

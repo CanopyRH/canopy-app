@@ -13,6 +13,7 @@ import { scanVault } from "./detectors/scan";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
+import { stuckLogText, type StuckLog } from "./indexer/retry";
 import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, decodeFired, syncLogs } from "./indexer/indexer";
 import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, onFired, pokeAndQueue, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
@@ -99,12 +100,19 @@ const adminAlert = async (e: AdminEvent) => {
   await queueOps(r, adminAlertId(e), adminAlertText(env.CHAIN_ID, e), now());
 };
 
+/** A log that has been failing for a while goes to the operator chat. It keeps being retried either way. */
+const stuckAlert = async (s: StuckLog) => {
+  if (env.OPS_CHAT_ID === undefined) return void console.error("log stuck", s.source, s.tx, s.error);
+  await queueOps(r, `stuck:${s.source}:${s.tx}:${s.logIndex}`, stuckLogText(env.CHAIN_ID, s), now());
+};
+
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
-    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onLog: (l) => applyRouterLog(r, l, adminAlert) }));
+    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onStuck: stuckAlert, onLog: (l) => applyRouterLog(r, l, adminAlert) }));
   every(2_000, "alarms", () =>
     syncLogs(client, r, {
       name: "alarms",
+      onStuck: stuckAlert,
       address: alarmBook,
       startBlock: env.START_BLOCK,
       onLog: async (l) => {
@@ -140,6 +148,7 @@ if (run("indexer") && contracts) {
   every(30_000, "payments", () =>
     syncLogs(client, r, {
       name: "payments",
+      onStuck: stuckAlert,
       address: env.PLAN_TOKEN as Address,
       startBlock: env.START_BLOCK,
       filter: { event: getAbiItem({ abi: erc20Abi, name: "Transfer" }), args: { to: env.PLAN_PAY_ADDRESS } },

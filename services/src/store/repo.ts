@@ -133,6 +133,31 @@ export const repo = (db: Db) => ({
   async retryJob(id: string, runAt: number) {
     await db.query(`UPDATE jobs SET attempts=attempts+1, run_at=$2 WHERE id=$1`, [id, runAt]);
   },
+  /** Keeps a log the indexer could not apply, so it survives a restart and is retried. A log already on the list stays as it is. */
+  async parkLog(p: { source: string; tx: string; logIndex: number; subject: string; block: bigint; log: unknown; now: number; nextAt: number; error: string }) {
+    await db.query(
+      `INSERT INTO log_retries (source, tx, log_index, subject, block, log, first_failed_at, next_at, last_error) VALUES ($1,$2,$3,$4,$5,$6::text::jsonb,$7,$8,$9)
+       ON CONFLICT DO NOTHING`,
+      [p.source, p.tx, p.logIndex, p.subject, p.block.toString(), JSON.stringify(p.log), p.now, p.nextAt, p.error],
+    );
+  },
+  /** Every parked log of one source, oldest first. */
+  async parkedLogs(source: string) {
+    const rows = await db.query<{ tx: string; log_index: number; subject: string; log: unknown; attempts: number; first_failed_at: string; next_at: string; last_error: string; alerted: boolean }>(
+      `SELECT tx, log_index, subject, log, attempts, first_failed_at, next_at, last_error, alerted FROM log_retries WHERE source=$1 ORDER BY block, log_index`,
+      [source],
+    );
+    return rows.map((x) => ({ ...x, log_index: Number(x.log_index), attempts: Number(x.attempts), first_failed_at: Number(x.first_failed_at), next_at: Number(x.next_at) }));
+  },
+  async logRetryFailed(source: string, tx: string, logIndex: number, nextAt: number, error: string) {
+    await db.query(`UPDATE log_retries SET attempts=attempts+1, next_at=$4, last_error=$5 WHERE source=$1 AND tx=$2 AND log_index=$3`, [source, tx, logIndex, nextAt, error]);
+  },
+  async logRetried(source: string, tx: string, logIndex: number) {
+    await db.query(`DELETE FROM log_retries WHERE source=$1 AND tx=$2 AND log_index=$3`, [source, tx, logIndex]);
+  },
+  async logRetryAlerted(source: string, tx: string, logIndex: number) {
+    await db.query(`UPDATE log_retries SET alerted=true WHERE source=$1 AND tx=$2 AND log_index=$3`, [source, tx, logIndex]);
+  },
   async recordAlarm(key: string, firedAt: number, tx: string | null, evidence: string) {
     await db.query(`INSERT INTO alarms (key, fired_at, tx, evidence) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [key, firedAt, tx, evidence]);
   },
@@ -215,7 +240,10 @@ export const repo = (db: Db) => ({
     const cursors = await db.query<{ name: string; block: string }>(`SELECT name, block::text AS block FROM cursors`);
     const [exits] = await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM exits WHERE via_alarm`);
     const [signers] = await db.query<{ n: string }>(`SELECT COUNT(DISTINCT signer)::text AS n FROM attestations WHERE deadline>$1`, [now - 7 * 86_400]);
+    const [parked] = await db.query<{ n: string; oldest: string | null }>(`SELECT COUNT(*)::text AS n, MIN(first_failed_at)::text AS oldest FROM log_retries`);
     return {
+      retryingLogs: Number(parked?.n ?? 0),
+      oldestRetryingLogSec: parked?.oldest ? Math.max(0, now - Number(parked.oldest)) : 0,
       openJobs: Number(jobs?.open ?? 0),
       oldestJobSec: jobs?.oldest ? Math.max(0, now - Number(jobs.oldest)) : 0,
       alarmExits: Number(exits?.n ?? 0),
