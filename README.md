@@ -42,10 +42,11 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 ### Admin limits
 
 <p align="center">
-  <img src=".github/assets/admin-limits.svg" alt="What the admin can't do: it can't redirect payouts, its router powers end on 2027-11-04, pausing stops new arming only, and every change needs 2 of 3 signers." width="100%">
+  <img src=".github/assets/admin-limits.svg" alt="What the admin can't do: it can't change who gets paid, its router powers end on 2027-11-04, pausing stops new arming only, and every change needs 2 of 3 signers." width="100%">
 </p>
 
-- The admin can't redirect any payout. A position keeps its adapter, and a feed or route change applies only when the owner re-arms.
+- The admin can't move funds or change who gets paid: every payout goes to the position owner, and a position keeps its adapter.
+- Its one effect on value is the optional exit to stablecoin, which swaps with the price feed and route set before you armed. A bad feed or route could make that swap pay less; a later change doesn't apply until the owner arms again. No feed or route is set today. See [SECURITY.md](SECURITY.md) for every role and the risks accepted.
 - The router's admin powers end on **2027-11-04** (`ADMIN_EXPIRY`). After that, the router's settings can't change.
 - A separate guardian Safe can pause **new arming only**. Exits always stay open.
 - The `AlarmBook` admin manages the approved watcher list, and that role doesn't expire.
