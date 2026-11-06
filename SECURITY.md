@@ -8,8 +8,8 @@ public issue for it. Include what you found, how to reproduce it, and what it af
 
 ## Scope
 
-- The contracts in `contracts/src`: v2 is live on Robinhood Chain (4663) at block 107737863.
-  v1 is retired, with its source tagged `v1-deployed`; deployment records are in `contracts/broadcast/`.
+- The contracts in `contracts/src`. v2 is live on Robinhood Chain (4663) since 2026-11-06, at block 107737863; its addresses
+  are in the README. v1 is retired, with its source tagged `v1-deployed`.
 - The services in `services/`: the keeper, indexer, detectors, watchers, API and Telegram bot.
 - The web app in `web/`.
 - The keyless SDK in `sdk/` and local MCP server in `mcp/`. They read the chain and prepare unsigned transactions;
