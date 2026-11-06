@@ -178,7 +178,7 @@ describe("checkpoints carry a gas limit on every read and simulation", () => {
         readContract: async (a: { functionName: string; gas?: bigint }) => {
           reads.push({ functionName: a.functionName, gas: a.gas });
           if (a.functionName === "detector") return { kind: 4, target: LISTED, window: 3600 };
-          if (a.functionName === "state") return [true, 0n, 0n, 1_000n, 0n, 0n, 0n];
+          if (a.functionName === "state") return [true, 0n, 0n, 1_000n, 0n, 0n, 0n, 0n];
           return 10n; // totalAssets below the lowest reading: a sample is due
         },
         simulateCalls: async ({ calls }: { calls: { gas?: bigint }[] }) => {

@@ -272,18 +272,28 @@ try {
   const drain = { kind: 4, target: mockVault, threshold: 2500n, window: 1200, a: `0x${"00".repeat(32)}` as Hex, b: `0x${"00".repeat(32)}` as Hex };
   await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "register", args: [drain] }));
   const drainKey = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "keyOf", args: [drain] });
+  // A DRAIN can only be armed paired with a watcher quorum over one day (DrainNeedsQuorum), as the app's preset does. The
+  // keeper polls the parts of an armed BOTH key, so the DRAIN part is still poked and confirmed on its own.
+  const zero = `0x${"00".repeat(32)}` as Hex;
+  // The quorum part is the vault preset's watcher quorum registered above.
+  const both = { kind: 6, target: mockVault, threshold: 0n, window: 86_400, a: drainKey, b: quorumKey };
+  await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "register", args: [both] }));
+  const bothKey = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "keyOf", args: [both] });
   // A paying owner with no shares arms a position on the real vault with this key, so the keeper polls it and its exit job ends at once.
   await send(P.morpho, P.stable, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [deployer.address, 100_000_000n] }));
   const dp = planTx(P.stable, PAY_TO, PLAN_AMOUNTS.months3);
   await send(deployer.address, dp.to, dp.data);
-  const da = armTx(router, adapter, VAULT, [drainKey]);
+  const da = armTx(router, adapter, VAULT, [bothKey]);
   await send(deployer.address, da.to, da.data);
   check("the DRAIN position and its plan reached the keeper's database", await waitFor("drain position", async () =>
     (await dbA.query(`SELECT 1 FROM positions WHERE active`)).length === 3 && (await dbA.query(`SELECT 1 FROM plans`)).length === 3));
-  // The reference needs one sampling period (600 s) to roll, so the fork's clock moves, then a checkpoint sets it.
-  await rpc("evm_increaseTime", [610]);
-  await rpc("evm_mine", []);
-  await send(deployer.address, book, encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [drainKey] }));
+  // The reference is live after two rolls of one sampling period (600 s) each, so the fork's clock moves twice, with a
+  // checkpoint after each.
+  for (let i = 0; i < 2; i++) {
+    await rpc("evm_increaseTime", [610]);
+    await rpc("evm_mine", []);
+    await send(deployer.address, book, encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [drainKey] }));
+  }
   const drainState = () => client.readContract({ address: book, abi: alarmBookAbi, functionName: "state", args: [drainKey] });
   const counter = async (name: string) => Number((await dbA.query<{ value: string }>(`SELECT value FROM counters WHERE name=$1`, [name]))[0]?.value ?? 0);
   check("the reference rolled and nothing is pending", (await drainState())[4] === 1_000n * 10n ** 18n && (await drainState())[6] === 0n);

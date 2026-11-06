@@ -63,7 +63,7 @@ function callResult(to: string, data: Hex): Hex {
   const all = [...(routerAbi as Abi), ...(alarmBookAbi as Abi)] as Abi;
   const { functionName } = decodeFunctionData({ abi: all, data });
   if (functionName === "isArmed") return encodeFunctionResult({ abi: routerAbi as Abi, functionName: "isArmed", result: true });
-  if (functionName === "state") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "state", result: [true, FIRED_AT, 0n, 0n, 0n, 0n, 0n] });
+  if (functionName === "state") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "state", result: [true, FIRED_AT, 0n, 0n, 0n, 0n, 0n, 0n] });
   throw new Error(`reverted ${functionName} on ${to}`);
 }
 

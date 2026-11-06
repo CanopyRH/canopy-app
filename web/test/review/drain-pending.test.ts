@@ -92,7 +92,10 @@ describe("V3-S05: a pending DRAIN drop blocks the preset that depends on it", ()
     // Before any drop, the preset is clear.
     expect(await presetStatus(io, drainBoth)).toBe("clear");
 
-    // The keeper samples once a period, so the DRAIN reference is live. Then 40% of the vault's assets leave.
+    // The keeper samples once a period. A DRAIN reference is live after two rolls (it trips below the lower of the last
+    // two period lows), so sample two periods. Then 40% of the vault's assets leave.
+    await warp(1_801);
+    await send(book, encodeFunctionData({ abi: bookAbi, functionName: "checkpoint", args: [drain.key] }));
     await warp(1_801);
     await send(book, encodeFunctionData({ abi: bookAbi, functionName: "checkpoint", args: [drain.key] }));
     await send(vault, encodeFunctionData({ abi: mockAbi, functionName: "setPrice", args: [600_000n] }));

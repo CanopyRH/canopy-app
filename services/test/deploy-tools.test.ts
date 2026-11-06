@@ -63,7 +63,7 @@ function fake(o: { chainId: number; registered?: Set<Hex>; pausedVaults?: Addres
           if (o.pausedVaults?.includes(address)) return false;
           throw new Error("no such function");
         }
-        if (functionName === "state") return [registered.has(args![0] as Hex), 0n, 0n, 0n, 0n, 0n, 0n];
+        if (functionName === "state") return [registered.has(args![0] as Hex), 0n, 0n, 0n, 0n, 0n, 0n, 0n];
         throw new Error(functionName);
       },
     } as never,
