@@ -123,9 +123,10 @@ This is how the live deployment was made. Nothing here needs anything outside th
 
 | Date | Kind | Commit | Report |
 |---|---|---|---|
+| 2026-11-06 | Second internal review | [`1fec06e`](https://github.com/CanopyRH/canopy-app/tree/1fec06e) | [Report](.audit-grade/2026-11-06/REPORT.md) |
 | 2026-11-05 | Internal review | [`71c1fa0`](https://github.com/CanopyRH/canopy-app/tree/audit-2026-11-05) (tag `audit-2026-11-05`) | [Report](.audit-grade/2026-11-05/REPORT.md), [scope](.audit-grade/2026-11-05/SCOPE.md), [PoCs](.audit-grade/2026-11-05/POCS), [status of each finding](.audit-grade/findings.tsv) |
 
-Both Highs and all four Lows are fixed. The Medium is an accepted risk, explained in [SECURITY.md](SECURITY.md). No external audit has been done yet. Changes since launch are in [CHANGELOG.md](CHANGELOG.md).
+Every High, Medium and Low found in the services is fixed, with a regression test for each. The contract findings can't be fixed in deployed code, so they're accepted risks with off-chain mitigations, explained in [SECURITY.md](SECURITY.md). No external audit has been done yet. Changes since launch are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run your own keeper
 
