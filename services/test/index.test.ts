@@ -4,6 +4,7 @@ import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunct
 import { generatePrivateKey } from "viem/accounts";
 import { presetsFor } from "../src/api/presets";
 import { alarmBookAbi, erc20Abi, routerAbi } from "../src/chain/abi";
+import { v1AlarmBookAbi, v1RouterAbi } from "../src/indexer/v1";
 import type { Db } from "../src/store/db";
 import { repo } from "../src/store/repo";
 
@@ -22,7 +23,10 @@ const OWNER = "0x00000000000000000000000000000000000000a1" as Address;
 const PAYER = "0x00000000000000000000000000000000000000a2" as Address;
 const LATE_PAYER = "0x00000000000000000000000000000000000000a3" as Address;
 const VAULT = "0x00000000000000000000000000000000000000c3" as Address;
+const V1_ROUTER = "0x00000000000000000000000000000000000000e1" as Address;
+const V1_BOOK = "0x00000000000000000000000000000000000000e2" as Address;
 const POS = `0x${"11".repeat(32)}` as Hex;
+const V1_POS = `0x${"12".repeat(32)}` as Hex;
 // The vault's own "Vault loss" preset, so followers are told when it fires.
 const PRESET = presetsFor(VAULT)[0]!;
 const KEY = PRESET.key;
@@ -50,6 +54,10 @@ const LOGS: RpcLog[] = [
   logOf(BOOK, alarmBookAbi as Abi, "WatcherSet", { watcher: PAYER, since: 1_000n, until: 2_000n }, 994n, TX(3)),
   logOf(BOOK, alarmBookAbi as Abi, "Registered", { key: KEY, kind: PRESET.detector.kind, target: VAULT, threshold: PRESET.detector.threshold, window: PRESET.detector.window, a: PRESET.detector.a, b: PRESET.detector.b }, 995n, TX(4)),
   logOf(BOOK, alarmBookAbi as Abi, "Fired", { key: KEY, kind: PRESET.detector.kind, target: VAULT, by: OWNER, evidence: TX(8) }, 997n, TX(5)),
+  // While v1 is live: an admin event, a new arm and a watcher change on the old contracts.
+  logOf(V1_ROUTER, v1RouterAbi as unknown as Abi, "FeedSet", { token: TOKEN, feed: PAY, heartbeat: 3600, tokenDecimals: 18 }, 993n, TX(11)),
+  logOf(V1_ROUTER, v1RouterAbi as unknown as Abi, "Armed", { posId: V1_POS, owner: OWNER, adapter: ADAPTER, target: VAULT, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: TX(9), keys: [KEY] }, 994n, TX(12)),
+  logOf(V1_BOOK, v1AlarmBookAbi as unknown as Abi, "WatcherSet", { watcher: PAYER, allowed: true }, 995n, TX(13)),
   // 990 is deep enough under a depth of 2. 999 is not.
   logOf(TOKEN, erc20Abi as Abi, "Transfer", { from: PAYER, to: PAY, value: 15_000_000n }, 990n, TX(6)),
   logOf(TOKEN, erc20Abi as Abi, "Transfer", { from: LATE_PAYER, to: PAY, value: 15_000_000n }, 999n, TX(7)),
@@ -174,7 +182,7 @@ beforeAll(async () => {
   Object.assign(process.env, {
     ROLE: "all", PORT: "0", PUBLIC_URL: "https://api.example.test", APP_URL: "https://app.example.test", DATABASE_URL: "pglite://memory", CHAIN_ID: "4663",
     RPC_URL: "http://rpc.test/a", RPC_URL_BACKUP: "http://rpc.test/b",
-    ROUTER, ALARM_BOOK: BOOK, ADAPTER_4626: ADAPTER, PLAN_TOKEN: TOKEN, PLAN_PAY_ADDRESS: PAY, START_BLOCK: "990", CONFIRMATIONS: "2",
+    ROUTER, ALARM_BOOK: BOOK, ADAPTER_4626: ADAPTER, PLAN_TOKEN: TOKEN, PLAN_PAY_ADDRESS: PAY, START_BLOCK: "990", V1_ROUTER, V1_ALARM_BOOK: V1_BOOK, CONFIRMATIONS: "2",
     KEEPER_PRIVATE_KEY: generatePrivateKey(), KEEPER_PAID_ONLY: "false", WATCHER_PRIVATE_KEY: generatePrivateKey(), ANTHROPIC_API_KEY: "test-key-not-real",
     CARD_VAULTS: CARD, TELEGRAM_BOT_TOKEN: "1:test", TELEGRAM_WEBHOOK_SECRET: SECRET,
     BOT_MODE: "webhook", LOOP_SCALE: "0.01", OPS_CHAT_ID: String(OPS_CHAT), HEALTH_TOKEN: HEALTH,
@@ -222,9 +230,19 @@ describe("src/index.ts, every role on", () => {
   });
 
   test("a watcher change on the AlarmBook reaches the operator chat", async () => {
-    await until(() => sent.some((m) => String(m.body.text).includes("WatcherSet")), "the watcher message");
-    const texts = sent.filter((m) => m.method === "sendMessage" && String(m.body.text).includes("WatcherSet"));
+    await until(() => sent.some((m) => String(m.body.text).includes("WatcherSet on AlarmBook in")), "the watcher message");
+    const texts = sent.filter((m) => m.method === "sendMessage" && String(m.body.text).includes("WatcherSet on AlarmBook in"));
     expect(texts).toHaveLength(1); // read again on every pass, told once
+  });
+
+  test("v1 admin events and arms are reported, on cursors of their own, and write no positions", async () => {
+    await until(() => ["FeedSet on ExitRouter v1", "armed on the v1 ExitRouter", "WatcherSet on AlarmBook v1"].every((t) => sent.some((m) => String(m.body.text).includes(t))), "the v1 messages");
+    const arm = sent.find((m) => String(m.body.text).includes("armed on the v1 ExitRouter"))!;
+    expect(String(arm.body.text)).toContain(V1_POS);
+    expect(String(arm.body.text)).toContain(`https://robinhoodchain.blockscout.com/tx/${TX(12)}`);
+    await until(async () => (await rows(`SELECT 1 FROM cursors WHERE name = $1`, [`v1router@${V1_ROUTER.toLowerCase()}`])).length > 0, "the v1 router cursor");
+    expect((await rows(`SELECT 1 FROM cursors WHERE name = $1`, [`v1alarms@${V1_BOOK.toLowerCase()}`])).length).toBe(1);
+    expect(await rows(`SELECT 1 FROM positions WHERE pos_id=$1`, [V1_POS])).toHaveLength(0);
   });
 
   test("an arm is applied at once, then confirmed against the router once it is deep", async () => {

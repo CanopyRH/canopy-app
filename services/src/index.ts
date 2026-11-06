@@ -13,6 +13,7 @@ import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
+import { applyV1AlarmLog, applyV1RouterLog, v1AlarmsCursor, v1RouterCursor } from "./indexer/v1";
 import { announceRefusal, ContractVersionError, requireV2 } from "./chain/version";
 import { deepReorgText, stuckLogText, type StuckLog } from "./indexer/retry";
 import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, recheckRouter, syncLogs, type ReorgInfo } from "./indexer/indexer";
@@ -159,6 +160,12 @@ const adminAlert = async (e: AdminEvent) => {
   await queueOps(r, adminAlertId(e), adminAlertText(env.CHAIN_ID, e), now());
 };
 
+/** Operator messages that are not an admin event, such as the v1 contracts' changes. Queued, so the indexer never waits on Telegram. */
+const opsNote = async (id: string, text: string) => {
+  if (env.OPS_CHAT_ID === undefined) return void console.warn("ops note", id, "(set OPS_CHAT_ID to be told)");
+  await queueOps(r, id, text, now());
+};
+
 /** A log that has been failing for a while goes to the operator chat. It keeps being retried either way. */
 const stuckAlert = async (s: StuckLog) => {
   if (env.OPS_CHAT_ID === undefined) return void console.error("log stuck", s.source, s.tx, s.error);
@@ -219,6 +226,34 @@ if (run("indexer") && contracts) {
         }
       },
     }));
+  // While v1 is live, its admin events and new arms are reported too. Their cursors are their own: the plain `router` and
+  // `alarms` names belong to older code, which the contract switch parks. Nothing here writes positions, exits or alarms.
+  if (env.V1_ROUTER) {
+    const v1Router = env.V1_ROUTER as Address;
+    every(2_000, "v1 router", () =>
+      syncLogs(client, r, {
+        name: v1RouterCursor(v1Router),
+        fence,
+        address: v1Router,
+        startBlock: env.V1_START_BLOCK ?? env.START_BLOCK,
+        onStuck: stuckAlert,
+        onDeepReorg: reorgAlert,
+        onLog: (l) => applyV1RouterLog(env.CHAIN_ID, l, opsNote),
+      }));
+  }
+  if (env.V1_ALARM_BOOK) {
+    const v1Book = env.V1_ALARM_BOOK as Address;
+    every(2_000, "v1 alarms", () =>
+      syncLogs(client, r, {
+        name: v1AlarmsCursor(v1Book),
+        fence,
+        address: v1Book,
+        startBlock: env.V1_START_BLOCK ?? env.START_BLOCK,
+        onStuck: stuckAlert,
+        onDeepReorg: reorgAlert,
+        onLog: (l) => applyV1AlarmLog(env.CHAIN_ID, l, opsNote),
+      }));
+  }
   // Arms are applied at the tip, so exits stay fast. Each is checked against the chain once it is deep enough to be settled.
   every(5_000, "confirm arms", () => confirmArms(client, r, router, confirmations));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.

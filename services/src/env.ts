@@ -20,6 +20,11 @@ export const Env = z.object({
   // Set to the new ROUTER for the one deploy that moves the shared database to new contracts. Without it a service whose
   // ROUTER/ALARM_BOOK differ from the stored ones refuses to start. Remove it once every service is running on the new addresses.
   CONTRACT_SWITCH: addr.optional(),
+  // The v1 contracts, while they are live. The indexer follows their admin events and new arms and tells the ops chat, because
+  // nothing keeps v1 positions safe once the services run on v2. Off means v1 is not followed. Remove both when v1 retires.
+  V1_ROUTER: addr.optional(),
+  V1_ALARM_BOOK: addr.optional(),
+  V1_START_BLOCK: z.coerce.bigint().min(0n).optional(), // where to start reading the v1 contracts; off means START_BLOCK
   PLAN_PAY_ADDRESS: addr.optional(), // receives prepaid plan payments; a multisig
   PLAN_TOKEN: addr.optional(),
   KEEPER_PRIVATE_KEY: z.string().optional(), // pays gas only; holds no user funds
@@ -49,6 +54,9 @@ export const Env = z.object({
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1), // entries at the end of X-Forwarded-For that your proxies add (Railway: 2, the caller then its edge server); 0 trusts no header
   KEEPER_MIN_GAS_WEI: z.coerce.bigint().default(500_000_000_000_000n), // warn below 0.0005 ETH
 }).superRefine((e, c) => {
+  for (const [k, v] of [["V1_ROUTER", e.ROUTER], ["V1_ALARM_BOOK", e.ALARM_BOOK]] as const) {
+    if (e[k] && v && e[k]!.toLowerCase() === v.toLowerCase()) c.addIssue({ code: "custom", path: [k], message: "must be the v1 contract, not the one this service runs on" });
+  }
   if (e.ALERTS_ONLY) return;
   for (const k of ["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"] as const) {
     if (!e[k]) c.addIssue({ code: "custom", path: [k], message: "required unless ALERTS_ONLY is on" });

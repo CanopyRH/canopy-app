@@ -9,7 +9,8 @@ const WATCHED = {
 } as const;
 const ABIS = { ExitRouter: routerAbi, AlarmBook: alarmBookAbi } as const;
 
-export type AdminContract = keyof typeof WATCHED;
+/** The v1 contracts are named apart in alerts (see v1.ts). */
+export type AdminContract = keyof typeof WATCHED | "ExitRouter v1" | "AlarmBook v1";
 
 export interface AdminEvent {
   contract: AdminContract;
@@ -30,7 +31,7 @@ const show = (v: unknown): string => {
 };
 
 /** Returns the admin event in a log from this contract, or null for any other event. */
-export function adminEventOf(contract: AdminContract, log: RawLog): AdminEvent | null {
+export function adminEventOf(contract: keyof typeof WATCHED, log: RawLog): AdminEvent | null {
   const ev = decodeEventLog({ abi: ABIS[contract], data: log.data, topics: log.topics as never, strict: false });
   if (!(WATCHED[contract] as readonly string[]).includes(ev.eventName)) return null;
   const given = (ev.args ?? {}) as Record<string, unknown>;
