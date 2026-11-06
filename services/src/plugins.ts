@@ -7,6 +7,7 @@ import type { Reply } from "./bot/bot";
 import type { ReorgInfo } from "./indexer/indexer";
 import type { StuckLog } from "./indexer/retry";
 import type { Db } from "./store/db";
+import type { Role } from "./env";
 import type { Repo } from "./store/repo";
 
 /** What a bot command gets. Like the built-in commands, it may store chats and vaults, never wallets. */
@@ -27,7 +28,7 @@ export interface Runtime {
   /** Seconds. */
   now: () => number;
   /** Whether this process runs the role (always true for "all"). */
-  run: (role: string) => boolean;
+  run: (role: Role) => boolean;
   /** False on a chain with no Canopy contracts, where the detector role sends the free alerts instead of the indexer. */
   contracts: boolean;
   /** The vaults the app lists (CARD_VAULTS), lowercase. */
