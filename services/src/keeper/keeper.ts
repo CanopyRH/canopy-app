@@ -364,6 +364,27 @@ export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECK
   }
 }
 
+/** Where the alarm queue loop has read up to, and when it last went over the whole day. */
+export interface AlarmCursor { seq: bigint; sweptAt: number }
+/** How often the alarm queue loop goes over every alarm of the last day, not just new ones. */
+export const ALARM_SWEEP_SEC = 60;
+
+/**
+ * Queues exits for alarms another process recorded. New alarms come from a cursor, so a quiet pass costs one indexed
+ * query instead of the whole day's alarms and every position armed with them. Once a minute it goes over the whole day
+ * again, which picks up positions armed, and plans paid, after an alarm fired.
+ */
+export async function queueNewAlarms(d: KeeperDeps, c: AlarmCursor) {
+  const since = d.now() - ALARM_TTL;
+  const sweep = d.now() - c.sweptAt >= ALARM_SWEEP_SEC;
+  const rows = sweep ? await d.repo.recentAlarms(since) : await d.repo.alarmsAfter(c.seq, since);
+  for (const a of rows) {
+    await onFired(d, a.key as Hex, Number(a.fired_at));
+    if (BigInt(a.seq) > c.seq) c.seq = BigInt(a.seq);
+  }
+  if (sweep) c.sweptAt = d.now();
+}
+
 /** Queues exits for a fired alarm. Canopy's keeper skips unpaid wallets; no contract does. */
 export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise<number> {
   let queued = 0;

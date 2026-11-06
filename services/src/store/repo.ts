@@ -10,6 +10,18 @@ export interface PositionRow {
   epoch: string;
 }
 
+const DAY = 86_400;
+/** How long each prunable table keeps its rows, in seconds. */
+export const PRUNE_KEEP = {
+  jobs: 7 * DAY, // finished jobs only; an exit job's dedupe matters for the alarm's day
+  alarms: 30 * DAY,
+  signals: 7 * DAY,
+  attestations: 8 * DAY, // the health check counts signers seen in the last 7 days
+  feedItems: 14 * DAY, // feeds drop items older than a day, so a pruned one isn't labelled again
+  sentAlerts: 7 * DAY, // quiet periods are at most 2 days
+  snaps: 31 * DAY, // share-price highs look back 30 days
+};
+
 export const repo = (db: Db) => ({
   async upsertPosition(p: {
     posId: string; owner: string; adapter: string; target: string; tokenId: bigint; harbour: number; maxSlipBps: number;
@@ -228,6 +240,20 @@ export const repo = (db: Db) => ({
   async pruneSnaps(before: number) {
     await db.query(`DELETE FROM vault_snaps WHERE t<$1`, [before]);
   },
+  /**
+   * Deletes rows nothing reads any more, so tables that only grow stay bounded. Each age is well past the longest
+   * window anything looks back over: a day for alarms and exits, an hour for signals and reports, a week for the
+   * health count of watchers and alert quiet periods.
+   */
+  async prune(now: number, keep = PRUNE_KEEP) {
+    await db.query(`DELETE FROM jobs WHERE done AND created_at<$1`, [now - keep.jobs]);
+    await db.query(`DELETE FROM alarms WHERE fired_at<$1`, [now - keep.alarms]);
+    await db.query(`DELETE FROM signals WHERE at<$1`, [now - keep.signals]);
+    await db.query(`DELETE FROM attestations WHERE deadline<$1`, [now - keep.attestations]);
+    await db.query(`DELETE FROM feed_items WHERE at<$1`, [now - keep.feedItems]);
+    await db.query(`DELETE FROM sent_alerts WHERE at<$1`, [now - keep.sentAlerts]);
+    await db.query(`DELETE FROM vault_snaps WHERE t<$1`, [now - keep.snaps]);
+  },
   async snaps(target: string, since: number) {
     const rows = await db.query<{ t: string; total_assets: string }>(`SELECT t, total_assets FROM vault_snaps WHERE target=$1 AND t>=$2 ORDER BY t`, [target, since]);
     return rows.map((x) => ({ t: Number(x.t), totalAssets: BigInt(x.total_assets) }));
@@ -295,7 +321,26 @@ export const repo = (db: Db) => ({
     return db.query<{ owner: string; token: string; amount: string }>(`SELECT o.owner, o.token, o.amount FROM owed o ${paid} ORDER BY random() LIMIT $1`, [limit]);
   },
   async recentAlarms(since: number) {
-    return db.query<{ key: string; fired_at: string }>(`SELECT key, fired_at FROM alarms WHERE fired_at>$1`, [since]);
+    return db.query<{ key: string; fired_at: string; seq: string }>(`SELECT key, fired_at, seq::text AS seq FROM alarms WHERE fired_at>$1 ORDER BY seq`, [since]);
+  },
+  /** Alarms recorded after the one numbered `seq` that fired after `since`, in the order they were recorded. */
+  async alarmsAfter(seq: bigint, since: number, limit = 1_000) {
+    return db.query<{ key: string; fired_at: string; seq: string }>(
+      `SELECT key, fired_at, seq::text AS seq FROM alarms WHERE seq>$1 AND fired_at>$2 ORDER BY seq LIMIT $3`,
+      [seq.toString(), since, limit],
+    );
+  },
+  /**
+   * Alarms that fired after `since`, newest first, a page at a time. `before` is the last row of the previous page.
+   */
+  async liveAlarms(since: number, limit: number, before?: { firedAt: number; key: string }) {
+    const rows = before
+      ? await db.query<{ key: string; fired_at: string; tx: string }>(
+          `SELECT key, fired_at, tx FROM alarms WHERE fired_at>$1 AND (fired_at<$3 OR (fired_at=$3 AND key<$4)) ORDER BY fired_at DESC, key DESC LIMIT $2`,
+          [since, limit, before.firedAt, before.key],
+        )
+      : await db.query<{ key: string; fired_at: string; tx: string }>(`SELECT key, fired_at, tx FROM alarms WHERE fired_at>$1 ORDER BY fired_at DESC, key DESC LIMIT $2`, [since, limit]);
+    return rows.map((a) => ({ ...a, fired_at: Number(a.fired_at) }));
   },
   /** Attestation sets that already have enough signers. Whichever process holds the keeper key sends them. */
   async quorumReady(k: number, now: number) {

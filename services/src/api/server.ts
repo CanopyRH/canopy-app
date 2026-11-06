@@ -20,12 +20,15 @@ const AttestBody = z.strictObject({
 });
 
 const MAX_BODY = 64 * 1024;
+/** Alarms per page of /alarms/live. A caller that sends no limit gets this many, which is every alarm on any normal day. */
+export const ALARMS_PAGE = 1_000;
 
 export interface ApiDeps {
   db: Db;
   repo: Repo;
   vaults: () => Promise<{ address: Address; name: string; chainId: number; asset: string }[]>;
-  liveAlarms: () => Promise<unknown[]>;
+  /** Alarms of the last day, newest first, a page at a time. */
+  liveAlarms: (page: { limit: number; before?: { firedAt: number; key: string } }) => Promise<{ key: string; fired_at: number }[]>;
   watchers: Address[];
   alarmBook: Address;
   chainId: number;
@@ -53,7 +56,16 @@ export function createApi(d: ApiDeps) {
   const vaultParam = (t: string) => (isAddress(t) ? (t as Address) : null);
 
   app.get("/vaults", async (c) => c.json(await d.vaults()));
-  app.get("/alarms/live", async (c) => c.json(await d.liveAlarms()));
+  // Still a plain array, so callers that never page see what they always did. A full page names the next one in a header.
+  app.get("/alarms/live", async (c) => {
+    const limit = Math.min(Math.max(Number.parseInt(c.req.query("limit") ?? "", 10) || ALARMS_PAGE, 1), ALARMS_PAGE);
+    const cursor = /^(\d{1,12}):(0x[0-9a-fA-F]{64})$/.exec(c.req.query("before") ?? "");
+    if (c.req.query("before") !== undefined && !cursor) return c.json({ error: "bad cursor" }, 400);
+    const rows = await d.liveAlarms({ limit, before: cursor ? { firedAt: Number(cursor[1]), key: cursor[2]! } : undefined });
+    const last = rows[rows.length - 1];
+    if (rows.length === limit && last) c.header("X-Next-Before", `${last.fired_at}:${last.key}`);
+    return c.json(rows);
+  });
   app.get("/health", async (c) => {
     if (!d.health || !d.healthToken || !sameSecret(c.req.header("authorization"), `Bearer ${d.healthToken}`)) return c.json({ error: "forbidden" }, 403);
     return c.json(await d.health());

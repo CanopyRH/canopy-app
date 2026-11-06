@@ -19,7 +19,7 @@ const DRAIN_BPS = 2500n;
 const SHARE_DROP_BPS = 50n;
 const HIGH_WINDOW = 30 * 86_400; // One odd reading can't set off alerts forever.
 /** Readings older than every window above, which pruning may delete. */
-export const SNAP_KEEP_SEC = HIGH_WINDOW + 86_400; // also covers the drain baseline's day
+export const SNAP_KEEP_SEC = HIGH_WINDOW + 86_400; // also covers the drain baseline's day; PRUNE_KEEP.snaps matches it
 
 export interface ScanDeps {
   client: Pick<PublicClient, "readContract" | "getCode">;

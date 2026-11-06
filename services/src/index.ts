@@ -10,13 +10,12 @@ import { queueAlert as enqueueAlert, queueOps, sendQueuedAlerts, sendQueuedOps }
 import { ALARM_NAMES, alarmAlert, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
 import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
-import { SNAP_KEEP_SEC } from "./detectors/scan";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
 import { stuckLogText, type StuckLog } from "./indexer/retry";
 import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, syncLogs } from "./indexer/indexer";
-import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, gasFor, onFired, pokeAndQueue, SMALL_CALL_GAS, type KeeperDeps } from "./keeper/keeper";
+import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, gasFor, onFired, pokeAndQueue, queueNewAlarms, SMALL_CALL_GAS, type AlarmCursor, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
 import { serialSender } from "./keeper/sender";
 import { cardText, readCard } from "./risk/card";
@@ -214,10 +213,10 @@ if (run("keeper") && keeper) {
     every(1_000, "exits", () => drainExits(keeper, "listed"));
     every(1_000, "exits unlisted", () => drainExits(keeper, "unlisted"));
   } else every(1_000, "exits", () => drainExits(keeper));
-  // Watchers and the indexer run on other hosts, so this process picks up their work from the shared database.
-  every(2_000, "alarm queue", async () => {
-    for (const a of await r.recentAlarms(now() - ALARM_TTL)) await onFired(keeper, a.key as Hex, Number(a.fired_at));
-  });
+  // Watchers and the indexer run on other hosts, so this process picks up their work from the shared database: new
+  // alarms from a cursor every 2 s, and the whole day's again once a minute for positions armed since an alarm fired.
+  const alarmCursor: AlarmCursor = { seq: 0n, sweptAt: 0 };
+  every(2_000, "alarm queue", () => queueNewAlarms(keeper, alarmCursor));
   every(2_000, "quorum", async () => {
     for (const q of await r.quorumReady(env.QUORUM, now())) await tryQuorum(q.key as Hex, q.evidence_hash as Hex, BigInt(q.deadline));
   });
@@ -266,8 +265,8 @@ if (run("detector")) {
   const scans = { client, repo: r, now, vaultName, withdrawInRobinhoodApp: onRobinhood, queue: (vault: string, text: string, tag: string) => enqueueAlert(r, vault, text, now(), tag) };
   every(60_000, "scans", () => scanAll(scans, listed));
   every(60_000, "scans followed", async () => scanAll(scans, await otherVaults()));
-  // Share-price highs look back 30 days and drain baselines a day, so older readings only take space.
-  every(3_600_000, "prune snaps", () => r.pruneSnaps(now() - SNAP_KEEP_SEC));
+  // Done jobs, old alarms, signals, attestations, reports and vault readings only take space. Every operator runs a detector.
+  every(3_600_000, "prune", () => r.prune(now()));
   // On a chain with no Canopy contracts the indexer role has nothing to do, so the scan's alerts go out from here.
   if (!contracts) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
 }
@@ -317,7 +316,7 @@ if (run("api") || run("bot")) {
       const rows = await r.cardList(listed);
       return rows.map((x) => ({ address: x.target as Address, name: x.name ?? "", asset: x.asset ?? "", chainId: env.CHAIN_ID }));
     },
-    liveAlarms: async () => (await db.query<{ key: string; fired_at: string; tx: string }>(`SELECT key, fired_at, tx FROM alarms WHERE fired_at>$1`, [now() - 86_400])).map((a) => ({ ...a, fired_at: Number(a.fired_at) })),
+    liveAlarms: (page) => r.liveAlarms(now() - ALARM_TTL, page.limit, page.before),
     watchers,
     alarmBook,
     chainId: env.CHAIN_ID,

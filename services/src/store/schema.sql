@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS vault_admins (target TEXT PRIMARY KEY, owner TEXT, cu
 CREATE TABLE IF NOT EXISTS signals (id BIGSERIAL PRIMARY KEY, kind TEXT, target TEXT, severity TEXT, value NUMERIC, evidence TEXT, at BIGINT);
 CREATE TABLE IF NOT EXISTS feed_items (sha256 TEXT PRIMARY KEY, source_url TEXT, raw TEXT, label TEXT, protocol TEXT, confidence REAL, at BIGINT, tries INT NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS alarms (key TEXT, fired_at BIGINT, tx TEXT, evidence TEXT, PRIMARY KEY (key, fired_at));
+CREATE SEQUENCE IF NOT EXISTS alarms_seq_seq;
+ALTER TABLE alarms ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT nextval('alarms_seq_seq');
+CREATE INDEX IF NOT EXISTS alarms_seq ON alarms (seq);
+CREATE INDEX IF NOT EXISTS alarms_fired_at ON alarms (fired_at);
 CREATE TABLE IF NOT EXISTS attestations (key TEXT, evidence_hash TEXT, deadline BIGINT, signer TEXT, sig TEXT, PRIMARY KEY (key, evidence_hash, deadline, signer));
 CREATE TABLE IF NOT EXISTS exits (exit_id BIGINT PRIMARY KEY, pos_id TEXT, owner TEXT, caller TEXT, alarm_key TEXT, via_alarm BOOLEAN, tx TEXT, block BIGINT);
 CREATE TABLE IF NOT EXISTS exit_payouts (exit_id BIGINT, tx TEXT, log_index INT, token TEXT, amount NUMERIC, swapped BOOLEAN, PRIMARY KEY (tx, log_index));
