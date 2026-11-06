@@ -84,11 +84,26 @@ contract ForkPresetsTest {
         k[6] = book.register(_d(AlarmBook.Kind.BOTH, v, 0, 86_400, k[5], k[1]));
     }
 
+    /// @dev Every preset key but the bare DRAIN part (index 3), which the router only accepts inside BOTH.
     function _keys(bytes32[NP] memory k) internal pure returns (bytes32[] memory a) {
-        a = new bytes32[](NP);
+        a = new bytes32[](NP - 1);
+        uint256 n;
         for (uint256 i; i < NP; ++i) {
-            a[i] = k[i];
+            if (i != 3) a[n++] = k[i];
         }
+    }
+
+    function _params(address v, bytes32[] memory ks) internal view returns (ExitRouter.ArmParams memory) {
+        return ExitRouter.ArmParams({
+            adapter: address(adapter),
+            target: v,
+            tokenId: 0,
+            harbour: 0,
+            maxSlipBps: 0,
+            termsHash: keccak256("terms-v2"),
+            keys: ks,
+            swaps: new ExitRouter.SwapLeg[](0)
+        });
     }
 
     function _pendingAt(bytes32 k) internal view returns (uint64 p) {
@@ -107,7 +122,8 @@ contract ForkPresetsTest {
                 require(book.armable(k[p]), string.concat(presetName[p], ": not armable"));
             }
 
-            // A fresh depositor arms all seven at once, in v2's constructor-allowed adapter.
+            // A fresh depositor arms the presets at once, in v2's constructor-allowed adapter: all but the bare DRAIN
+            // part, which the router refuses on its own (it only counts inside "Vault drain + confirmation").
             address user = address(uint160(0xC0FFEE00 + i));
             vm.prank(MORPHO);
             require(USDG.transfer(user, 1_000e6), "fund");
@@ -117,19 +133,16 @@ contract ForkPresetsTest {
             IPresetDeposit(v).deposit(1_000e6, user);
             vm.prank(user);
             require(IERC20(v).approve(address(router), type(uint256).max), "approve router");
+            bytes32[] memory bare = new bytes32[](1);
+            bare[0] = k[3];
             vm.prank(user);
-            bytes32 id = router.arm(
-                ExitRouter.ArmParams({
-                    adapter: address(adapter),
-                    target: v,
-                    tokenId: 0,
-                    harbour: 0,
-                    maxSlipBps: 0,
-                    termsHash: keccak256("terms-v2"),
-                    keys: _keys(k),
-                    swaps: new ExitRouter.SwapLeg[](0)
-                })
-            );
+            try router.arm(_params(v, bare)) {
+                revert("a bare DRAIN key was armed");
+            } catch (bytes memory err) {
+                require(bytes4(err) == ExitRouter.DrainNeedsQuorum.selector, "refused with DrainNeedsQuorum");
+            }
+            vm.prank(user);
+            bytes32 id = router.arm(_params(v, _keys(k)));
             require(router.isArmed(id), "armed");
 
             // After a keeper's routine samples over two periods the DRAIN reference is live, and the vault still reads
@@ -146,7 +159,7 @@ contract ForkPresetsTest {
                 require(!book.check(k[p]) && book.armable(k[p]), string.concat(presetName[p], ": not clear after sampling"));
             }
             vm.revertToState(snap);
-            emit log_string(string.concat(IName(v).name(), ": 7 presets registered, clear, armable, armed"));
+            emit log_string(string.concat(IName(v).name(), ": 7 presets registered, clear and armable; 6 armed, the bare DRAIN refused"));
         }
     }
 

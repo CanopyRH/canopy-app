@@ -36,6 +36,8 @@ contract V3VerifyTest is Base {
     FlashAttacker internal fa;
     bytes32 internal key;
     bytes32 internal posId;
+    bytes32 internal quorum;
+    bytes32 internal both;
 
     function setUp() public override {
         super.setUp();
@@ -55,8 +57,11 @@ contract V3VerifyTest is Base {
         book.checkpoint(key);
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
+        // v2-fix2: a bare DRAIN key can't be armed; the owner arms it inside BOTH with a QUORUM key, as the app does.
+        quorum = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, key, quorum));
         vm.prank(OWNER);
-        posId = router.arm(_params(address(rv), 0, 0, _keys(key)));
+        posId = router.arm(_params(address(rv), 0, 0, _keys(both)));
     }
 
     function _flash() internal {
@@ -79,12 +84,20 @@ contract V3VerifyTest is Base {
         assertTrue(book.check(key), "tripped with the vault whole");
     }
 
-    /// V3-01 residual (Low). The fix raises the entry cost from one unsampled period to two (one window, an hour for the
-    /// preset). But the persistence the review found is unchanged: once the key reads tripped, `checkpoint` ignores every
-    /// honest sample, so when the keeper comes back and samples and pokes every 10 minutes, an attacker who lands a flash
-    /// deposit on each roll (it knows the exact second) keeps both period lows inflated. For two days the key stays tripped,
-    /// refires every 24 hours, and a keeper exits the DRAIN-armed owner, with the vault whole throughout.
+    /// V3-01 residual (Low), now closed at the router. The DRAIN logic is unchanged: after a one-window sampling lapse,
+    /// an attacker who lands a flash deposit on each roll keeps both period lows inflated, so even against a keeper that
+    /// samples and pokes every 10 minutes the DRAIN key stays tripped and refires every 24 hours with the vault whole.
+    /// But a DRAIN key can't be armed on its own (DrainNeedsQuorum), and inside BOTH it fires nothing without the
+    /// watchers' quorum, so nobody is exited.
     function test_V3V_01_oneHourLapse_thenWinningEachRoll_keepsDrainFiringAgainstASamplingKeeper() public {
+        asset.mint(KEEPER, 10e18);
+        vm.startPrank(KEEPER);
+        asset.approve(address(rv), 10e18);
+        rv.deposit(10e18, KEEPER);
+        rv.approve(address(router), type(uint256).max);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, key));
+        router.arm(_params(address(rv), 0, 0, _keys(key)));
+        vm.stopPrank();
         _twoUnsampledPeriods();
         uint256 fires;
         uint256 firstFire;
@@ -102,12 +115,18 @@ contract V3VerifyTest is Base {
                 if (fires++ == 0) firstFire = block.timestamp;
             }
         }
-        assertTrue(fires >= 3, "fired, then refired on each of the next two days");
-        assertEq(rv.totalAssets(), 1000e18, "the vault never lost anything");
+        assertTrue(fires >= 3, "the DRAIN part fired, then refired on each of the next two days");
+        assertEq(rv.totalAssets(), 1010e18, "the vault never lost anything");
         assertTrue(book.isLive(key, 1 days), "live again at the end");
+        assertTrue(!book.poke(both), "BOTH never fires without the quorum");
+        assertTrue(!book.isLive(both, 30 days), "and never fired");
         vm.prank(KEEPER);
-        router.exit(posId, key, 0);
-        assertEq(asset.balanceOf(OWNER), 1000e18, "the owner is exited on a drain that never happened");
+        vm.expectRevert(ExitRouter.NotAuthorized.selector);
+        router.exit(posId, key, 0); // the DRAIN key isn't armed on the position
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(posId, both, 0);
+        assertEq(rv.balanceOf(OWNER), 1000e18, "the owner keeps the position");
     }
 
     /// Control: if the keeper wins one roll after the lapse, the key heals two rolls later, as the fix intends.

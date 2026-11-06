@@ -21,6 +21,27 @@ contract V3DrainTest is Base {
     FlashAttacker internal fa;
     bytes32 internal key;
     bytes32 internal posId;
+    bytes32 internal quorum;
+    bytes32 internal both; // the app's "Vault drain + confirmation": DRAIN and a QUORUM key within a day
+    uint256 internal constant PK_A = 0xA1;
+    uint256 internal constant PK_B = 0xB2;
+
+    function _initialWatchers() internal override returns (address[] memory) {
+        return _addrs(vm.addr(PK_A), vm.addr(PK_B));
+    }
+
+    function _fireQuorum() internal {
+        uint64 dl = uint64(block.timestamp + 600);
+        bytes32 digest = book.attestDigest(quorum, keccak256("report"), dl);
+        (uint256 lo, uint256 hi) = vm.addr(PK_A) < vm.addr(PK_B) ? (PK_A, PK_B) : (PK_B, PK_A);
+        address[] memory s = _addrs(vm.addr(lo), vm.addr(hi));
+        bytes[] memory g = new bytes[](2);
+        (uint8 v0, bytes32 r0, bytes32 s0) = vm.sign(lo, digest);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(hi, digest);
+        g[0] = abi.encodePacked(r0, s0, v0);
+        g[1] = abi.encodePacked(r1, s1, v1);
+        book.fireByQuorum(quorum, keccak256("report"), dl, s, g);
+    }
 
     function setUp() public override {
         super.setUp();
@@ -38,11 +59,16 @@ contract V3DrainTest is Base {
         book.checkpoint(key);
         (,,,, uint256 snap,,,) = book.state(key);
         assertEq(snap, 1000e18, "honest first period low (the reference goes live at the next roll)");
-        // The owner arms on DRAIN alone (the contract allows it; the app pairs it with a quorum).
+        quorum = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, key, quorum));
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
+        // A bare DRAIN key can't be armed (V3V-01); the owner arms it the only way it can be, inside BOTH.
         vm.prank(OWNER);
-        posId = router.arm(_params(address(rv), 0, 0, _keys(key)));
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, key));
+        router.arm(_params(address(rv), 0, 0, _keys(key)));
+        vm.prank(OWNER);
+        posId = router.arm(_params(address(rv), 0, 0, _keys(both)));
     }
 
     function _flashRoll() internal {
@@ -82,7 +108,7 @@ contract V3DrainTest is Base {
         assertTrue(!book.poke(key), "and no fire");
         vm.prank(KEEPER);
         vm.expectRevert(ExitRouter.AlarmNotLive.selector);
-        router.exit(posId, key, 0);
+        router.exit(posId, both, 0);
         assertEq(rv.balanceOf(OWNER), 1000e18, "the owner keeps the position");
     }
 
@@ -138,7 +164,12 @@ contract V3DrainTest is Base {
         assertTrue(snap == 1500e18 && prevSnap == 1500e18, "both period lows inflated");
         assertTrue(!book.poke(key), "sighting");
         vm.warp(block.timestamp + 60);
-        assertTrue(book.poke(key), "fires after two unsampled periods");
+        assertTrue(book.poke(key), "the DRAIN part fires after two unsampled periods");
+        // But a DRAIN key is only ever armed inside BOTH, which also needs the watchers' quorum: no exit without it.
+        assertTrue(!book.poke(both), "BOTH stays silent without the quorum");
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(posId, both, 0);
     }
 
     /// A real drain still fires within one window of the reference being live.
@@ -149,8 +180,10 @@ contract V3DrainTest is Base {
         assertTrue(!book.poke(key), "sighting");
         vm.warp(block.timestamp + 60);
         assertTrue(book.poke(key), "fires a minute later");
+        _fireQuorum(); // the watchers confirm the exploit
+        assertTrue(book.poke(both), "BOTH fires");
         vm.prank(KEEPER);
-        router.exit(posId, key, 0);
+        router.exit(posId, both, 0);
         assertEq(asset.balanceOf(OWNER), 700e18, "the owner gets what is left");
     }
 }

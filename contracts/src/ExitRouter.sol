@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {IERC721, IV3SwapRouter, IWETH} from "./interfaces/IExternal.sol";
 import {IExitAdapter} from "./interfaces/IExitAdapter.sol";
-import {IAlarmBook} from "./interfaces/IAlarmBook.sol";
+import {IAlarmBook, IAlarmBookDetector} from "./interfaces/IAlarmBook.sol";
 import {SafeTransferLib} from "./lib/SafeTransferLib.sol";
 import {ReentrancyGuard} from "./lib/ReentrancyGuard.sol";
 import {FullMath} from "./lib/FullMath.sol";
@@ -53,6 +53,7 @@ contract ExitRouter is ReentrancyGuard {
     /// @notice Gas given to the whole oracle quote of one swap leg (four feed reads and the arithmetic).
     uint256 public constant QUOTE_GAS = 4 * FEED_READ_GAS + 100_000;
     uint8 internal constant STABLE_DECIMALS = 6;
+    uint8 internal constant KIND_DRAIN = 4; // AlarmBook.Kind.DRAIN
 
     /// @notice The 6-decimal stablecoin every swap ends in.
     address public immutable STABLE;
@@ -258,6 +259,10 @@ contract ExitRouter is ReentrancyGuard {
     /// @notice Two swap legs name the same token.
     /// @param token The token.
     error DuplicateSwap(address token);
+    /// @notice A DRAIN key can't be armed on its own: DRAIN trusts the vault's own readings, so it is only used as a part
+    /// of a BOTH key paired with a QUORUM key.
+    /// @param key The DRAIN key.
+    error DrainNeedsQuorum(bytes32 key);
 
     /// @param stable The 6-decimal stablecoin.
     /// @param weth WETH, or address(0).
@@ -302,7 +307,8 @@ contract ExitRouter is ReentrancyGuard {
     // ------------------------------------------------------------------ owner actions
 
     /// @notice Arm a position. The caller is always the owner: nobody can arm on someone else's behalf. Re-arming replaces
-    /// the keys and swap legs. Every key must be armable in AlarmBook now (clear, readable, not fired in the last day).
+    /// the keys and swap legs. Every key must be armable in AlarmBook now (clear, readable, not fired in the last day), and
+    /// none may be a DRAIN key: DRAIN is only used as a part of a BOTH key with a QUORUM key (DrainNeedsQuorum).
     /// @param a The position, keys and swap legs.
     /// @return posId The position id.
     function arm(ArmParams calldata a) external returns (bytes32 posId) {
@@ -313,7 +319,10 @@ contract ExitRouter is ReentrancyGuard {
         if (a.keys.length > MAX_KEYS) revert TooManyKeys();
         _validateSwaps(a.harbour, a.swaps);
         for (uint256 i; i < a.keys.length; ++i) {
-            if (!ALARMS.armable(a.keys[i])) revert AlarmNotClear(a.keys[i]);
+            bytes32 k = a.keys[i];
+            (uint8 kind,,,,,) = IAlarmBookDetector(address(ALARMS)).detector(k);
+            if (kind == KIND_DRAIN) revert DrainNeedsQuorum(k);
+            if (!ALARMS.armable(k)) revert AlarmNotClear(k);
         }
 
         (address asset, bool isNft) = IExitAdapter(a.adapter).positionAsset(a.target);

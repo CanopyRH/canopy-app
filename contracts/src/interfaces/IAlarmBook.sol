@@ -14,3 +14,20 @@ interface IAlarmBook {
     /// @return True if the key may be armed.
     function armable(bytes32 key) external view returns (bool);
 }
+
+/// @notice AlarmBook's `detector(key)`, with the Detector struct flattened (a static tuple encodes the same either way),
+/// so ExitRouter can read a key's kind without importing AlarmBook.
+interface IAlarmBookDetector {
+    /// @notice A registered detector (all zero for an unknown key).
+    /// @param key The detector key.
+    /// @return kind The kind (AlarmBook.Kind; DRAIN is 4).
+    /// @return target What it reads.
+    /// @return threshold Its threshold.
+    /// @return window Its window.
+    /// @return a Selector or first part.
+    /// @return b Second part.
+    function detector(bytes32 key)
+        external
+        view
+        returns (uint8 kind, address target, uint256 threshold, uint32 window, bytes32 a, bytes32 b);
+}

@@ -87,21 +87,51 @@ contract V3ArmingTest is Base {
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
         vm.prank(OWNER);
-        vm.expectRevert(abi.encodeWithSelector(ExitRouter.AlarmNotClear.selector, key));
-        router.arm(_params(address(rv), 0, 0, _keys(key)));
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, key));
+        router.arm(_params(address(rv), 0, 0, _keys(key))); // v2-fix2: a bare DRAIN key is never armable at the router
 
-        // After the window the sighting has lapsed; a keeper's sample keeps the reference live, and arming works.
+        // After the window the sighting has lapsed; a keeper's sample keeps the reference live, and the key reads armable.
         vm.warp(uint256(pendingAt) + WINDOW + 1);
         book.checkpoint(key);
         assertTrue(book.armable(key), "armable once the sighting lapsed");
-        vm.prank(OWNER);
-        bytes32 id = router.arm(_params(address(rv), 0, 0, _keys(key)));
+        // One dip after that only starts a new sighting: it can't complete the old one.
+        assertTrue(!whale.dip(book, rv, key, 400e18, true), "a later dip only starts a fresh sighting");
+        assertTrue(!book.isLive(key, 30 days), "never fired");
+    }
 
-        // One dip after the arming only starts a new sighting: it can't complete the old one.
-        assertTrue(!whale.dip(book, rv, key, 400e18, true), "a dip after arming only starts a fresh sighting");
+    /// The router only arms DRAIN inside BOTH, and AlarmBook's BOTH reads its parts' fires, not a part's pending
+    /// sighting. So a sighting taken before a BOTH arming can still complete into a DRAIN fire after it, but the BOTH key
+    /// also needs the watchers' quorum within its window: the whale alone exits nobody.
+    function test_V3_04_insideBoth_aPreArmingSightingStillNeedsTheQuorum() public {
+        MockERC20 asset = new MockERC20(18);
+        RealVault rv = new RealVault(asset);
+        Whale whale = new Whale();
+        asset.mint(address(whale), 400e18);
+        whale.deposit(rv, 400e18);
+        asset.mint(OWNER, 600e18);
+        vm.prank(OWNER);
+        asset.approve(address(rv), 600e18);
+        vm.prank(OWNER);
+        rv.deposit(600e18, OWNER);
+        bytes32 key = book.register(_detector(AlarmBook.Kind.DRAIN, address(rv), 2500, WINDOW, 0, 0));
+        bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        bytes32 both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, key, q));
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key);
+        vm.warp(block.timestamp + WINDOW / 2);
+        book.checkpoint(key);
+
+        assertTrue(!whale.dip(book, rv, key, 400e18, true), "a sighting before the arming");
+        vm.prank(OWNER);
+        rv.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        bytes32 id = router.arm(_params(address(rv), 0, 0, _keys(both)));
+        vm.warp(block.timestamp + 60);
+        assertTrue(whale.dip(book, rv, key, 400e18, true), "the DRAIN part fires with no loss");
+        assertTrue(!book.poke(both), "BOTH doesn't: no quorum");
         vm.prank(KEEPER);
         vm.expectRevert(ExitRouter.AlarmNotLive.selector);
-        router.exit(id, key, 0);
+        router.exit(id, both, 0);
         assertEq(rv.balanceOf(OWNER), 600e18, "the owner keeps the position");
     }
 }

@@ -321,7 +321,8 @@ contract AlarmLimitsTest is Base {
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
         vm.prank(OWNER);
-        bytes32 id = router.arm(_params(address(rv), 0, 0, _keys(key)));
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, key));
+        router.arm(_params(address(rv), 0, 0, _keys(key))); // and a bare DRAIN key can't be armed at all
 
         assertTrue(!whale.dip(book, rv, key, 400e18, true), "the dip doesn't fire");
         assertEq(_pendingAt(key), block.timestamp, "it only starts a confirmation");
@@ -339,9 +340,7 @@ contract AlarmLimitsTest is Base {
         rv.exploitDrain(ATTACKER, 300e18); // a real drop, after the old sighting lapsed
         assertTrue(!book.poke(key), "the lapsed sighting doesn't count: this only starts a new one");
         assertEq(_pendingAt(key), block.timestamp, "a new sighting");
-        vm.prank(KEEPER);
-        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
-        router.exit(id, key, 0);
+        assertTrue(!book.isLive(key, 30 days), "never fired");
     }
 
     /// v2 follow-up: a poke that reads the vault clear must not cancel a sighting. Otherwise anyone could flash-deposit

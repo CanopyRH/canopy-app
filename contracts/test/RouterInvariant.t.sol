@@ -173,10 +173,14 @@ contract RouterHandler {
     uint256 internal constant NT = 7; // stable, tokenA, tokenB, then the share tokens of vaults 0 to 3
     uint256 internal constant NO = 3;
     uint256 internal constant NV = 4;
-    uint256 internal constant NK = 5; // 0, 1: PAUSED; 2: SHARE_DROP on vault 0; 3: DRAIN on vault 0; 4: QUORUM
+    // 0, 1: PAUSED; 2: SHARE_DROP on vault 0; 3: DRAIN on vault 0 (never armable on its own); 4: QUORUM;
+    // 5: BOTH(DRAIN, QUORUM), the only way a DRAIN key can be armed
+    uint256 internal constant NK = 6;
     uint256 internal constant K_SD = 2;
     uint256 internal constant K_DRAIN = 3;
     uint256 internal constant K_Q = 4;
+    uint256 internal constant K_BOTH = 5;
+    uint256 internal constant BOTH_WINDOW = 1 days;
     uint256 internal constant NW = 3;
     uint256 internal constant SD_BPS = 50;
     uint256 internal constant DRAIN_BPS = 2500;
@@ -256,6 +260,7 @@ contract RouterHandler {
     uint256 public swapsChecked;
     uint256 public thirdPartySwapsChecked;
     uint256 public armRefusedNotClear;
+    uint256 public armRefusedBareDrain;
     uint256 public drainPendings;
     uint256 public drainFires;
     uint256 public flashPokes;
@@ -324,6 +329,16 @@ contract RouterHandler {
         gDBase = v0.totalAssets();
         gDSnapAt = uint64(block.timestamp);
         keys[K_Q] = book.register(_det(AlarmBook.Kind.QUORUM, address(v0), 2, 0));
+        keys[K_BOTH] = book.register(
+            AlarmBook.Detector({
+                kind: AlarmBook.Kind.BOTH,
+                target: address(v0),
+                threshold: 0,
+                window: uint32(BOTH_WINDOW),
+                a: keys[K_DRAIN],
+                b: keys[K_Q]
+            })
+        );
 
         // Every owner starts with shares in every vault, approved to the router, so sequences reach exits quickly.
         for (uint256 o; o < NO; ++o) {
@@ -398,7 +413,12 @@ contract RouterHandler {
             uint256 ref = gDSnap < gDPrevSnap ? gDSnap : gDPrevSnap;
             return refLive && _ta() * 10_000 < ref * (10_000 - DRAIN_BPS);
         }
+        if (k == K_BOTH) return _mFiredWithin(K_DRAIN) && _mFiredWithin(K_Q);
         return false; // QUORUM: only signatures fire it
+    }
+
+    function _mFiredWithin(uint256 k) internal view returns (bool) {
+        return gFiredAt[k] != 0 && block.timestamp <= uint256(gFiredAt[k]) + BOTH_WINDOW;
     }
 
     function _mPendingLive() internal view returns (bool) {
@@ -489,16 +509,9 @@ contract RouterHandler {
     function arm(uint256 oi, uint256 vi, uint256 harbour, uint256 slip, uint256 mask) external {
         uint256 o = oi % NO;
         uint256 v = vi % NV;
-        uint8 m = mask % 5 == 0 ? 0 : uint8(1 + (mask >> 4) % 31); // mostly non-empty
-        bytes32[] memory ks = new bytes32[](_pop(m));
-        uint256 n;
-        bool allArmable = true;
-        for (uint256 k; k < NK; ++k) {
-            if ((m >> k) & 1 == 1) {
-                ks[n++] = keys[k];
-                if (!_mArmable(k)) allArmable = false;
-            }
-        }
+        uint8 m = mask % 5 == 0 ? 0 : uint8(1 + (mask >> 4) % 63); // mostly non-empty
+        (bytes32[] memory ks, bytes4 expectErr) = _keysFor(m);
+        bool allArmable = expectErr == bytes4(0);
         uint8 hb = uint8(harbour % 3); // 2 is invalid and must be refused
         uint16 sl = uint16(slip % 1101); // above 1000 must be refused
         ExitRouter.ArmParams memory p = ExitRouter.ArmParams({
@@ -524,8 +537,23 @@ contract RouterHandler {
         } catch (bytes memory err) {
             if (paramsOk && allArmable) armModelMismatch++;
             if (paramsOk && !allArmable) {
-                if (err.length < 4 || bytes4(err) != ExitRouter.AlarmNotClear.selector) armModelMismatch++;
+                if (err.length < 4 || bytes4(err) != expectErr) armModelMismatch++;
+                else if (expectErr == ExitRouter.DrainNeedsQuorum.selector) armRefusedBareDrain++;
                 else armRefusedNotClear++;
+            }
+        }
+    }
+
+    /// @dev The keys of a mask, and the error the model expects from `arm`: the router checks key by key, in order, first
+    /// whether the key is a DRAIN key (refused on its own), then whether it is armable.
+    function _keysFor(uint8 m) internal view returns (bytes32[] memory ks, bytes4 expectErr) {
+        ks = new bytes32[](_pop(m));
+        uint256 n;
+        for (uint256 k; k < NK; ++k) {
+            if ((m >> k) & 1 == 1) {
+                ks[n++] = keys[k];
+                if (expectErr == bytes4(0) && k == K_DRAIN) expectErr = ExitRouter.DrainNeedsQuorum.selector;
+                else if (expectErr == bytes4(0) && !_mArmable(k)) expectErr = ExitRouter.AlarmNotClear.selector;
             }
         }
     }
@@ -1234,6 +1262,15 @@ contract RouterInvariants {
         h.poke(3, 0);
         _eq(h.drainFires(), 1, "confirmed a minute later: fired");
 
+        // A bare DRAIN key can't be armed; inside BOTH it fires only once the watchers' quorum has fired too
+        h.arm(2, 0, 0, 0, 112); // mask 8: the DRAIN key alone
+        _eq(h.armRefusedBareDrain(), 1, "a bare DRAIN arming is refused");
+        h.poke(5, 0);
+        require(!h.book().isLive(h.keys(5), 1 days), "BOTH is silent with only the DRAIN part fired");
+        h.fireQuorum(0);
+        h.poke(5, 0);
+        require(h.book().isLive(h.keys(5), 0), "BOTH fires once the quorum has too");
+
         // SHARE_DROP: a 3% loss, a week of daily refires, then anyone can rebase
         h.dropPrice(0, 300 << 8);
         h.poke(2, 0);
@@ -1249,18 +1286,18 @@ contract RouterInvariants {
 
         // QUORUM: the constructor's watchers fire it; a year later their approvals have ended
         h.fireQuorum(0);
-        _eq(h.quorumFired(), 1, "quorum fired");
+        _eq(h.quorumFired(), 2, "quorum fired again");
         vm.warp(block.timestamp + 366 days);
         h.fireQuorum(0);
-        _eq(h.quorumFired(), 1, "expired watchers can't fire");
+        _eq(h.quorumFired(), 2, "expired watchers can't fire");
         require(h.quorumRefusedInactiveWatcher() >= 1, "refusal counted");
         h.setWatcher(0, 1 + (300 days << 8));
         h.setWatcher(1, 1 + (300 days << 8));
         h.fireQuorum(0);
-        _eq(h.quorumFired(), 1, "re-approved watchers wait two days");
+        _eq(h.quorumFired(), 2, "re-approved watchers wait two days");
         vm.warp(block.timestamp + 2 days);
         h.fireQuorum(0);
-        _eq(h.quorumFired(), 2, "and then fire");
+        _eq(h.quorumFired(), 3, "and then fire");
         _allInvariants();
     }
 

@@ -299,6 +299,27 @@ contract ExitRouterReverts is Base {
         router.arm(_params(address(vault), RAW, 0, _keys(k)));
     }
 
+    /// A bare DRAIN key is refused, alone or among good keys, whatever it reads; the same DRAIN inside BOTH with a QUORUM
+    /// key is accepted.
+    function test_arm_DrainNeedsQuorum() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 drain = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        assertTrue(book.armable(drain), "the DRAIN key itself reads armable");
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, drain));
+        router.arm(_params(address(vault), RAW, 0, _keys(drain)));
+        bytes32[] memory ks = new bytes32[](2);
+        ks[0] = pauseKey;
+        ks[1] = drain;
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, drain));
+        router.arm(_params(address(vault), RAW, 0, ks));
+        bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(vault), 2, 0, 0, 0));
+        bytes32 both = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, drain, q));
+        vm.prank(OWNER);
+        router.arm(_params(address(vault), RAW, 0, _keys(both)));
+    }
+
     function test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes() public {
         bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
         bytes32[] memory ks = new bytes32[](2);

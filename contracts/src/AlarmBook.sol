@@ -16,7 +16,8 @@ import {CappedCall} from "./lib/CappedCall.sol";
 ///   ADDRESS_CHANGE  target's address view (`a` = selector) differs from the registered value.
 ///   DRAIN           ERC-4626 totalAssets fell more than `threshold` bps under the lower of the lows of the last two
 ///                   sampling periods, seen by two pokes at least DRAIN_CONFIRM s apart. `window` is at least
-///                   MIN_DRAIN_WINDOW.
+///                   MIN_DRAIN_WINDOW. ExitRouter won't arm a DRAIN key on its own, only as a part of a BOTH key
+///                   paired with a QUORUM key.
 ///   QUORUM          k = `threshold` distinct active watchers signed an attestation.
 ///   BOTH            keys `a` and `b` both fired within `window` s of now.
 /// An alarm can never move funds; it only widens who may call ExitRouter.exit, which pays the owner only.
