@@ -53,7 +53,20 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
 ## Deployments
 
-Robinhood Chain (4663), deployed at block 106087816:
+Robinhood Chain (4663), **v2**, deployed at block 107737863. Its services, keeper and web app run on these contracts.
+
+| Contract | Address | Metadata hash (IPFS) |
+|---|---|---|
+| Timelock | [`0x4F656b09c4D3c859Dd2BB9919f384681e9ccb3f5`](https://robinhoodchain.blockscout.com/address/0x4F656b09c4D3c859Dd2BB9919f384681e9ccb3f5) | `QmTev1dshTPntB6tJenAWVp6VZWV8rPqLeXxCXgyUtk1ap` |
+| AlarmBook | [`0x6A391f2c489dDFcb60Ad64eDddda5Ea0921584cf`](https://robinhoodchain.blockscout.com/address/0x6A391f2c489dDFcb60Ad64eDddda5Ea0921584cf) | `QmS4rbGtcLWKh6hbQGKhrovm2AaUX2Ste1i4MtrnY1SS61` |
+| ExitRouter | [`0x1c3ca2B2f01C30B731909563Dad550062B340757`](https://robinhoodchain.blockscout.com/address/0x1c3ca2B2f01C30B731909563Dad550062B340757) | `QmRUSNy9XykyzNaVnvYnq64C3PfNakz4SQNNZWTUV6X4KA` |
+| ERC4626Adapter | [`0x32C39abF03a12303Cc3150be50eD7b0e03Ab9D38`](https://robinhoodchain.blockscout.com/address/0x32C39abF03a12303Cc3150be50eD7b0e03Ab9D38) | `QmZVe2Wora2nfixtJxhhBM3p6eie67PpoKTpUQcNNEgXN7` |
+
+Each metadata hash is the one at the end of the deployed bytecode, and `forge build` on `main` produces the same hash from `contracts/src`. All four are exact matches on Sourcify. `services/deploy/verify.ts` checks the live deployment against this source: all 58 checks pass.
+
+v2 closes the contract findings of the internal reviews: no admin swap settings, arming only on a clear alarm, resettable detectors, a vault drain that counts only when paired with a same-day watcher quorum, expiring watchers and gas-capped reads. The broadcast record is in `contracts/broadcast/`.
+
+**v1** (block 106087816) is retired: Canopy's services no longer watch it, and the only position ever armed on it was our own test, which holds nothing. Its source is the [`v1-deployed`](../../tree/v1-deployed) tag. Owners can always exit a v1 position themselves.
 
 | Contract | Address | Metadata hash (IPFS) |
 |---|---|---|
@@ -61,12 +74,6 @@ Robinhood Chain (4663), deployed at block 106087816:
 | AlarmBook | [`0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d`](https://robinhoodchain.blockscout.com/address/0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d) | `QmT1qW4pSL6LswLamtSN52Khh44F7BW7UmbDiYPv2Zft9m` |
 | ExitRouter | [`0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C`](https://robinhoodchain.blockscout.com/address/0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C) | `QmYkZvKCayuPRdYZVAQGruETkyTLBiAeTY8gQWUVDMtpui` |
 | ERC4626Adapter | [`0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC`](https://robinhoodchain.blockscout.com/address/0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC) | `QmX5Umk9JxzSph7RKE8dtxy7xP1nquDb4kcFK4SrZNLNSi` |
-
-Each metadata hash is the one at the end of the deployed bytecode, and `forge build` on the tag [`v1-deployed`](../../tree/v1-deployed) produces the same hash.
-
-> **v2 in progress.** `contracts/src` on `main` is now v2, which closes the contract findings of the internal reviews: no admin swap settings, arming only on a clear alarm, resettable detectors, a confirmed and quorum-paired vault drain, expiring watchers and gas-capped reads. It is being reviewed and rehearsed on a mainnet copy, and isn't deployed yet. Until it is, the contracts above are v1, and their source is the `v1-deployed` tag.
-
-The broadcast record is in `contracts/broadcast/`, and `services/deploy/verify.ts` checks that the deployed bytecode matches this source.
 
 ## Repository
 
