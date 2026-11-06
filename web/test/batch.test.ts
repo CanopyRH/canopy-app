@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { maxUint256, type Address, type Hex } from "viem";
+import { decodeFunctionData, getAddress, maxUint256, type Address, type Hex } from "viem";
 import { armOneStep, armPlan, batchSupport, readStatus, sendBatch, suggestsNoSupport, toCalls, waitForBatch, type ArmEnv, type PlanDeps } from "../src/batch";
 import { REFIRE_SECONDS, type AlarmIo } from "../src/alarms";
 import { COPY } from "../src/copy/text";
 import { BATCH_COPY } from "../src/copy/batch";
-import { approveTx, armTx, registerTx, type Tx } from "../src/tx";
-import { keyOf, presetsFor, registrationOrder } from "../../services/src/api/presets";
+import { approveTx, armTx, routerAbi, termsHash, type Tx } from "../src/tx";
+import { Kind, keyOf, presetsFor, registrationOrder } from "../../services/src/api/presets";
 import type { Eip1193 } from "../src/wallet";
 
 const V = "0x00000000000000000000000000000000000000a3" as Address;
@@ -24,7 +24,11 @@ const clear = (tripped: Hex[] = [], fired: Record<Hex, bigint> = {}): AlarmIo =>
   firedAt: async (k) => fired[k] ?? 0n,
   now: async () => NOW,
 });
-const deps = (o: Partial<PlanDeps> = {}): PlanDeps => ({ io: clear(), book: BOOK, router: ROUTER, adapter: ADAPTER, isRegistered: async () => false, allowance: async () => 0n, ...o });
+/** By default every alarm is registered and the contract calls every key armable: the only case that batches. */
+const deps = (o: Partial<PlanDeps> = {}): PlanDeps => ({
+  io: clear(), book: BOOK, router: ROUTER, adapter: ADAPTER, presets, order: registrationOrder(V),
+  isRegistered: async () => true, armable: async () => true, allowance: async () => 0n, ...o,
+});
 
 /** A mock EIP-1193 wallet that records every request. `handlers` answer by method; anything else is an error. */
 function mock(handlers: Record<string, (params?: unknown[]) => unknown>) {
@@ -42,14 +46,6 @@ function mock(handlers: Record<string, (params?: unknown[]) => unknown>) {
 }
 const caps = (c: unknown) => ({ wallet_getCapabilities: () => c });
 const err = (code: number, message = "x") => Object.assign(new Error(message), { code });
-
-/** What today's step-by-step flow sends, worked out separately from armPlan. */
-function expectedStepwise(registered: Hex[], allowance: bigint): Tx[] {
-  const wanted = new Set(KEYS.flatMap((k) => { const p = presets.find((x) => x.key === k)!; return [p.key, ...(p.requires ?? []).map((r) => r.key)]; }));
-  const txs = registrationOrder(V).filter((d) => wanted.has(keyOf(d)) && !registered.includes(keyOf(d))).map((d) => registerTx(BOOK, d));
-  if (allowance < maxUint256 / 2n) txs.push(approveTx(V, ROUTER));
-  return [...txs, armTx(ROUTER, ADAPTER, V, KEYS)];
-}
 
 describe("capability detection", () => {
   test("asks for this account on chain 0x1237", async () => {
@@ -82,29 +78,42 @@ describe("capability detection", () => {
 });
 
 describe("the batch matches the step-by-step flow", () => {
-  test("register (dependencies first), approve, then arm, with the same calldata", async () => {
-    const txs = await armPlan(deps(), V, KEYS);
-    expect(txs.length).toBeGreaterThanOrEqual(3);
-    expect(txs).toEqual(expectedStepwise([], 0n));
-    expect(txs.at(-1)!.to).toBe(ROUTER);
-    expect(txs.at(-2)!).toEqual(approveTx(V, ROUTER));
-    expect(txs.slice(0, -2).every((t) => t.to === BOOK)).toBe(true);
+  test("approve, then arm, with the same calldata as the step-by-step flow and no register", async () => {
+    const txs = (await armPlan(deps(), V, KEYS))!;
+    expect(txs).toEqual([approveTx(V, ROUTER), armTx(ROUTER, ADAPTER, V, KEYS)]);
+    expect(txs.some((t) => t.to === BOOK)).toBe(false);
   });
-  test("a combined alarm registers its parts before itself", async () => {
+  test("the arm call is v2's exact tuple: raw harbour, no slippage, the terms hash, the chosen keys and an empty swap list", async () => {
+    const arm = (await armPlan(deps(), V, KEYS))!.at(-1)!;
+    expect(arm.to).toBe(ROUTER);
+    const { functionName, args } = decodeFunctionData({ abi: routerAbi, data: arm.data });
+    expect(functionName).toBe("arm");
+    expect(args![0]).toEqual({ adapter: getAddress(ADAPTER), target: getAddress(V), tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: termsHash(), keys: KEYS, swaps: [] });
+  });
+  test("a combined alarm is exactly BOTH(DRAIN, QUORUM) with a one-day window, and its parts are the ones asked", async () => {
     const both = byName("Vault drain + confirmation");
-    const txs = await armPlan(deps(), V, [both.key]);
-    const order = registrationOrder(V).filter((d) => [both.key, ...both.requires!.map((r) => r.key)].includes(keyOf(d)));
-    expect(order.map(keyOf).at(-1)).toBe(both.key);
-    expect(txs).toEqual([...order.map((d) => registerTx(BOOK, d)), approveTx(V, ROUTER), armTx(ROUTER, ADAPTER, V, [both.key])]);
+    expect(both.detector).toMatchObject({ kind: Kind.BOTH, window: 86_400 });
+    expect(both.requires!.map((r) => r.detector.kind)).toEqual([Kind.DRAIN, Kind.QUORUM]);
+    const asked: Hex[] = [];
+    const txs = (await armPlan(deps({ armable: async (k) => (asked.push(k), true) }), V, [both.key]))!;
+    expect(new Set(asked)).toEqual(new Set([both.key, ...both.requires!.map((r) => r.key)]));
+    expect(txs).toEqual([approveTx(V, ROUTER), armTx(ROUTER, ADAPTER, V, [both.key])]);
   });
-  test("skips alarms already registered and an approval already given", async () => {
+  test("skips an approval already given, and then there is nothing to batch", async () => {
+    expect(await armPlan(deps({ allowance: async () => maxUint256 }), V, KEYS)).toEqual([armTx(ROUTER, ADAPTER, V, KEYS)]);
+  });
+  test("any key that still needs registering means no batch: the step-by-step flow checks it after registration", async () => {
     const some = registrationOrder(V).map(keyOf).slice(0, 1);
-    expect(await armPlan(deps({ isRegistered: async (k) => some.includes(k) }), V, KEYS)).toEqual(expectedStepwise(some, 0n));
-    const txs = await armPlan(deps({ isRegistered: async () => true, allowance: async () => maxUint256 }), V, KEYS);
-    expect(txs).toEqual([armTx(ROUTER, ADAPTER, V, KEYS)]);
+    expect(await armPlan(deps({ isRegistered: async (k) => !some.includes(k) }), V, KEYS)).toBeNull();
+    expect(await armPlan(deps({ isRegistered: async () => false }), V, KEYS)).toBeNull();
+    expect(await armPlan(deps({ isRegistered: async () => { throw new Error("rpc down"); } }), V, KEYS)).toBeNull();
+    // Not even asked: an unregistered key would only read as not armable.
+    let asked = 0;
+    await armPlan(deps({ isRegistered: async () => false, armable: async () => (asked++, true) }), V, KEYS);
+    expect(asked).toBe(0);
   });
   test("the request carries those calls in order, to the same targets", async () => {
-    const txs = await armPlan(deps(), V, KEYS);
+    const txs = (await armPlan(deps(), V, KEYS))!;
     const w = mock({ wallet_sendCalls: () => ({ id: "0x01" }) });
     expect(await sendBatch(w.p, ME, txs, "atomic", "0x1237")).toBe("0x01");
     const sent = (w.calls[0]!.params![0] as { calls: { to: Address; data: Hex }[]; atomicRequired: boolean; version: string; chainId: string; from: Address });
@@ -114,7 +123,7 @@ describe("the batch matches the step-by-step flow", () => {
   });
   test("the older draft gets its own request shape, and a plain string id is understood", async () => {
     const w = mock({ wallet_sendCalls: () => "0xabc" });
-    expect(await sendBatch(w.p, ME, await armPlan(deps(), V, KEYS), "atomicBatch", "0x1237")).toBe("0xabc");
+    expect(await sendBatch(w.p, ME, (await armPlan(deps(), V, KEYS))!, "atomicBatch", "0x1237")).toBe("0xabc");
     const sent = w.calls[0]!.params![0] as Record<string, unknown>;
     expect(sent.version).toBe("1.0");
     expect("atomicRequired" in sent).toBe(false);
@@ -179,6 +188,12 @@ describe("arming through the wallet", () => {
     expect(w.methods().filter((m) => m === "wallet_sendCalls")).toHaveLength(1);
     expect(w.methods()).not.toContain("eth_sendTransaction");
   });
+  test("a key that needs registering is never batched: the wallet is not asked for a batch, and the step-by-step flow runs", async () => {
+    const { e, w, log } = env(ok, { isRegistered: async () => false });
+    expect(await armOneStep(e, V, KEYS)).toBe("steps");
+    expect(log.steps).toBe(1);
+    expect(w.methods()).not.toContain("wallet_sendCalls");
+  });
   test("a wallet without the capability falls back to the step-by-step flow, and no batch is sent", async () => {
     const { e, w, log } = env({});
     expect(await armOneStep(e, V, KEYS)).toBe("steps");
@@ -210,7 +225,7 @@ describe("arming through the wallet", () => {
     expect(log.steps).toBe(0);
   });
   test("with only the arm call left to send, there is nothing to batch", async () => {
-    const { e, w, log } = env(ok, { isRegistered: async () => true, allowance: async () => maxUint256 });
+    const { e, w, log } = env(ok, { allowance: async () => maxUint256 });
     expect(await armOneStep(e, V, KEYS)).toBe("steps");
     expect(log.steps).toBe(1);
     expect(w.methods()).not.toContain("wallet_sendCalls");
@@ -235,6 +250,25 @@ describe("the safety re-check comes before any wallet request", () => {
     return refused(clear([both.requires![0]!.key]), [both.key]);
   });
   test("a key that is not one of this vault's own presets", () => refused(clear(), [`0x${"11".repeat(32)}` as Hex]));
+  test("a bare drain key is refused: only the combined alarm with a watcher is offered", () => {
+    const drain = byName("Vault drain + confirmation").requires![0]!;
+    expect(drain.detector.kind).toBe(Kind.DRAIN);
+    return refused(clear(), [drain.key]);
+  });
+  test("the contract's own answer refuses a registered key, a part of a combined alarm, and a pending drain, before the wallet", async () => {
+    const both = byName("Vault drain + confirmation");
+    for (const [keys, no] of [[KEYS, KEYS[0]!], [[both.key], both.requires![1]!.key], [[both.key], both.requires![0]!.key], [[both.key], both.key]] as const) {
+      const w = mock(ok);
+      let steps = 0;
+      const e: ArmEnv = { provider: w.p, account: ME, network: NET, onConfirm: () => {}, plan: deps({ armable: async (k) => k !== no }), stepwise: async () => void steps++ };
+      await expect(armOneStep(e, V, [...keys])).rejects.toThrow(COPY.armRefused);
+      expect(w.methods()).toEqual(["wallet_getCapabilities"]);
+      expect(steps).toBe(0);
+    }
+  });
+  test("an armable read that fails counts as not armable", async () => {
+    await expect(armPlan(deps({ armable: async () => { throw new Error("rpc down"); } }), V, KEYS)).rejects.toThrow(COPY.armRefused);
+  });
   test("armPlan alone refuses too, so no caller can build a batch around a tripped key", async () => {
     await expect(armPlan(deps({ io: clear([KEYS[0]!]) }), V, KEYS)).rejects.toThrow(COPY.armRefused);
   });

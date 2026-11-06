@@ -1,14 +1,14 @@
 import { maxUint256, type Address, type Hex } from "viem";
-import { presetsFor, registrationOrder, keyOf, type Detector, type Preset } from "../../services/src/api/presets";
-import { refusedPresets, type AlarmIo } from "./alarms";
+import { keyOf, type Detector, type Preset } from "../../services/src/api/presets";
+import { notArmable, refusedPresets, type AlarmIo } from "./alarms";
 import { COPY } from "./copy/text";
 import { BATCH_COPY } from "./copy/batch";
-import { approveTx, armTx, registerTx, type Tx } from "./tx";
+import { approveTx, armTx, type Tx } from "./tx";
 import { ensureChain, type Eip1193, type Network } from "./wallet";
 
 /**
- * One-step arming (EIP-5792). The same transactions as the step-by-step flow, in the same order, sent as one batch
- * when the wallet can run them together. Nothing here decides what to send: the arm-time safety check and the
+ * One-step arming (EIP-5792). The same approve and arm transactions as the step-by-step flow, in the same order, sent as one
+ * batch when the wallet can run them together and nothing needs registering first. Nothing here decides what to send: the arm-time safety check and the
  * transaction builders are the same ones the step-by-step flow uses.
  */
 
@@ -23,24 +23,41 @@ export function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
   return presets.filter((p) => keys.includes(p.key)).some((p) => p.key === key || (p.requires ?? []).some((r) => r.key === key));
 }
 
+/** Every key the chosen presets arm: each chosen key and the parts of a combined alarm. The router asks armable() about the keys it arms, so the app asks about the parts too. */
+export const askedKeys = (presets: Preset[], keys: Hex[]): Hex[] =>
+  [...new Set(presets.filter((p) => keys.includes(p.key)).flatMap((p) => [p.key, ...(p.requires ?? []).map((q) => q.key)]))];
+
 export interface PlanDeps {
   io: AlarmIo;
   book: Address;
   router: Address;
   adapter: Address;
+  /** This vault's presets and the detectors they need, dependencies first, worked out the same way the step-by-step flow does (the Paused alarm only where the vault answers paused()). */
+  presets: Preset[];
+  order: Detector[];
   /** AlarmBook.state(key).exists */
   isRegistered: (key: Hex) => Promise<boolean>;
+  /** AlarmBook.armable(key): the contract's own answer. Only meaningful for registered keys. */
+  armable: (key: Hex) => Promise<boolean>;
   /** The vault shares the router may already spend for this owner. */
   allowance: () => Promise<bigint>;
 }
 
-/** Register any missing alarms, approve the shares if needed, then arm: the step-by-step flow's transactions, listed. Re-checks the alarms first. */
-export async function armPlan(d: PlanDeps, vault: Address, keys: Hex[]): Promise<Tx[]> {
-  const presets = presetsFor(vault);
-  await assertArmable(d.io, presets, keys);
-  const wanted = registrationOrder(vault).filter((x) => needed(presets, keys, x));
-  const known = await Promise.all(wanted.map((x) => d.isRegistered(keyOf(x))));
-  const txs: Tx[] = wanted.filter((_, i) => !known[i]).map((x) => registerTx(d.book, x));
+/**
+ * The batch for a one-confirmation arm, or null when the step-by-step flow must be used. AlarmBook.armable() says no to a key
+ * that was never registered, so a key that needs registering cannot be checked before it is, and a register inside the same
+ * batch would be sent before anyone could look. So a batch is only built when every needed key is already registered and the
+ * contract calls every key and every part of a combined alarm armable. Then it is the approval (if needed) and the arm call,
+ * with the same arm tuple as the step-by-step flow (the raw harbour, no swap legs). A key the contract refuses throws here,
+ * before the wallet is asked, as it would in the step-by-step flow after registration.
+ */
+export async function armPlan(d: PlanDeps, vault: Address, keys: Hex[]): Promise<Tx[] | null> {
+  await assertArmable(d.io, d.presets, keys);
+  const wanted = d.order.filter((x) => needed(d.presets, keys, x));
+  const known = await Promise.all(wanted.map((x) => d.isRegistered(keyOf(x)).catch(() => false)));
+  if (known.some((k) => !k)) return null;
+  if ((await notArmable(d.armable, askedKeys(d.presets, keys))).length > 0) throw new Error(COPY.armRefused);
+  const txs: Tx[] = [];
   if ((await d.allowance()) < maxUint256 / 2n) txs.push(approveTx(vault, d.router));
   txs.push(armTx(d.router, d.adapter, vault, keys));
   return txs;
@@ -172,15 +189,16 @@ export interface ArmEnv extends BatchEnv {
 }
 
 /**
- * Arms with one wallet confirmation when the wallet can batch, and step by step when it can't. The alarm re-check runs
- * first, before the wallet is asked anything. A lone arm call has nothing to batch, so it goes the usual way.
+ * Arms with one wallet confirmation when the wallet can batch and every key is already registered and armable, and step by
+ * step otherwise. The alarm re-check runs first, before the wallet is asked anything. A lone arm call has nothing to batch,
+ * so it goes the usual way.
  */
 export async function armOneStep(env: ArmEnv, vault: Address, keys: Hex[]): Promise<"batch" | "steps"> {
-  await assertArmable(env.plan.io, presetsFor(vault), keys);
+  await assertArmable(env.plan.io, env.plan.presets, keys);
   const kind = await batchSupport(env.provider, env.account, env.network.chainHex);
   if (!kind) return (await env.stepwise(), "steps");
   const txs = await armPlan(env.plan, vault, keys);
-  if (txs.length < 2) return (await env.stepwise(), "steps");
+  if (!txs || txs.length < 2) return (await env.stepwise(), "steps");
   if ((await runBatch(env, txs, kind)) === "fallback") return (await env.stepwise(), "steps");
   return "batch";
 }

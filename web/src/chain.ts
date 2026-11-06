@@ -137,15 +137,20 @@ function make(c: Chain) {
   const canBatch = (s: Signer) => batchSupport(s.provider, s.account, c.chainHex).then((k) => k !== null);
 
   /** Arms in one wallet confirmation when the wallet supports it, and with arm()'s steps when it doesn't. */
-  const armOneConfirm = (s: Signer, vault: Address, keys: Hex[]) => armOneStep({
-    provider: s.provider, account: s.account, network: c, onConfirm: s.onConfirm,
-    plan: {
-      io: alarmIo, book: c.alarmBook!, router: c.router!, adapter: c.adapter!,
-      isRegistered: (key) => client.readContract({ address: c.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((k) => k[0]),
-      allowance: () => client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, c.router!] }),
-    },
-    stepwise: () => arm(s, vault, keys),
-  }, vault, keys);
+  const armOneConfirm = async (s: Signer, vault: Address, keys: Hex[]) => {
+    const paused = await answersPaused(vault);
+    return armOneStep({
+      provider: s.provider, account: s.account, network: c, onConfirm: s.onConfirm,
+      plan: {
+        io: alarmIo, book: c.alarmBook!, router: c.router!, adapter: c.adapter!,
+        presets: presetsFor(vault, vault, { paused }), order: registrationOrder(vault, vault, { paused }),
+        isRegistered: (key) => alarmIo.known!(key),
+        armable: (key) => alarmIo.armable!(key),
+        allowance: () => client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, c.router!] }),
+      },
+      stepwise: () => arm(s, vault, keys),
+    }, vault, keys);
+  };
 
   const disarmAll = (s: Signer) => send(s, disarmAllTx(c.router!));
 
