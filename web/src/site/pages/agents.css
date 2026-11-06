@@ -1,0 +1,28 @@
+/* Agent builders' page. Same palette and radii as the roadmap and docs pages. */
+.ag-head{padding-bottom:30px}
+.ag-head h1{max-width:760px;font-size:clamp(32px,5vw,52px);margin-bottom:18px}
+.ag-head .wp-abstract{font-size:17px}
+.ag-head .wp-actions a{display:inline-flex;align-items:center;gap:8px}
+.ag-main{max-width:820px;margin:10px auto 90px;padding:0 24px}
+.ag-main section{margin-bottom:56px}
+.ag-main h2{font-size:26px;font-weight:500;letter-spacing:-.035em;margin:0 0 14px}
+.ag-main h3{font-size:17px;font-weight:550;margin:0 0 6px}
+.ag-main p{font-size:16px;font-weight:350;line-height:1.7;color:#656565;margin:0 0 14px}
+.ag-lead{margin-bottom:22px!important}
+.ag-main code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;background:#eee;padding:1px 6px;border-radius:6px}
+.ag-rules{list-style:none;counter-reset:rule;margin:0 0 24px;padding:0;display:grid;gap:12px}
+.ag-rules li{counter-increment:rule;background:#fff;border:1px solid #ececec;border-radius:20px;padding:18px 22px 6px;position:relative}
+.ag-rules li h3::before{content:counter(rule) ". ";color:#999}
+.ag-warn{background:#fdf2f0;border:1px solid #f0cfc9;border-radius:20px;padding:18px 22px 6px}
+.ag-warn strong{display:block;margin-bottom:6px;color:#8a2a1c}
+.ag-ex{margin-bottom:28px}
+.ag-code{position:relative;background:#1f1f22;border-radius:18px;margin:10px 0 0}
+.ag-code pre{margin:0;padding:18px 20px;overflow:auto;max-width:100%}
+.ag-code code{background:none;color:#ececec;padding:0;font-size:13px;line-height:1.65;white-space:pre}
+.ag-code button{position:absolute;top:10px;right:10px;display:inline-flex;align-items:center;gap:6px;border:0;border-radius:10px;background:#34343a;color:#f2f2f2;font:inherit;font-size:12px;padding:6px 10px;cursor:pointer}
+.ag-code button:hover{background:#44444c}
+.ag-code button:focus-visible{outline:2px solid #9b94bc;outline-offset:2px}
+.ag-code pre{padding-top:42px}
+.ag-note{font-size:15px!important}
+.ag-end{border-top:1px solid #ddd;padding-top:28px;font-size:14px!important}
+@media(max-width:800px){.ag-main{padding:0 18px}.ag-main h2{font-size:23px}}
