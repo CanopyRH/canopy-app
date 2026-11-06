@@ -15,7 +15,7 @@ public issue for it. Include what you found, how to reproduce it, and what it af
 
 The deployed contracts can't be upgraded, so a contract bug is fixed by deploying new contracts that people choose to
 move to, never by changing the ones in use. v2 is that new deployment: it closes the contract findings of the two
-internal reviews (M-1, L-1, A2-01, A2-02, A2-04, A2-05, A2-06, A2-07). Until a user moves, their position is on v1, and
+internal reviews (M-1, L-1, A2-01, A2-02, A2-04, A2-05, A2-06, A2-07) and the third review's V3-01, V3-03 and V3-04. Until a user moves, their position is on v1, and
 v1's accepted risks (listed in this file at the `v1-deployed` tag) still apply to it.
 
 ## Who holds which power (v2)
@@ -49,9 +49,15 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   takes today's address, and a drain key restarts its sampling. A third party may exit only on a fire at or after the
   arming; a fire in the same second counts only if it comes after the arming transaction, because a key that fired
   before it can't be armed.
-- **A2-02 (DRAIN).** Windows under 1,200 seconds are refused. A drop fires only when two pokes at least 60 seconds
-  apart both see it, within the window. A poke that sees the vault whole in between doesn't cancel the first sighting
-  (it only lapses after the window), so a flash deposit can't hold a real drain off.
+- **A2-02 and V3-01 (DRAIN).** Windows under 1,200 seconds are refused. A drop fires only when two pokes at least 60
+  seconds apart both see it, within the window. A poke that sees the vault whole in between doesn't cancel the first
+  sighting (it only lapses after the window), so a flash deposit can't hold a real drain off. The reference is the
+  lower of the lows of the last two sampling periods, so one flash-inflated sample in a period nobody else sampled can't
+  fire the key: that takes two consecutive periods with no honest sample.
+- **V3-04 (DRAIN sighting before arming).** A DRAIN key with a pending sighting can't be armed, so both sightings of any
+  fire that exits a position come after its arming.
+- **V3-03 (swap leg decimals).** `arm` reads each leg token's own `decimals()` (gas-capped) and refuses a leg that
+  states other decimals, which would have shrunk the oracle minimum by a power of ten.
 - **A2-04 (watchers).** Approvals wait 2 days, last at most a year, and lapse unless extended.
 - **A2-06 (1-byte token returns).** When a token's transfer returns 1 to 31 bytes, the router checks its own balance:
   tokens that moved are paid, tokens that didn't are booked as owed.
@@ -60,9 +66,11 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
 
 - **DRAIN still trusts the vault's own readings.** A holder of a quarter or more of a vault can withdraw, poke and
   redeposit twice, a minute apart and within the window, and fire a DRAIN key with no loss. Because a whole reading
-  never cancels a sighting, an honest poke between the two dips doesn't stop that either. Low samples taken by
-  `checkpoint` lower the reference, so a real loss can later go unseen. The app offers DRAIN only inside BOTH with a
-  watcher quorum, so a DRAIN fire alone exits no one.
+  never cancels a sighting, an honest poke between the two dips doesn't stop that either. Anyone who is the only one
+  to sample a vault for two consecutive periods can inflate its reference with flash deposits and fire with no loss.
+  Low samples taken by `checkpoint` lower the reference, so a real loss can later go unseen. The keeper samples listed
+  vaults every period, and the app offers DRAIN only inside BOTH with a watcher quorum, so a DRAIN fire alone exits no
+  one.
 - **A PAUSED detector on a target without the view never fires.** If the view reverts, the key reads "not paused".
   None of the five launch vaults has a `paused()` view, so the "Paused" preset can't fire on them.
 - **No admin delay by default.** The admin can't move funds, change who is paid or touch an armed position's alarms or
@@ -80,12 +88,16 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
 The contracts haven't had an external audit. They have unit, fuzz, invariant and mainnet fork tests, Slither runs in
 CI, and v1's source is verified on Blockscout and Sourcify with an exact match.
 
-Two internal reviews are in [`.audit-grade/`](.audit-grade/):
+Internal reviews are in [`.audit-grade/`](.audit-grade/) and [`contracts/test/review/`](contracts/test/review/):
 
 - **2026-11-05.** Found two High issues in the keeper service, both fixed: a vault built to make the keeper read
   forever, and an alarm key built to burn the gas of the alarms checked with it.
 - **2026-11-06.** Found two more High issues in the keeper, both fixed: attacker exit jobs that could freeze the queue,
   and attacker positions that could spend the keeper's gas without a cap.
 
-Neither review found a way for anyone to send a user's funds anywhere but the owner. v2 closes their contract findings
-and has not been reviewed yet.
+- **Third, of v2.** Found a flash-loan path to fire DRAIN with no loss (V3-01), keeper gas limits below AlarmBook's read
+  floor (V3-02, fixed in the keeper), unchecked swap-leg decimals (V3-03) and a DRAIN sighting from before an arming
+  counting toward a fire after it (V3-04). All fixed; its proofs of concept are regression tests in
+  `contracts/test/review/`, with its symbolic checks and mutation campaign.
+
+No review found a way for anyone to send a user's funds anywhere but the owner. v2 has not had an external audit.

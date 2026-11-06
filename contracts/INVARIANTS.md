@@ -15,6 +15,12 @@ exit, and R11 the owner's swap legs. Timelock, the adapter and the deploy script
 | Default suite | `forge test` | Fast. Includes a short smoke pass of the invariant suite (4 runs of 50 calls). Fork tests return early. |
 | Invariant suite | `FOUNDRY_PROFILE=invariant forge test --match-contract RouterInvariant` | 512 runs of 256 calls, 131,072 calls in all. A minute or two. |
 | Mainnet fork suite | `forge test --match-contract '^(ForkTest\|ForkCheckpointTest\|ForkPresetsTest)$' -vv --fork-url https://rpc.mainnet.chain.robinhood.com` | Needs network access. Without a fork URL these tests return early and pass. |
+| Symbolic checks | `FOUNDRY_PROFILE=halmos halmos --root contracts --match-contract RouterSymbolic --solver-timeout-assertion 0` | Halmos 0.1.13. The `halmos` profile in foundry.toml only switches to shanghai and turns off dynamic test linking. Not run by `forge test`. |
+| Mutation campaign | `cp -R contracts <scratch> && FORGE=<forge> python3 -I contracts/test/review/mutation/mutants.py <scratch>/contracts` | 111 hand-written mutants of ExitRouter and AlarmBook; each must make `forge test` fail. Results in `mutants.results.tsv`. Run on a copy: it edits `src/`. |
+
+The third internal review's tests live in [test/review/](test/review/) and run with the default suite: the V3 findings
+inverted into regressions (`V3Drain.t.sol`, `V3Arming.t.sol`), the read-floor checks (`V3ReadGas.t.sol`) and
+`MutantKillers.t.sol`, six tests that each kill a mutant the earlier suite let survive.
 
 The invariant profile is `[profile.invariant.invariant]` in [foundry.toml](foundry.toml). The suite is
 [RouterInvariant.t.sol](test/RouterInvariant.t.sol): a handler contract arms (with the owner's swap legs on the stable
@@ -148,13 +154,14 @@ only to exits the owner sends. If the pool cannot fill within the cap, the swap 
 ### R11. Swap legs are the owner's, validated, and per position
 
 Swap legs are allowed only with the stable harbour, at most 4, one per token, each with a feed that has code, a
-staleness limit of 1 second to 2 days, at most 36 token decimals, and a well-formed Uniswap path from the token to the
-stablecoin. They are stored per position, replaced on re-arm, announced by one `SwapLegSet` each, and an exit uses only
+staleness limit of 1 second to 2 days, the token's own decimals (at most 36, and equal to what the token's `decimals()`
+returns, read with a 100,000 gas cap, so a leg can't shrink its own oracle minimum: V3-03), and a well-formed Uniswap
+path from the token to the stablecoin. They are stored per position, replaced on re-arm, announced by one `SwapLegSet` each, and an exit uses only
 the position's own leg for a token (no leg: raw), read into memory with the position before the exit's first external
 call, so no callback can change the swaps of an exit in progress.
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_storesLegsAndEmitsOnePerLeg`, `test_reArm_replacesTheLegs`, `test_legOfAnotherPositionIsNeverUsed`, `test_arm_legMustEndInStable`, `test_quoteMinOut_isAPublicViewOverTheLegsInputs`.
-- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_SwapsNeedStableHarbour`, `test_arm_TooManySwaps`, `test_arm_DuplicateSwap`, `test_arm_BadFeed_noCode`, `test_arm_BadFeed_heartbeatOutOfRange`, `test_arm_BadFeed_decimalsAboveMax`, `test_arm_BadRoute_empty`, `test_arm_BadRoute_tooShort`, `test_arm_BadRoute_misalignedLength`, `test_arm_BadRoute_startsAtAnotherToken`, `test_arm_BadRoute_endsAtAnotherToken`, `test_arm_validMultiHopPathIsAccepted`.
+- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_SwapsNeedStableHarbour`, `test_arm_TooManySwaps`, `test_arm_DuplicateSwap`, `test_arm_BadFeed_noCode`, `test_arm_BadFeed_heartbeatOutOfRange`, `test_arm_BadFeed_decimalsAboveMax`, `test_arm_BadFeed_decimalsDifferFromTheToken`, `test_arm_BadRoute_empty`, `test_arm_BadRoute_tooShort`, `test_arm_BadRoute_misalignedLength`, `test_arm_BadRoute_startsAtAnotherToken`, `test_arm_BadRoute_endsAtAnotherToken`, `test_arm_validMultiHopPathIsAccepted`.
 
 ---
 
@@ -195,24 +202,33 @@ raise it with a one-transaction price spike (flash deposit, donation, withdrawal
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: for a vault where the attack would work (a naive one that counts donations), the poisoned key can't be armed.
 - [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_theAlarmBookMatchesTheIndependentModel`: after every call the stored mark equals the model's.
 
-### A5. DRAIN never trusts one high reading, and needs a drop seen twice
+### A5. DRAIN never trusts one period's readings, and needs a drop seen twice
 
-A single high `totalAssets` reading, such as one taken inside a flash deposit, never becomes a reference: the lowest
-sample of a whole period does, and nothing rolls while the detector is tripped, so a drain cannot be reset away. A
-drop fires only when a poke sees it, and a later poke at least 60 seconds after it (and within the window) still sees
+Every `window / 2` the lowest sample of the period that just ended becomes `snap`, and the one before moves to
+`prevSnap`. Alarms measure against the lower of the two, and only once both exist and the last roll is no older than the
+window (so a new or rebased detector needs two rolls before it can fire). A single high `totalAssets` reading, such as
+one taken inside a flash deposit, can be a period's low only if nobody else samples that period, and even then the
+period before it still holds the reference down: an attacker needs two consecutive periods with no honest sample, and
+one honest sample per period stops it (V3-01). Nothing rolls while the detector is tripped, so a drain cannot be reset
+away, and a real drain against a live reference fires a minute after it is first seen.
+
+A drop fires only when a poke sees it, and a later poke at least 60 seconds after it (and within the window) still sees
 it. A poke that sees the vault whole, or can't read it, never cancels a sighting: a sighting only lapses once it is
 older than the window, so a flash deposit between the two sightings can't hold a real drain off. Windows under 1,200
 seconds are refused.
 
-What stays (documented limits): a whale who dips twice a minute apart, within the window, can still fire; and low
-samples taken by `checkpoint` lower the next reference. The app offers DRAIN only inside `BOTH` with a watcher quorum.
+What stays (documented limits): a whale who dips twice a minute apart, within the window, can still fire; an attacker
+who is the only sampler for two consecutive periods can inflate the reference; and low samples taken by `checkpoint`
+lower the next reference. The app offers DRAIN only inside `BOTH` with a watcher quorum, and the keeper samples listed
+vaults every period.
 
+- [V3Drain.t.sol](test/review/V3Drain.t.sol) `test_V3_01_oneFlashPeriodCantFire`, `test_V3_01_control_oneHonestSamplePerPeriodPreventsIt`, `test_V3_01_attackerWhoWinsEachRoll_againstAKeeperSamplingEachPeriod_neverFires`, `test_V3_01_realDrainStillFires` (V3-01 fixed, the review's proofs of concept inverted); `test_V3_01_twoUnsampledPeriodsAreNeeded_documentedLimit` (the boundary).
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_flashDeposit_cantRaiseTheBaseline`, `test_flashDeposit_onANewDetector_cantFire`, `test_flashSample_isPulledDownByTheNextHonestSample`, `test_midDrainCheckpoint_cantHideADrain`, `test_midDrainRoll_cantHideADrain`, `test_flashDeposit_cantResetATrippedDrain`, `test_samplesDuringATrippedDrain_cantLowerTheNextBaseline`, `test_quietVault_baselineFollowsRealGrowth`.
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_drain_snapshotCannotResetAfterWindowWhileTripped`, `test_drain_snapshotExpires`, `test_drain_andCheckpointRules`.
 - [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_drainIgnoresASingleLowReadingFromAFlashWithdrawal`, `test_drainFiresWhenTheDropIsSeenTwiceAMinuteApart`, `test_drainConfirmationLapsesAfterTheWindow`, `test_flashDepositBetweenSightingsCantHoldOffARealDrain`, `test_drainWindowsUnder1200sAreRefused_andTwoSamplesInOneFlashCantFire` (A2-02 fixed); `test_drainWhaleDippingTwiceAMinuteApartStillFires_documentedLimit` and `test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen` (the documented limits).
 - [ForkPresets.t.sol](test/ForkPresets.t.sol) `test_fork_flashDepositAndDonationCantFireAnyPreset`: on all five launch vaults, a flash deposit and a donation fire no preset and start no confirmation.
 - [AlarmReads.t.sol](test/AlarmReads.t.sol) `test_aDrainConfirmationSurvivesAnUnreadablePoke`.
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_pokesFireExactlyWhenTheModelSays` and `invariant_theAlarmBookMatchesTheIndependentModel`: the model's DRAIN sampling, pending time and confirmation match AlarmBook after every call, with the handler's `flashPokeDrain` poking inside flash deposits between sightings.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_pokesFireExactlyWhenTheModelSays` and `invariant_theAlarmBookMatchesTheIndependentModel`: the model's DRAIN sampling (both period lows), pending time and confirmation match AlarmBook after every call, with the handler's `flashPokeDrain` poking inside flash deposits between sightings and `flashCheckpointDrain` sampling inside flash deposits.
 
 ### A6. An alarm cannot refire for 24 hours
 
@@ -259,11 +275,14 @@ are active at once for 365 days. The list never leaves the admin, so a bad watch
 
 - [Reverts.t.sol](test/Reverts.t.sol) `test_poke_Unknown`, `test_checkpoint_Unknown`, `test_rebase_Unknown`, `test_fireByQuorum_Unknown`, `test_check_unknownKeyIsFalseNotRevert`, `test_arm_AlarmNotClear_unknownKey`.
 
-### A11. A key is armable only when it exists, reads clear, and has not fired in the last 24 hours
+### A11. A key is armable only when it exists, reads clear, has not fired in the last 24 hours, and (DRAIN) has no pending sighting
 
-A read that fails (reverts, runs out of its gas, or returns too little) means the key is not armable, except a `PAUSED`
-view that reverts outright, which reads "not paused" (L-1, A2-01).
+A read that fails (reverts, runs out of its gas, or returns too little) means the key is not armable (L-1, A2-01). The
+one exception is `PAUSED`: a view that reverts outright, or answers with fewer than 32 bytes, reads "not paused"; only
+one that runs out of its whole gas cap is unreadable. A DRAIN key with a sighting still pending is not armable, so both
+sightings of any fire that can exit the position come after the arming (V3-04).
 
+- [V3Arming.t.sol](test/review/V3Arming.t.sol) `test_V3_04_pendingSightingBlocksArming_untilItLapses` (the review's proof of concept, inverted).
 - [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_armingOnALiveAlarmIsRefusedInsteadOfWaiting24h` (the RefireGap proof of concept, inverted), `test_aKeyThatFiredInTheLastDayIsNotArmable_evenIfClearNow`.
 - [AlarmReads.t.sol](test/AlarmReads.t.sol) `test_failedReads_neverFire_andAreNeverArmable` and `test_pausedViewThatReverts_readsNotPaused_butOneThatBurnsGasIsNotArmable`.
 - [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_armingNeedsEveryKeyClear` and `invariant_theAlarmBookMatchesTheIndependentModel` (`armable` and `check` match the model for every key after every call).
