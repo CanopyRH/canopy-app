@@ -11,6 +11,7 @@
 // Local mocks and the in-process database only.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { decodeFunctionData, encodeFunctionResult, type Address, type Hex } from "viem";
+import { presetsFor } from "../src/api/presets";
 import { erc20Abi, routerAbi } from "../src/chain/abi";
 import { drainExits, onFired, SLOW_RETRY_SEC, type KeeperDeps } from "../src/keeper/keeper";
 import type { Db } from "../src/store/db";
@@ -71,7 +72,7 @@ function simulator(exitGas: (posId: Hex) => bigint) {
 
 describe("exit jobs too big for a bundle can't freeze the queue", () => {
   const KEYS = Array.from({ length: 8 }, (_, i) => b32("a", i)); // a position may arm up to 8 keys
-  const VKEY = b32("c", 1);
+  const VKEY = presetsFor(LISTED)[0]!.key; // the listed vault's own preset
 
   async function scenario(hostileJobs: number, passes: number) {
     const sent: { to: Address; data: Hex }[] = [];
@@ -178,7 +179,7 @@ describe("slow attacker jobs can't hold back an honest exit by whole passes", ()
     // 64 attacker positions on 64 different contracts (so no bundling), one key, fired first.
     await armAndFire(d, ATTACKER, Array.from({ length: 64 }, (_, i) => hostile(i)), [b32("a", 9)], FIRED);
     now = FIRED + 1;
-    await armAndFire(d, VICTIM, [LISTED], [b32("c", 2)], now);
+    await armAndFire(d, VICTIM, [LISTED], [presetsFor(LISTED)[0]!.key], now);
     return { d, sent };
   }
 
@@ -231,7 +232,7 @@ describe("a job past its budget", () => {
         return TX;
       },
     } as unknown as KeeperDeps;
-    await armAndFire(d, VICTIM, [LISTED], [b32("c", 3)], FIRED);
+    await armAndFire(d, VICTIM, [LISTED], [presetsFor(LISTED)[0]!.key], FIRED);
     await drainExits(d);
     await Bun.sleep(6 * BUDGET); // let the abandoned job run to where it would send
     expect(sent).toEqual([]);

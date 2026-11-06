@@ -3,7 +3,7 @@
 // Local mocks and the in-process database only.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createPublicClient, encodeFunctionResult, fallback, http, type Address, type Hex } from "viem";
-import { Kind, keyOf } from "../src/api/presets";
+import { Kind, keyOf, presetsFor } from "../src/api/presets";
 import { queueAlert } from "../src/bot/queue";
 import { erc20Abi } from "../src/chain/abi";
 import { createApi } from "../src/api/server";
@@ -13,6 +13,7 @@ import type { Db } from "../src/store/db";
 import { PRUNE_KEEP, repo, type Repo } from "../src/store/repo";
 import { quorumScope } from "../src/watcher/scope";
 import { freshDb } from "./db";
+import { enqueueExit } from "./jobs";
 
 const X = "0x00000000000000000000000000000000000000e1" as Address; // attacker's "vault"
 const ADAPTER = "0x00000000000000000000000000000000000000e2" as Address;
@@ -67,9 +68,9 @@ describe("H-1 re-run: a vault whose adapter claims 2^255 markets", () => {
         },
       } as unknown as KeeperDeps;
       const attackerJob: ExitJob = { posId: `0x${"01".repeat(32)}`, key: `0x${"a1".repeat(32)}`, owner: KEEPER, target: X, firedAt: 990 };
-      const victimJob: ExitJob = { posId: `0x${"02".repeat(32)}`, key: `0x${"b2".repeat(32)}`, owner: KEEPER, target: V, firedAt: 995 };
-      await r.enqueue("exit", "attacker", attackerJob, 990);
-      await r.enqueue("exit", "victim", victimJob, 995);
+      const victimJob: ExitJob = { posId: `0x${"02".repeat(32)}`, key: presetsFor(V)[0]!.key, owner: KEEPER, target: V, firedAt: 995 };
+      await enqueueExit(r, "attacker", attackerJob, 990);
+      await enqueueExit(r, "victim", victimJob, 995);
       const outcome = await Promise.race([drainExits(d).then(() => "finished"), Bun.sleep(3_000).then(() => "still running")]);
       expect(outcome).toBe("finished");
       expect(sentTo.length).toBeGreaterThanOrEqual(1);

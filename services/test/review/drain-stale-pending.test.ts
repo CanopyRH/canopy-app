@@ -1,10 +1,12 @@
 // Review V3-S04. After a poke that didn't fire, pokeTripped reads state(key).pendingAt and, if it is non-zero, counts the
-// poke as progress: it clears the key's miss count and sets it aside for only DRAIN_CONFIRM + 2 s. It never asks whether
+// poke as progress: it clears the key's miss count and sets it aside for only DRAIN_CONFIRM + 2 s. It never asked whether
 // this poke set that sighting. A DRAIN sighting lasts `window` seconds, and window is the registrant's choice (any
-// uint32 >= 1200, so up to 136 years). An attacker's DRAIN key with one old sighting therefore turns the A2-M3 defence
-// off: a key that looks like it fires in the check and the simulation but doesn't in the real transaction is sent every
+// uint32 >= 1200, so up to 136 years). An attacker's DRAIN key with one old sighting therefore turned the A2-M3 defence
+// off: a key that looks like it fires in the check and the simulation but doesn't in the real transaction was sent every
 // ~62 s forever, instead of backing off to once an hour like any other key. Each send carries READ_GAS_FLOOR (1.6M) and
 // the target can spend its full 1M read on every one.
+// Fixed: a sighting counts as progress only if this poke created it (pendingAt differs from what was read before the
+// poke); an old one is a miss like any other.
 //
 // The discriminator between the simulation and the transaction is the attacker's problem; the A2-M3 tests assume one
 // exists (gas price in eth_call). Here the stand-in node simply says "fires" when simulated and "doesn't" when sent.
@@ -38,13 +40,13 @@ beforeEach(async () => {
 });
 
 /** One key of `kind` on the attacker's contract. Tripped in the check and the simulation, never in a real transaction. */
-async function run(key: Hex, kind: number, seconds: number) {
+async function run(key: Hex, kind: number, seconds: number, opts: { pendingAfterSend?: (nowSec: number) => bigint } = {}) {
   await r.upsertPosition({ posId: `0x${"01".repeat(32)}`, owner: OWNER, adapter: BOOK, target: OWN, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: [key] });
   // window = 2^32 - 1 seconds: AlarmBook accepts any DRAIN window of at least 1200 s.
   await db.query(`INSERT INTO detectors (key, kind, target, threshold, window_s, a, b, block) VALUES ($1,$2,$3,$4,$5,$6,$6,1)`, [key, kind, OWN, "2500", 4_294_967_295, ZERO]);
   const clock = { t: 100_000 };
   // The one sighting, recorded long ago (a real drop the attacker staged once, or a deposit they withdrew).
-  const PENDING_AT = 1_000n;
+  let pendingAt = 1_000n;
   const sends: bigint[] = [];
   const d = {
     repo: r, alarmBook: BOOK, multicall3: BOOK, account: KEEPER, paidOnly: true, now: () => clock.t, quarantine: new Map<string, number>(), misses: new Map<string, number>(),
@@ -56,12 +58,13 @@ async function run(key: Hex, kind: number, seconds: number) {
       },
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "isLive") return false;
-        if (functionName === "state") return [true, 0n, 0n, 0n, 0n, 0n, kind === Kind.DRAIN ? PENDING_AT : 0n] as const;
+        if (functionName === "state") return [true, 0n, 0n, 0n, 0n, 0n, kind === Kind.DRAIN ? pendingAt : 0n] as const;
         throw new Error(functionName);
       },
     },
     send: async (tx: { gas: bigint }) => {
       sends.push(tx.gas);
+      if (opts.pendingAfterSend) pendingAt = opts.pendingAfterSend(clock.t);
       return TX;
     },
   } as unknown as KeeperDeps;
@@ -69,18 +72,27 @@ async function run(key: Hex, kind: number, seconds: number) {
   return { sends, d };
 }
 
-describe("V3-S04: an old DRAIN sighting makes every failed poke look like progress", () => {
+describe("V3-S04: an old DRAIN sighting is not progress for a poke that did not make it", () => {
   test("control: a SHARE_DROP key that never fires backs off, a handful of sends in an hour", async () => {
     const { sends, d } = await run(SHARE, Kind.SHARE_DROP, 3_600);
     expect(sends.length).toBeLessThanOrEqual(7);
     expect(d.misses!.get(SHARE.toLowerCase())).toBe(sends.length);
   });
 
-  test("a DRAIN key with a sighting from a day ago is sent every 62 s: about 59 transactions an hour at 1.6M gas each", async () => {
+  test("a DRAIN key with a sighting from a day ago backs off like any other key: a handful of sends in an hour, all misses", async () => {
     const { sends, d } = await run(DRAIN, Kind.DRAIN, 3_600);
-    expect(sends.length).toBe(Math.ceil(3_600 / 62));
+    expect(sends.length).toBeLessThanOrEqual(7);
     expect(sends.every((g) => g === READ_GAS_FLOOR)).toBe(true);
-    expect(d.misses!.size).toBe(0); // never counted as a miss
+    expect(d.misses!.get(DRAIN.toLowerCase())).toBe(sends.length);
+    expect(Number((await r.health(0)).counters.poke_miss)).toBe(sends.length);
+    expect((await r.health(0)).counters.poke_pending).toBeUndefined();
+  }, 60_000);
+
+  test("a poke that records a new sighting is still progress: the key is left alone for the confirmation, then comes back", async () => {
+    // Each send records a sighting at the current time, the way a real first DRAIN poke does.
+    const { sends, d } = await run(DRAIN, Kind.DRAIN, 3_600, { pendingAfterSend: (t) => BigInt(t) });
+    expect(sends.length).toBe(Math.ceil(3_600 / 62));
+    expect(d.misses!.size).toBe(0);
     expect(Number((await r.health(0)).counters.poke_pending)).toBe(sends.length);
   }, 60_000);
 });

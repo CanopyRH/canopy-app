@@ -30,7 +30,7 @@ export const repo = (db: Db) => ({
     await db.query(
       `INSERT INTO positions (pos_id, owner, adapter, target, token_id, harbour, max_slip_bps, epoch, active, armed_block, terms_hash, confirmed)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10,false)
-       ON CONFLICT (pos_id) DO UPDATE SET harbour=$6, max_slip_bps=$7, epoch=$8, active=true, armed_block=$9, terms_hash=$10, confirmed=false`,
+       ON CONFLICT (pos_id) DO UPDATE SET harbour=$6, max_slip_bps=$7, epoch=$8, active=true, armed_block=$9, terms_hash=$10, confirmed=false, has_swaps=false`,
       [p.posId, p.owner, p.adapter, p.target, p.tokenId.toString(), p.harbour, p.maxSlipBps, p.epoch.toString(), p.block.toString(), p.termsHash],
     );
     await db.query(`DELETE FROM position_keys WHERE pos_id=$1`, [p.posId]);
@@ -73,6 +73,33 @@ export const repo = (db: Db) => ({
       `SELECT p.* FROM positions p JOIN position_keys k ON k.pos_id=p.pos_id WHERE k.key=$1 AND p.active`,
       [key],
     );
+  },
+  /** The router logs the swap legs after Armed, so an arm clears the flag and each SwapLegSet sets it. */
+  async markSwaps(posId: string, has: boolean) {
+    await db.query(`UPDATE positions SET has_swaps=$2 WHERE pos_id=$1`, [posId, has]);
+  },
+  /**
+   * Which of these (position, key) pairs an exit job may still act on: the position is active and holds that key. Keyed
+   * "posId|key" in lowercase; the value says whether the position has owner swap legs. A pair that is missing has ended.
+   */
+  async armedPairs(pairs: readonly { posId: string; key: string }[]): Promise<Map<string, { hasSwaps: boolean }>> {
+    const ok = pairs.filter((p) => /^0x[0-9a-fA-F]{64}$/.test(p.posId) && /^0x[0-9a-fA-F]{64}$/.test(p.key));
+    const out = new Map<string, { hasSwaps: boolean }>();
+    if (ok.length === 0) return out;
+    const rows = await db.query<{ pos_id: string; key: string; has_swaps: boolean }>(
+      `SELECT p.pos_id, k.key, p.has_swaps FROM positions p JOIN position_keys k ON k.pos_id=p.pos_id
+       JOIN unnest($1::text[], $2::text[]) AS j(pos, key) ON lower(j.pos)=lower(p.pos_id) AND lower(j.key)=lower(k.key)
+       WHERE p.active`,
+      [`{${ok.map((p) => p.posId.toLowerCase()).join(",")}}`, `{${ok.map((p) => p.key.toLowerCase()).join(",")}}`],
+    );
+    for (const x of rows) out.set(`${x.pos_id.toLowerCase()}|${x.key.toLowerCase()}`, { hasSwaps: x.has_swaps === true });
+    return out;
+  },
+  /** Removes exit jobs that can no longer act (the position or key is gone). Removed, not marked done, so an arm that comes back queues a fresh one. */
+  async dropJobs(ids: readonly string[]) {
+    const ok = ids.filter((i) => /^\d+$/.test(String(i)));
+    if (ok.length === 0) return;
+    await db.query(`DELETE FROM jobs WHERE id = ANY($1::bigint[]) AND NOT done`, [`{${ok.join(",")}}`]);
   },
   /** Vaults affected by an alarm, whichever contract the alarm itself watches. */
   async vaultsFor(key: string): Promise<string[]> {
@@ -210,6 +237,14 @@ export const repo = (db: Db) => ({
     await db.query(`DELETE FROM log_touches WHERE source=$1 AND block>=$2`, [source, b]);
     await db.query(`DELETE FROM log_retries WHERE source=$1 AND block>=$2`, [source, b]);
   },
+  /** Forgets logs parked from blocks `from` on, which are no longer on the chain. Done before the cursor moves back, so a stop right after can't apply one. */
+  async dropRetries(source: string, from: bigint) {
+    await db.query(`DELETE FROM log_retries WHERE source=$1 AND block>=$2`, [source, from.toString()]);
+  },
+  async storedHash(source: string, block: bigint): Promise<string | null> {
+    const r = await db.query<{ hash: string }>(`SELECT hash FROM block_hashes WHERE source=$1 AND block=$2`, [source, block.toString()]);
+    return r[0]?.hash ?? null;
+  },
   /** Keeps the recent window only. */
   async pruneBlocks(source: string, below: bigint) {
     await db.query(`DELETE FROM block_hashes WHERE source=$1 AND block<$2`, [source, below.toString()]);
@@ -231,7 +266,12 @@ export const repo = (db: Db) => ({
   },
   /** Undoes what AlarmBook logs from `from` on wrote. */
   async undoAlarms(from: bigint) {
-    await db.query(`DELETE FROM alarms WHERE block>=$1`, [from.toString()]);
+    // Exit jobs queued for a firing that is gone end with it. If the firing is still on chain the re-read queues them again.
+    await db.query(
+      `WITH gone AS (DELETE FROM alarms WHERE block>=$1 RETURNING key, fired_at)
+       DELETE FROM jobs USING gone WHERE jobs.kind='exit' AND NOT jobs.done AND lower(jobs.payload->>'key')=lower(gone.key) AND (jobs.payload->>'firedAt')::bigint=gone.fired_at`,
+      [from.toString()],
+    );
     await db.query(`DELETE FROM detectors WHERE block>=$1`, [from.toString()]);
   },
   /**
@@ -281,22 +321,28 @@ export const repo = (db: Db) => ({
     await db.query(`INSERT INTO jobs (kind, dedupe, payload, run_at, created_at) VALUES ($1,$2,$3::text::jsonb,$4,$4) ON CONFLICT (dedupe) DO NOTHING`, [kind, dedupe, JSON.stringify(payload), runAt]);
   },
   /**
-   * Due jobs, oldest first. With `listed`, jobs whose payload names one of those targets come first, so a queue full of
-   * other jobs can never keep them out of the fetched page; `only` narrows the page to one side.
+   * Due jobs, oldest first. With `listed`, jobs on one of those targets whose payload says its alarm key is one of the
+   * vault's own presets come first, so a queue full of other jobs can never keep them out of the fetched page; `only`
+   * narrows the page to one side. With `perOwner`, an owner's jobs beyond that many open ones (due or not, oldest first)
+   * wait until earlier ones end, so one wallet can't fill the page however many it queues.
    */
-  async dueJobs(kind: string, now: number, limit = 32, order?: { listed: readonly string[]; only?: "listed" | "unlisted" }) {
+  async dueJobs(kind: string, now: number, limit = 32, order?: { listed: readonly string[]; only?: "listed" | "unlisted" }, perOwner?: number) {
     const listed = (order?.listed ?? []).map((t) => t.toLowerCase()).filter((t) => /^0x[0-9a-f]{40}$/.test(t));
-    if (!order || listed.length === 0) {
-      return db.query<{ id: string; payload: unknown; attempts: number }>(
-        `SELECT id, payload, attempts FROM jobs WHERE kind=$1 AND NOT done AND run_at<=$2 ORDER BY run_at, id LIMIT $3`,
-        [kind, now, limit],
-      );
+    const params: unknown[] = [kind, now, limit];
+    let only = "", first = "";
+    if (listed.length > 0) {
+      params.push(`{${listed.join(",")}}`);
+      const isListed = `(lower(payload->>'target') = ANY($4::text[]) AND COALESCE(payload->>'preset', 'false') = 'true')`;
+      only = order!.only === "listed" ? `AND ${isListed}` : order!.only === "unlisted" ? `AND NOT ${isListed}` : "";
+      first = `${isListed} DESC, `;
     }
-    const isListed = `(lower(payload->>'target') = ANY($4::text[]))`;
-    const only = order.only === "listed" ? `AND ${isListed}` : order.only === "unlisted" ? `AND NOT ${isListed}` : "";
+    const cap = perOwner && perOwner > 0 ? Math.floor(perOwner) : 0;
+    const open = cap
+      ? `(SELECT id, payload, attempts, run_at, row_number() OVER (PARTITION BY lower(payload->>'owner') ORDER BY id) AS rn FROM jobs WHERE kind=$1 AND NOT done) j`
+      : `(SELECT id, payload, attempts, run_at FROM jobs WHERE kind=$1 AND NOT done) j`;
     return db.query<{ id: string; payload: unknown; attempts: number }>(
-      `SELECT id, payload, attempts FROM jobs WHERE kind=$1 AND NOT done AND run_at<=$2 ${only} ORDER BY ${isListed} DESC, run_at, id LIMIT $3`,
-      [kind, now, limit, `{${listed.join(",")}}`],
+      `SELECT id, payload, attempts FROM ${open} WHERE run_at<=$2 ${cap ? `AND rn<=${cap}` : ""} ${only} ORDER BY ${first}run_at, id LIMIT $3`,
+      params,
     );
   },
   async finishJob(id: string) {
@@ -324,8 +370,8 @@ export const repo = (db: Db) => ({
   },
   /** Every parked log of one source, oldest first. */
   async parkedLogs(source: string) {
-    const rows = await db.query<{ tx: string; log_index: number; subject: string; log: unknown; attempts: number; first_failed_at: string; next_at: string; last_error: string; alerted: boolean }>(
-      `SELECT tx, log_index, subject, log, attempts, first_failed_at, next_at, last_error, alerted FROM log_retries WHERE source=$1 ORDER BY block, log_index`,
+    const rows = await db.query<{ tx: string; log_index: number; subject: string; block: string; log: unknown; attempts: number; first_failed_at: string; next_at: string; last_error: string; alerted: boolean }>(
+      `SELECT tx, log_index, subject, block, log, attempts, first_failed_at, next_at, last_error, alerted FROM log_retries WHERE source=$1 ORDER BY block, log_index`,
       [source],
     );
     return rows.map((x) => ({ ...x, log_index: Number(x.log_index), attempts: Number(x.attempts), first_failed_at: Number(x.first_failed_at), next_at: Number(x.next_at) }));

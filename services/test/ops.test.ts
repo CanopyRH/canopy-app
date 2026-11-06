@@ -20,6 +20,7 @@ import { ingestFeed, isHighS, matchVaults, recentReports } from "../src/watcher/
 import { findBanned } from "../../tools/banned-words";
 import { checkNode, type CheckRequest } from "./check-node";
 import { freshDb } from "./db";
+import { enqueueExit } from "./jobs";
 
 const V = "0x00000000000000000000000000000000000000c3" as Address;
 const A = "0x00000000000000000000000000000000000000a1" as Address;
@@ -462,7 +463,7 @@ describe("exit bundles", () => {
 
   const queue = async (i: number, target: Address = V, firedAt = 1000) => {
     const job: ExitJob = { posId: pos(i), key: KEY, owner: owner(i), target, firedAt };
-    await r.enqueue("exit", `job-${i}`, job, 1);
+    await enqueueExit(r, `job-${i}`, job, 1);
   };
 
   const bundled = (tx: { data: Hex }) => (decodeFunctionData({ abi: multicall3Abi, data: tx.data }).args![0] as readonly { allowFailure: boolean; callData: Hex }[]);

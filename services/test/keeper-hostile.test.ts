@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Address, Hex } from "viem";
+import { presetsFor } from "../src/api/presets";
 import { drainExits, pokeTripped, QUARANTINE_SEC, SLOW_RETRY_SEC, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
 import { deallocateCalls, MAX_MARKETS } from "../src/keeper/liquidity";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
 import { checkNode, type CheckRequest } from "./check-node";
 import { freshDb } from "./db";
+import { enqueueExit } from "./jobs";
 
 // Arming is open to anyone, so these tests play an attacker who arms positions on contracts built to stall the keeper.
 const OWNER = "0xabababababababababababababababababababab" as Address;
@@ -42,12 +44,12 @@ describe("a vault whose liquidity adapter claims endless markets", () => {
 });
 
 describe("an exit that never finishes", () => {
-  const job = (target: Address, n: string): ExitJob => ({ posId: key(n), key: key("cc"), owner: OWNER, target, firedAt: 1000 });
+  const job = (target: Address, n: string): ExitJob => ({ posId: key(n), key: target === LISTED ? presetsFor(LISTED)[0]!.key : key("cc"), owner: OWNER, target, firedAt: 1000 });
 
   test("runs out of time, waits longer, and doesn't stop the listed vault's exit", async () => {
     // The hostile job is queued first; the listed one must still run first and finish.
-    await r.enqueue("exit", "hostile", job(HOSTILE, "01"), 1000);
-    await r.enqueue("exit", "listed", job(LISTED, "02"), 1000);
+    await enqueueExit(r, "hostile", job(HOSTILE, "01"), 1000);
+    await enqueueExit(r, "listed", job(LISTED, "02"), 1000);
     const order: string[] = [];
     const deps = {
       repo: r, router: BOOK, alarmBook: BOOK, multicall3: BOOK, morpho: BOOK, account: OWNER, paidOnly: false,

@@ -1,10 +1,10 @@
 // Review V3-S06. checkReorg's comment says a crash between its steps is safe: "Undo first, then move the cursor, then
 // forget. A crash in between repeats the undo... and the stale hashes are ignored once the cursor is behind them." That
-// holds for the hashes but not for the retry list. dropFrom also deletes logs parked from the dropped blocks; if the
-// process stops after setCursor and before dropFrom, the next pass sees no reorg (the cursor is already behind the stale
-// hashes) and retryParked applies the parked log from a block that is no longer on the chain. For the payments reader
-// that credits a plan for a transfer that doesn't exist. Narrow (a payment that failed once, a reorg past the depth and
-// a stop in one window), so Low. Mock chain and the test database.
+// held for the hashes but not for the retry list. dropFrom also deleted logs parked from the dropped blocks; if the
+// process stopped after setCursor and before dropFrom, the next pass saw no reorg (the cursor is already behind the stale
+// hashes) and retryParked applied the parked log from a block that is no longer on the chain. For the payments reader
+// that credited a plan for a transfer that doesn't exist. Fixed: the parked logs of the dropped blocks go before the
+// cursor moves, and a parked log at or beyond the cursor is never retried. Mock chain and the test database.
 import { beforeEach, expect, test } from "bun:test";
 import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from "viem";
 import { erc20Abi } from "../../src/chain/abi";
@@ -47,7 +47,7 @@ const payment: Log = {
   topics: encodeEventTopics({ abi: erc20Abi, eventName: "Transfer", args: { from: PAYER, to: PAYEE } }) as never,
 };
 
-test("V3-S06: a stop between setCursor and dropFrom lets a parked log from a dropped block be applied", async () => {
+test("V3-S06: a stop between setCursor and dropFrom can't apply a parked log from a dropped block", async () => {
   const c = chain();
   c.logs = [payment];
   let failOnce = true;
@@ -72,8 +72,31 @@ test("V3-S06: a stop between setCursor and dropFrom lets a parked log from a dro
   await expect(syncLogs(c.client, stops, opts(stops))).rejects.toThrow("process stopped");
   expect(await r.cursor("payments")).toBe(90n);
 
-  // The restarted process: no reorg is seen, and the parked log from the dropped block is retried and applied.
+  // The parked log went before the cursor moved, so the restarted process has nothing to retry from the dropped block.
+  expect((await r.parkedLogs("payments")).length).toBe(0);
+
+  // The restarted process: no reorg is seen, and no plan is credited for a transfer that is not on chain.
   await syncLogs(c.client, r, opts(r));
   expect((await r.parkedLogs("payments")).length).toBe(0);
-  expect(await r.paidUntil(PAYER.toLowerCase())).toBe(1_000 + 90 * 86_400); // a 90-day plan for a transfer not on chain
+  expect(await r.paidUntil(PAYER.toLowerCase())).toBeNull();
+});
+
+test("V3-S06 (belt and braces): a parked log at or beyond the cursor is never retried", async () => {
+  const c = chain();
+  c.logs = [payment];
+  let failOnce = true;
+  const opts = {
+    name: "payments", address: TOKEN, startBlock: 90n, now: () => 1_000, retry: { baseSec: 0 },
+    onLog: async (l: Log) => {
+      if (failOnce) { failOnce = false; throw new Error("connection reset"); }
+      await applyPayment(r, l, 1_000);
+    },
+  };
+  await syncLogs(c.client, r, opts);
+  expect((await r.parkedLogs("payments")).length).toBe(1);
+  // Whatever left the list behind (an older build, a partial restore), the cursor is behind the parked log's block.
+  await r.setCursor("payments", 100n);
+  c.logs = [];
+  await syncLogs(c.client, r, opts);
+  expect(await r.paidUntil(PAYER.toLowerCase())).toBeNull();
 });

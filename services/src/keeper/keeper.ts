@@ -51,8 +51,17 @@ export const MAX_TX_GAS = 16_000_000n;
  * many markets; anything far beyond that is a contract spending the keeper's gas. KEEPER_UNLISTED_EXIT_GAS overrides it.
  */
 export const UNLISTED_EXIT_GAS = 4_000_000n;
-/** The most a poke, checkpoint, owed claim or quorum fire may use. Each is a few reads and a storage write. */
+/** The most an owed claim or quorum fire may use. */
 export const SMALL_CALL_GAS = 1_000_000n;
+/**
+ * The most a poke or checkpoint may use. Each reads its target (up to twice for SHARE_DROP) and AlarmBook hands every read
+ * 1M gas, so one that costs a little over 1M in simulation is ordinary. Never below READ_GAS_FLOOR, or the cap and the floor disagree.
+ */
+export const POKE_CALL_GAS = 3_000_000n;
+/** The most an exit for a position with owner swap legs may use. A leg quotes under a 500k cap, and the exit runs alone. */
+export const SWAP_EXIT_GAS = 8_000_000n;
+/** Open exit jobs one owner may have in the queue at once. The rest wait until earlier ones end. */
+export const MAX_OPEN_EXITS_PER_OWNER = 32;
 /** An unlisted exit refused for gas, or sent without moving the owner's balance, backs off and ends after this many strikes. */
 export const MAX_STRIKES = 5;
 /** Checkpoints per pass beyond the listed vaults' own presets, taken least recently sent first. */
@@ -97,11 +106,25 @@ export interface KeeperDeps {
   unlistedExitGas?: bigint;
   /** Overrides CHECK_CALL_GAS. */
   checkGas?: bigint;
+  /**
+   * Called at the start of every pass that writes or sends. It throws when the database no longer belongs to this
+   * keeper's contracts (another deploy switched it), so a stale process can't act on someone else's state.
+   */
+  fence?: () => Promise<void>;
 }
 
-const isListed = (d: KeeperDeps, vault: Address) => !d.listed?.size || d.listed.has(vault.toLowerCase());
-const exitGasCap = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? MAX_TX_GAS : (d.unlistedExitGas ?? UNLISTED_EXIT_GAS));
-const prepFor = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? deallocateCalls(d.client, d.morpho, vault, d.account) : Promise.resolve([]));
+/**
+ * Whether an exit job gets a listed vault's treatment (the fast loop, the high gas cap, deallocations): the vault is
+ * listed AND the alarm key is one of that vault's own presets. Arming is open to anyone, so a position on a listed vault
+ * can carry keys registered on contracts of the owner's choosing; those jobs are the owner's own business, not the vault's.
+ * With no listed set every vault is treated alike.
+ */
+const isListedJob = (d: KeeperDeps, j: { target: Address; key: Hex }) => !d.listed?.size || (d.listed.has(j.target.toLowerCase()) && isPreset(j.target, j.key));
+const exitGasCap = (d: KeeperDeps, j: ExitJob) => {
+  const cap = isListedJob(d, j) ? MAX_TX_GAS : (d.unlistedExitGas ?? UNLISTED_EXIT_GAS);
+  return j.swaps ? least(cap, SWAP_EXIT_GAS) : cap;
+};
+const prepFor = (d: KeeperDeps, j: { target: Address; key: Hex }) => (isListedJob(d, j) ? deallocateCalls(d.client, d.morpho, j.target, d.account) : Promise.resolve([]));
 
 class OverBudget extends Error {}
 
@@ -126,7 +149,13 @@ async function withBudget<T>(job: (signal: AbortSignal) => Promise<T>, ms: numbe
   }
 }
 
-export interface ExitJob { posId: Hex; key: Hex; owner: Address; target: Address; firedAt: number }
+export interface ExitJob {
+  posId: Hex; key: Hex; owner: Address; target: Address; firedAt: number;
+  /** Whether `key` is one of `target`'s own presets, worked out when the job is queued. The queue orders listed jobs by it. */
+  preset?: boolean;
+  /** Whether the position has owner swap legs. Set from the database when the job runs, never stored: such an exit runs alone. */
+  swaps?: boolean;
+}
 
 type DueJob = { id: string; payload: unknown; attempts: number };
 type SimResult = { status: string; data: Hex; gasUsed: bigint; logs?: readonly unknown[] };
@@ -141,7 +170,8 @@ export async function gasFor(d: KeeperDeps, call: PlainCall, cap: bigint, floor 
   let sim: SimResult | undefined;
   try {
     const fees = d.fees ? await d.fees().catch(() => undefined) : undefined;
-    const out = await d.client.simulateCalls({ account: d.account, calls: [{ to: call.to, data: call.data, ...fees }] });
+    // The simulation gets the same limit the send would, so a contract that burns gas can't spend the node's whole cap on it.
+    const out = await d.client.simulateCalls({ account: d.account, calls: [{ to: call.to, data: call.data, gas: ceiling, ...fees }] as never });
     sim = (out.results as readonly SimResult[])[0];
   } catch {
     return { gas: ceiling };
@@ -156,7 +186,7 @@ export async function gasFor(d: KeeperDeps, call: PlainCall, cap: bigint, floor 
  * An unlisted exit that was refused for gas, or that was sent and left the owner's exitable balance where it was, backs
  * off exponentially and ends after MAX_STRIKES. A contract can't make the keeper pay for it every 30 seconds for a day.
  */
-async function strike(d: KeeperDeps, job: DueJob, why: "exit_gas_refused" | "exit_stalled") {
+async function strike(d: KeeperDeps, job: DueJob, why: "exit_gas_refused" | "exit_stalled" | "exit_rejected") {
   await d.repo.bump(why);
   if ((await d.repo.strikeJob(job.id, d.now(), 2 * RETRY_SEC, MAX_STRIKES)).done) await d.repo.bump("exit_given_up");
 }
@@ -353,6 +383,7 @@ async function firedNow(d: KeeperDeps, key: Hex): Promise<boolean | undefined> {
  * tripped but doesn't fire is left out for a while too, so it can't cost a transaction every second.
  */
 export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
+  await d.fence?.();
   const q = d.quarantine ?? QUARANTINE;
   const now = d.now();
   for (const [k, until] of q) if (until <= now) q.delete(k);
@@ -371,13 +402,21 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
 
   const poked: Hex[] = [];
   for (const key of keys) {
+    let checked = false;
     try {
       const c = p.out.get(key) ?? ({ status: "failure", error: new Error("left out after a failed shared check") } as Check);
       if (c.status === "failure") throw c.error;
       if (q.has(key.toLowerCase()) || !c.result) continue;
+      checked = true;
       const call = { to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) };
-      const g = await gasFor(d, call, SMALL_CALL_GAS, READ_GAS_FLOOR);
-      if (!g) throw new Error("poke reverts or needs too much gas in simulation");
+      const g = await gasFor(d, call, POKE_CALL_GAS, READ_GAS_FLOOR);
+      if (!g) {
+        // Reverts in simulation, or needs more than a poke may use: a miss like any other, so it backs off.
+        console.warn("poke", key, "reverts or needs too much gas in simulation");
+        missed(d, q, key, now);
+        await d.repo.bump("poke_miss");
+        continue;
+      }
       // A poke that doesn't fire may still be progress: the first one on a DRAIN drop starts its confirmation.
       const simFalse = g.sim !== undefined && pokeFires(g.sim) === false;
       if (simFalse && !(await startsConfirmation(d, key, g.sim!))) {
@@ -385,10 +424,13 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
         await d.repo.bump("poke_miss");
         continue;
       }
+      // What the key's drop sighting was before this poke, so a later one can tell whether the poke made it.
+      const before = await pendingAt(d, key);
       await d.send({ ...call, gas: g.gas });
       if ((await firedNow(d, key)) === false) {
         const at = await pendingAt(d, key);
-        if (at !== undefined && at > 0n) {
+        // Progress only if this poke recorded the sighting. An old one (its window is the registrant's choice) is not.
+        if (at !== undefined && at > 0n && before !== undefined && at !== before) {
           // Progress, not a miss: the drop is recorded, and a poke DRAIN_CONFIRM seconds on can fire it. Until then check() reads
           // false, so the key is left alone for that long and then comes back at its normal pace.
           (d.misses ?? MISSES).delete(key.toLowerCase());
@@ -406,6 +448,8 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
     } catch (e) {
       console.warn("poke", key, (e as Error).message);
       await d.repo.bump("poke_fail");
+      // A key that passed its check but whose poke could not be sent or landed backs off like one that did not fire.
+      if (checked) missed(d, q, key, now);
     }
   }
   return poked;
@@ -428,6 +472,7 @@ export async function pokeAndQueue(d: KeeperDeps) {
  * and a SHARE_DROP checkpoint whose simulation moves no baseline isn't sent.
  */
 export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECKPOINTS_PER_PASS) {
+  await d.fence?.();
   let first = keys;
   let rest: Hex[] = [];
   if (d.listed?.size) {
@@ -443,14 +488,15 @@ export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECK
   for (const key of [...first, ...rest]) {
     CHECKPOINTED.set(key.toLowerCase(), d.now());
     try {
-      const det = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "detector", args: [key] });
+      // Every read carries a gas limit: the target is a contract anyone can write, and a node's own cap is not a bound.
+      const det = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "detector", args: [key], gas: CHECK_ALONE_GAS } as never) as { kind: number; target: Address; window: number };
       if (det.kind === Kind.DRAIN) {
-        const [, , snapAt, low] = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "state", args: [key] });
-        const assets = await d.client.readContract({ address: det.target, abi: vaultAbi, functionName: "totalAssets" });
-        if (d.now() < Number(snapAt) + det.window / 2 && assets >= low) continue;
+        const [, , snapAt, low] = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "state", args: [key], gas: CHECK_ALONE_GAS } as never) as readonly bigint[];
+        const assets = await d.client.readContract({ address: det.target, abi: vaultAbi, functionName: "totalAssets", gas: CHECK_ALONE_GAS } as never) as bigint;
+        if (d.now() < Number(snapAt) + det.window / 2 && assets >= low!) continue;
       }
       const call = { to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [key] }) };
-      const g = await gasFor(d, call, SMALL_CALL_GAS, READ_GAS_FLOOR);
+      const g = await gasFor(d, call, POKE_CALL_GAS, READ_GAS_FLOOR);
       if (!g) throw new Error("reverts or needs too much gas in simulation");
       // SHARE_DROP only ever writes with an event, when the price rose. No event means nothing would change.
       if (det.kind === Kind.SHARE_DROP && g.sim?.logs && g.sim.logs.length === 0) continue;
@@ -472,6 +518,7 @@ export const ALARM_SWEEP_SEC = 60;
  * again, which picks up positions armed, and plans paid, after an alarm fired.
  */
 export async function queueNewAlarms(d: KeeperDeps, c: AlarmCursor) {
+  await d.fence?.();
   const since = d.now() - ALARM_TTL;
   const sweep = d.now() - c.sweptAt >= ALARM_SWEEP_SEC;
   const rows = sweep ? await d.repo.recentAlarms(since) : await d.repo.alarmsAfter(c.seq, since);
@@ -484,10 +531,11 @@ export async function queueNewAlarms(d: KeeperDeps, c: AlarmCursor) {
 
 /** Queues exits for a fired alarm. Canopy's keeper skips unpaid wallets; no contract does. */
 export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise<number> {
+  await d.fence?.();
   let queued = 0;
   for (const p of await d.repo.armedWith(key)) {
     if (d.paidOnly && !keeperShouldRun(await d.repo.paidUntil(p.owner), d.now())) continue;
-    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt };
+    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt, preset: isPreset(p.target as Address, key) };
     await d.repo.enqueue("exit", `${key}:${firedAt}:${p.pos_id}`, job, d.now());
     queued++;
   }
@@ -530,7 +578,7 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
 
   const asset = await d.client.readContract({ address: j.target, abi: vaultAbi, functionName: "asset" });
   const direct = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, 0n] }) };
-  const prep = await prepFor(d, j.target);
+  const prep = await prepFor(d, j);
   let used = 0n;
   const amount = await sizeExit(total, async (a) => {
     try {
@@ -545,7 +593,7 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
     await d.repo.bump("gate_reject");
     return "retry";
   }
-  if (used > exitGasCap(d, j.target)) return "refused";
+  if (used > exitGasCap(d, j)) return "refused";
   const gas = least(limitFromSim(used) + EXIT_SWAP_HEADROOM, MAX_TX_GAS);
 
   const exitData = encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, amount] });
@@ -572,6 +620,7 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
  * whatever the vault paid out, so it may be a contract built to burn gas.
  */
 export async function claimOwed(d: KeeperDeps, max = MAX_OWED_PER_PASS) {
+  await d.fence?.();
   for (const o of await d.repo.openOwed(d.paidOnly ? d.now() : undefined, max)) {
     const args = [o.owner as Address, o.token as Address] as const;
     try {
@@ -609,7 +658,8 @@ async function exitable(d: KeeperDeps, jobs: ExitJob[]): Promise<bigint[]> {
  */
 export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSignal): Promise<DueJob[]> {
   const live = d.now();
-  const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL);
+  // An exit with owner swap legs runs token code the owner chose, so it never shares a transaction; the caller sends it alone.
+  const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL && !(x.payload as ExitJob).swaps);
   const totals = await exitable(d, open.map((x) => x.payload as ExitJob));
   const jobs = open.flatMap((job, i) => (totals[i]! > 0n ? [{ job, j: job.payload as ExitJob, amount: totals[i]! }] : []));
   const skipped = due.filter((x) => !jobs.some((y) => y.job.id === x.id));
@@ -617,7 +667,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
 
   const target = jobs[0]!.j.target;
   const asset = await d.client.readContract({ address: target, abi: vaultAbi, functionName: "asset" });
-  const prep = await prepFor(d, target);
+  const prep = await prepFor(d, jobs[0]!.j);
   const exitData = (x: (typeof jobs)[number]) => encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [x.j.posId, x.j.key, x.amount] });
   const reads = (owner: Address) => [owner, d.router, d.account].map((w) => balanceCall(asset, w));
   const STEP = 7; // Three reads, the exit, three reads.
@@ -637,7 +687,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
       continue;
     }
     const cost = sim[at + 3]!.gasUsed ?? 0n;
-    if (cost > exitGasCap(d, target)) {
+    if (cost > exitGasCap(d, x.j)) {
       await strike(d, x.job, "exit_gas_refused");
       continue;
     }
@@ -661,7 +711,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
   const left = await exitable(d, picked.map((x) => x.j));
   for (const [i, x] of picked.entries()) {
     if (left[i] === 0n) await d.repo.finishJob(x.job.id);
-    else if (left[i]! >= x.amount && !isListed(d, target)) await strike(d, x.job, "exit_stalled");
+    else if (left[i]! >= x.amount && !isListedJob(d, x.j)) await strike(d, x.job, "exit_stalled");
     else await d.repo.retryJob(x.job.id, d.now() + RETRY_SEC);
   }
   return [...skipped, ...refused];
@@ -673,20 +723,44 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
  * a contract built to stall the keeper only delays itself. `scope` lets the listed vaults run in a loop of their own.
  */
 export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlisted" = "all") {
+  await d.fence?.();
   const budget = d.jobBudgetMs ?? JOB_BUDGET_MS;
   const passEnd = Date.now() + (d.passBudgetMs ?? PASS_BUDGET_MS);
   const listed = [...(d.listed ?? [])];
   // With no listed set every vault is treated alike, so there is nothing "unlisted" to run apart.
   if (listed.length === 0 && scope === "unlisted") return;
   const order = listed.length ? { listed, only: scope === "all" ? undefined : scope } : undefined;
-  const byVault = new Map<string, DueJob[]>();
-  for (const job of await d.repo.dueJobs("exit", d.now(), 32, order)) {
-    const target = (job.payload as ExitJob).target.toLowerCase();
-    byVault.set(target, [...(byVault.get(target) ?? []), job]);
+  const fetched = await d.repo.dueJobs("exit", d.now(), 32, order, MAX_OPEN_EXITS_PER_OWNER);
+  // A job ends when its position is no longer active or no longer holds its key (disarmed, re-armed with other keys, a
+  // firing reorged away). The database follows the router, so this costs no node request.
+  const state = await d.repo.armedPairs(fetched.map((x) => ({ posId: (x.payload as ExitJob).posId, key: (x.payload as ExitJob).key })));
+  const ended: string[] = [];
+  const due: DueJob[] = [];
+  for (const job of fetched) {
+    const j = job.payload as ExitJob;
+    const now = state.get(`${j.posId.toLowerCase()}|${j.key.toLowerCase()}`);
+    if (!now) ended.push(job.id);
+    else due.push({ ...job, payload: { ...j, swaps: now.hasSwaps } });
   }
-  const listedFirst = (a: DueJob, b: DueJob) => Number(!isListed(d, (a.payload as ExitJob).target)) - Number(!isListed(d, (b.payload as ExitJob).target));
-  const groups = [...byVault.values()].sort((a, b) => listedFirst(a[0]!, b[0]!));
+  if (ended.length > 0) {
+    await d.repo.dropJobs(ended);
+    await d.repo.bump("exit_job_ended", ended.length);
+  }
+  const byVault = new Map<string, DueJob[]>();
   const single: DueJob[] = [];
+  for (const job of due) {
+    const j = job.payload as ExitJob;
+    // An exit that runs the owner's swap legs never shares a transaction.
+    if (j.swaps) {
+      single.push(job);
+      continue;
+    }
+    // Bundles stay within one vault and one kind of job, so a listed vault's presets never share one with the owner's own keys.
+    const group = `${j.target.toLowerCase()}|${isListedJob(d, j) ? "listed" : "other"}`;
+    byVault.set(group, [...(byVault.get(group) ?? []), job]);
+  }
+  const listedFirst = (a: DueJob, b: DueJob) => Number(!isListedJob(d, a.payload as ExitJob)) - Number(!isListedJob(d, b.payload as ExitJob));
+  const groups = [...byVault.values()].sort((a, b) => listedFirst(a[0]!, b[0]!));
   for (const group of groups) {
     if (Date.now() >= passEnd) break;
     if (group.length === 1) {
@@ -714,9 +788,9 @@ export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlis
     try {
       const out = await withBudget((signal) => runExit(d, j, signal), budget);
       if (out === "done") await d.repo.finishJob(job.id);
-      // A listed vault's exit keeps its fast retry whatever happened; only other vaults' exits can earn strikes.
-      else if (out === "retry" || isListed(d, j.target)) await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
-      else await strike(d, job, out === "refused" ? "exit_gas_refused" : "exit_stalled");
+      // A listed vault's own preset keeps its fast retry whatever happened; every other job, a retry included, earns a strike.
+      else if (isListedJob(d, j)) await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+      else await strike(d, job, out === "refused" ? "exit_gas_refused" : out === "retry" ? "exit_rejected" : "exit_stalled");
     } catch (e) {
       console.warn("exit", j.posId, (e as Error).message);
       await d.repo.bump("exit_error");

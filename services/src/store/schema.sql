@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS vault_follows (chat_id BIGINT, target TEXT, PRIMARY K
 CREATE TABLE IF NOT EXISTS positions (pos_id TEXT PRIMARY KEY, owner TEXT NOT NULL, adapter TEXT NOT NULL, target TEXT NOT NULL, token_id NUMERIC NOT NULL,
   harbour SMALLINT NOT NULL, max_slip_bps INT NOT NULL, epoch BIGINT NOT NULL, active BOOLEAN NOT NULL, armed_block BIGINT NOT NULL, terms_hash TEXT NOT NULL);
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS confirmed BOOLEAN NOT NULL DEFAULT true;
+-- Whether the owner set swap legs when arming (SwapLegSet). Their exits run token code of the owner's choosing, so the keeper sends them alone.
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS has_swaps BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS positions_owner ON positions (owner);
 CREATE INDEX IF NOT EXISTS positions_target ON positions (target) WHERE active;
 CREATE TABLE IF NOT EXISTS owner_epochs (owner TEXT PRIMARY KEY, epoch BIGINT NOT NULL);

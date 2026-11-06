@@ -1,11 +1,11 @@
-// Review V3-S03. AlarmBook v2 gives every target read a full 1M gas, but the keeper refuses any poke whose simulation uses
-// more than SMALL_CALL_GAS (1M). A poke the keeper refuses throws "poke reverts or needs too much gas in simulation" and is
-// counted as poke_fail, and nothing else happens: the key is not quarantined and its miss count doesn't grow. So a key
+// Review V3-S03. AlarmBook v2 gives every target read a full 1M gas, but the keeper refused any poke whose simulation used
+// more than SMALL_CALL_GAS (1M). A poke the keeper refused threw "poke reverts or needs too much gas in simulation" and was
+// counted as poke_fail, and nothing else happened: the key was not quarantined and its miss count didn't grow. So a key
 // whose target reads as tripped but makes the poke cost a little over 1M (here a SHARE_DROP vault whose convertToAssets
-// spends 950k gas and then answers a low price) is checked and simulated again on every one-second pass, forever. That
-// is the A2-M3 outcome ("a key that reads tripped but never fires is poked every second") reached another way, and the
-// keeper's poke loop is sequential, so every such key adds a simulation round trip in front of honest keys.
-// The poke itself would land with the keeper's own READ_GAS_FLOOR of 1.6M: the 1M cap and the 1.6M floor disagree.
+// spends 950k gas and then answers a low price) was checked and simulated again on every one-second pass, forever. That
+// is the A2-M3 outcome ("a key that reads tripped but never fires is poked every second") reached another way.
+// Fixed: pokes and checkpoints may use POKE_CALL_GAS (3M, never below READ_GAS_FLOOR), the poke now lands, and a poke the
+// keeper does refuse (over the cap, or reverting in simulation) is a miss with the normal backoff.
 //
 // Real AlarmBook bytecode on a local anvil, the keeper's real pokeTripped and gasFor, and the test database.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -18,7 +18,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { alarmBookAbi } from "../../src/chain/abi";
 import { keyOf, Kind } from "../../src/api/presets";
-import { pokeTripped, READ_GAS_FLOOR, SMALL_CALL_GAS, type KeeperDeps } from "../../src/keeper/keeper";
+import { MISS_QUARANTINE_SEC, POKE_CALL_GAS, pokeTripped, READ_GAS_FLOOR, SMALL_CALL_GAS, type KeeperDeps } from "../../src/keeper/keeper";
 import { repo } from "../../src/store/repo";
 import { freshDb } from "../db";
 
@@ -87,42 +87,92 @@ beforeAll(async () => {
 
 afterAll(() => anvil.kill());
 
-describe("V3-S03: a key whose poke needs a little over 1M gas is simulated every pass and never set aside", () => {
-  test("on chain: check() reads tripped, the poke costs more than SMALL_CALL_GAS and lands under READ_GAS_FLOOR", async () => {
+describe("V3-S03: a key whose poke needs a little over 1M gas", () => {
+  test("on chain: check() reads tripped, the poke costs more than SMALL_CALL_GAS and fits both READ_GAS_FLOOR and POKE_CALL_GAS", async () => {
     const check = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "check", args: [key], gas: 5_000_000n } as never);
     expect(check).toBe(true);
     const est = await client.estimateGas({ account: dev.address, to: book, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) });
-    console.log(`poke estimate ${est} gas; keeper cap ${SMALL_CALL_GAS}, keeper floor ${READ_GAS_FLOOR}`);
+    console.log(`poke estimate ${est} gas; keeper cap ${POKE_CALL_GAS}, floor ${READ_GAS_FLOOR}`);
     expect(est).toBeGreaterThan(SMALL_CALL_GAS);
     expect(est).toBeLessThan(READ_GAS_FLOOR);
+    expect(POKE_CALL_GAS).toBeGreaterThanOrEqual(READ_GAS_FLOOR);
   });
 
-  test("the keeper: every pass checks and simulates the key, sends nothing, and never quarantines it", async () => {
+  async function deps(over: Partial<KeeperDeps> = {}) {
     const db = await freshDb();
     const r = repo(db);
     await r.setPaidUntil(OWNER, 4_000_000_000);
     await r.upsertPosition({ posId: `0x${"01".repeat(32)}`, owner: OWNER, adapter: book, target: heavy.toLowerCase(), tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: [key] });
-    let sims = 0;
-    let sends = 0;
-    const quarantine = new Map<string, number>();
-    const misses = new Map<string, number>();
-    let now = Math.floor(Date.now() / 1000);
+    const state = { sims: 0, sends: 0, now: Math.floor(Date.now() / 1000), quarantine: new Map<string, number>(), misses: new Map<string, number>() };
     const d = {
-      client: { ...client, call: client.call, readContract: client.readContract, simulateCalls: async (a: never) => { sims++; return client.simulateCalls(a); } },
+      client: { ...client, call: client.call, readContract: client.readContract, simulateCalls: async (a: never) => { state.sims++; return client.simulateCalls(a); } },
       repo: r, router: book, alarmBook: book, multicall3: "0xcA11bde05977b3631167028862bE2a173976CA11", morpho: book, account: dev.address,
-      send: async () => { sends++; return `0x${"00".repeat(32)}` as Hex; },
-      now: () => now, paidOnly: true, quarantine, misses,
+      send: async () => { state.sends++; return `0x${"00".repeat(32)}` as Hex; },
+      now: () => state.now, paidOnly: true, quarantine: state.quarantine, misses: state.misses,
+      ...over,
     } as unknown as KeeperDeps;
+    return { d, r, state };
+  }
+
+  test("the poke is sent under a limit that covers it, and a poke that doesn't fire backs off instead of repeating every pass", async () => {
+    const { d, r, state } = await deps();
     // anvil has no Multicall3, so every shared request fails and each key is checked on its own: the same answers.
+    const gases: bigint[] = [];
+    d.send = (async (tx: { gas: bigint }) => { state.sends++; gases.push(tx.gas); return `0x${"00".repeat(32)}` as Hex; }) as never;
     const passes = 5;
     for (let i = 0; i < passes; i++) {
-      expect(await pokeTripped(d)).toEqual([]);
-      now += 1;
+      expect(await pokeTripped(d)).toEqual([]); // the stand-in send never lands, so nothing fires
+      state.now += 1;
     }
-    expect(sims).toBe(passes); // one simulation per pass, every pass
-    expect(sends).toBe(0);
-    expect(quarantine.has(key.toLowerCase())).toBe(false);
-    expect(misses.size).toBe(0);
-    expect((await r.health(now)).counters.poke_fail).toBe(String(passes));
+    expect(state.sims).toBe(1); // simulated and sent once; the next passes leave the key out
+    expect(state.sends).toBe(1);
+    expect(gases[0]).toBeGreaterThanOrEqual(READ_GAS_FLOOR);
+    expect(state.quarantine.has(key.toLowerCase())).toBe(true);
+    expect(state.misses.get(key.toLowerCase())).toBe(1);
+    // It comes back after the miss window, and then the miss is counted again.
+    state.now += MISS_QUARANTINE_SEC;
+    await pokeTripped(d);
+    expect(state.sends).toBe(2);
+    expect(state.misses.get(key.toLowerCase())).toBe(2);
+    expect((await r.health(state.now)).counters.poke_miss).toBe("2");
+  });
+
+  test("a poke the keeper refuses (over its cap) is a miss with the normal backoff, not a failure repeated every pass", async () => {
+    const { d, r, state } = await deps();
+    // A node whose simulation says the poke needs more than a poke may use.
+    d.client = { ...d.client, simulateCalls: async () => { state.sims++; return { results: [{ status: "success", data: "0x", gasUsed: POKE_CALL_GAS + 1n }] }; } } as never;
+    for (let i = 0; i < 5; i++) {
+      expect(await pokeTripped(d)).toEqual([]);
+      state.now += 1;
+    }
+    expect(state.sims).toBe(1);
+    expect(state.sends).toBe(0);
+    expect(state.quarantine.has(key.toLowerCase())).toBe(true);
+    expect(state.misses.get(key.toLowerCase())).toBe(1);
+    expect((await r.health(state.now)).counters.poke_miss).toBe("1");
+  });
+
+  test("a poke that reverts in simulation is a miss too", async () => {
+    const { d, state } = await deps();
+    d.client = { ...d.client, simulateCalls: async () => { state.sims++; return { results: [{ status: "failure", data: "0x", gasUsed: 100_000n }] }; } } as never;
+    for (let i = 0; i < 3; i++) {
+      await pokeTripped(d);
+      state.now += 1;
+    }
+    expect(state.sims).toBe(1);
+    expect(state.misses.get(key.toLowerCase())).toBe(1);
+  });
+
+  test("sent for real, the poke lands under the keeper's limit and fires the alarm", async () => {
+    let limit = 0n;
+    const { d, state } = await deps({
+      send: (async (tx: { to: Address; data: Hex; gas: bigint }) => {
+        limit = tx.gas;
+        return (await send(tx.to, tx.data, tx.gas)).transactionHash;
+      }) as never,
+    });
+    expect(await pokeTripped(d)).toEqual([key]);
+    expect(limit).toBeGreaterThanOrEqual(READ_GAS_FLOOR);
+    expect(state.misses.size).toBe(0);
   });
 });

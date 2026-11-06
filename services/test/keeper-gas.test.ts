@@ -13,7 +13,7 @@ import { Kind, presetsFor } from "../src/api/presets";
 import { erc20Abi, routerAbi } from "../src/chain/abi";
 import {
   ALARM_TTL, checkpointKeys, claimOwed, drainExits, limitFromSim, MAX_CHECKPOINTS_PER_PASS, MAX_OWED_PER_PASS, MAX_STRIKES, onFired,
-  EXIT_SWAP_HEADROOM, READ_GAS_FLOOR, RETRY_SEC, SMALL_CALL_GAS, UNLISTED_EXIT_GAS, type KeeperDeps,
+  EXIT_SWAP_HEADROOM, POKE_CALL_GAS, READ_GAS_FLOOR, RETRY_SEC, UNLISTED_EXIT_GAS, type KeeperDeps,
 } from "../src/keeper/keeper";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
@@ -41,8 +41,8 @@ beforeEach(async () => {
 const bal = (v: bigint) => encodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", result: v });
 
 /** One position on `target`, whose exit uses `burn` gas and whose balance only drops by `pays` per exit. */
-async function exitScenario(target: Address, burn: bigint, pays = 0n) {
-  await r.upsertPosition({ posId: POS, owner: ATTACKER.toLowerCase(), adapter: ROUTER, target: target.toLowerCase(), tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: [KEY] });
+async function exitScenario(target: Address, burn: bigint, pays = 0n, key: Hex = KEY) {
+  await r.upsertPosition({ posId: POS, owner: ATTACKER.toLowerCase(), adapter: ROUTER, target: target.toLowerCase(), tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: [key] });
   let now = FIRED;
   let shares = 100n;
   const sends: { to: Address; gas?: bigint }[] = [];
@@ -67,7 +67,7 @@ async function exitScenario(target: Address, burn: bigint, pays = 0n) {
       return TX;
     },
   } as unknown as KeeperDeps;
-  expect(await onFired(d, KEY, FIRED)).toBe(1);
+  expect(await onFired(d, key, FIRED)).toBe(1);
   /** Runs the exits loop every RETRY_SEC for `sec` seconds. */
   const run = async (sec: number) => {
     for (const end = now + sec; now < end; now += RETRY_SEC) await drainExits(d);
@@ -109,15 +109,22 @@ describe("exits from a vault built to burn the keeper's gas", () => {
     expect(at.slice(0, 4)).toEqual([0, 60, 180, 420]);
   });
 
-  test("an unlisted exit that pays out part each time keeps its normal retry", async () => {
+  test("an unlisted exit that pays out only part is a retry, and a retry earns a strike like any other failure", async () => {
     const { sends, run } = await exitScenario(HOSTILE, 300_000n, 10n);
-    await run(10 * RETRY_SEC);
-    expect(sends.length).toBe(10);
-    expect(await jobRow()).toMatchObject({ done: true, strikes: 0 });
+    await run(ALARM_TTL);
+    expect(sends.length).toBe(MAX_STRIKES);
+    expect(await jobRow()).toMatchObject({ done: true, strikes: MAX_STRIKES });
   });
 
-  test("a listed vault keeps its fast retry, with no cap but the transaction limit", async () => {
-    const { sends, run } = await exitScenario(LISTED, UNLISTED_EXIT_GAS * 2n);
+  test("a listed vault's exit on a key that is not one of its presets gets the unlisted treatment", async () => {
+    const { sends, run } = await exitScenario(LISTED, UNLISTED_EXIT_GAS * 2n); // KEY is not a preset of LISTED
+    await run(ALARM_TTL);
+    expect(sends).toEqual([]); // over the unlisted cap: refused
+    expect(await jobRow()).toMatchObject({ done: true, strikes: MAX_STRIKES });
+  });
+
+  test("a listed vault keeps its fast retry on its own presets, with no cap but the transaction limit", async () => {
+    const { sends, run } = await exitScenario(LISTED, UNLISTED_EXIT_GAS * 2n, 0n, presetsFor(LISTED)[0]!.key);
     await run(10 * RETRY_SEC);
     expect(sends.length).toBe(10);
     expect(sends.every((s) => s.gas === limitFromSim(UNLISTED_EXIT_GAS * 2n) + EXIT_SWAP_HEADROOM)).toBe(true);
@@ -212,7 +219,7 @@ describe("checkpoints", () => {
   test("a checkpoint that would use more than the cap isn't sent", async () => {
     await setup(8);
     const { d, sends } = deps();
-    (d.client as unknown as { simulateCalls: unknown }).simulateCalls = async () => ({ results: [{ status: "success", data: "0x", gasUsed: SMALL_CALL_GAS + 1n }] });
+    (d.client as unknown as { simulateCalls: unknown }).simulateCalls = async () => ({ results: [{ status: "success", data: "0x", gasUsed: POKE_CALL_GAS + 1n }] });
     await checkpointKeys(d, (await r.liveKeysOfKind(Kind.SHARE_DROP, 1000)) as Hex[]);
     expect(sends).toEqual([]);
   });

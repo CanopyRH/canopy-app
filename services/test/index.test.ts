@@ -56,7 +56,7 @@ const LOGS: RpcLog[] = [
 ];
 
 const rpcLog = (l: RpcLog) => ({
-  address: l.address, topics: l.topics, data: l.data, blockNumber: numberToHex(l.block), blockHash: TX(0xee), transactionHash: l.tx, transactionIndex: "0x0", logIndex: numberToHex(l.index), removed: false,
+  address: l.address, topics: l.topics, data: l.data, blockNumber: numberToHex(l.block), blockHash: `0x${l.block.toString(16).padStart(64, "0")}`, transactionHash: l.tx, transactionIndex: "0x0", logIndex: numberToHex(l.index), removed: false,
 });
 
 function callResult(to: string, data: Hex): Hex {

@@ -39,6 +39,10 @@ export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent
       });
       break;
     }
+    case "SwapLegSet":
+      // The router logs a position's legs right after its Armed log. Their exits run token code the owner chose.
+      await r.markSwaps(a.posId, true);
+      break;
     case "Disarmed":
       await r.disarm(a.posId);
       break;
@@ -145,6 +149,11 @@ export interface SyncOptions {
   onDeepReorg?: (i: ReorgInfo) => Promise<unknown>;
   /** Blocks of hashes to remember. Defaults to REORG_WINDOW. */
   window?: bigint;
+  /**
+   * Called at the start of a pass and again before each range of logs is applied. It throws when the database no longer
+   * belongs to this reader's contracts, so a process on old addresses stops before it writes.
+   */
+  fence?: () => Promise<void>;
 }
 
 type Chain = Pick<PublicClient, "getBlockNumber" | "getLogs"> & Partial<Pick<PublicClient, "getBlock">>;
@@ -158,6 +167,21 @@ async function chainHash(client: Chain, block: bigint): Promise<string | null> {
     if ((e as Error).name === "BlockNotFoundError") return null;
     throw e;
   }
+}
+
+/**
+ * Rewinds a reader to `rewoundTo`. Undo first, drop the logs parked from the dropped blocks, then move the cursor, then
+ * forget the rest. A crash in between repeats the undo, which is safe; the parked logs are gone before the cursor moves,
+ * so a restart can't apply one from a block that no longer exists, and the stale hashes are ignored once the cursor is behind them.
+ */
+async function rewind(r: Repo, opts: SyncOptions, from: bigint, rewoundTo: bigint, beyondWindow: boolean) {
+  await r.queueRecheck(opts.name, rewoundTo);
+  await opts.onRewind?.(rewoundTo);
+  await r.dropRetries(opts.name, beyondWindow ? 0n : rewoundTo);
+  await r.setCursor(opts.name, rewoundTo);
+  await r.dropFrom(opts.name, beyondWindow ? 0n : rewoundTo);
+  await r.bump("reorgs_handled");
+  console.warn("reorg handled", opts.name, `cursor ${from} -> ${rewoundTo}`, beyondWindow ? "(past the remembered window)" : `(${from - rewoundTo} blocks)`);
 }
 
 /**
@@ -180,14 +204,7 @@ async function checkReorg(client: Chain, r: Repo, opts: SyncOptions, from: bigin
   // Past everything remembered, the safe choice is the start of the window: nothing older is trusted or kept.
   const windowStart = from - (opts.window ?? REORG_WINDOW);
   const rewoundTo = beyondWindow ? (windowStart > opts.startBlock ? windowStart : opts.startBlock) : stored[good]!.block + 1n;
-  // Undo first, then move the cursor, then forget. A crash in between repeats the undo, which is safe, and the stale
-  // hashes are ignored once the cursor is behind them.
-  await r.queueRecheck(opts.name, rewoundTo);
-  await opts.onRewind?.(rewoundTo);
-  await r.setCursor(opts.name, rewoundTo);
-  await r.dropFrom(opts.name, beyondWindow ? 0n : rewoundTo);
-  await r.bump("reorgs_handled");
-  console.warn("reorg handled", opts.name, `cursor ${from} -> ${rewoundTo}`, beyondWindow ? "(past the remembered window)" : `(${from - rewoundTo} blocks)`);
+  await rewind(r, opts, from, rewoundTo, beyondWindow);
   if (beyondWindow && opts.onDeepReorg) {
     try {
       await opts.onDeepReorg({ source: opts.name, cursor: from, rewoundTo, beyondWindow });
@@ -218,10 +235,11 @@ export async function syncLogs(client: Chain, r: Repo, opts: SyncOptions) {
   const tune: RetryTuning = { baseSec: RETRY_BASE_SEC, maxSec: RETRY_MAX_SEC, stuckAfterSec: STUCK_AFTER_SEC, ...opts.retry };
   const window = opts.window ?? REORG_WINDOW;
   const track = client.getBlock !== undefined;
+  await opts.fence?.();
   // Before anything is retried, so logs parked from blocks that are gone are dropped first.
   let from = (await r.cursor(opts.name)) ?? opts.startBlock;
   if (track && from > opts.startBlock) from = await checkReorg(client, r, opts, from);
-  await retryParked(r, opts, now, tune);
+  await retryParked(r, opts, now, tune, from);
 
   // With a confirmation depth, the newest blocks are left for the next pass. Nothing before the depth is ever read early.
   const head = await client.getBlockNumber();
@@ -245,6 +263,14 @@ export async function syncLogs(client: Chain, r: Repo, opts: SyncOptions) {
       if (h) hashes.set(from - 1n, h);
     }
     anchor = false;
+    await opts.fence?.();
+    // Nodes behind a load balancer can answer from different forks. A log whose block hash disagrees with the hash already
+    // known for its block (stored, or read for this range) is treated as a reorg: nothing from this range is applied.
+    if (remember && (await logsDisagree(client, r, opts.name, logs, hashes))) {
+      console.warn("log block hash does not match the chain's", opts.name, `range ${from}-${to}`);
+      await rewind(r, opts, from, from, false);
+      return tip;
+    }
     for (const l of logs) {
       const subject = subjectOf(l);
       if (remember && l.blockNumber != null) {
@@ -271,6 +297,20 @@ export async function syncLogs(client: Chain, r: Repo, opts: SyncOptions) {
   await recheckRewound(r, opts, tip);
   await reportStuck(r, opts, now(), tune);
   return tip;
+}
+
+/** Whether any log came from a block whose hash differs from the one known for that block number. */
+async function logsDisagree(client: Chain, r: Repo, source: string, logs: readonly Log[], known: ReadonlyMap<bigint, string>): Promise<boolean> {
+  const seen = new Map(known);
+  for (const l of logs) {
+    if (l.blockNumber == null || !l.blockHash) continue;
+    const h = l.blockHash.toLowerCase();
+    // The hash already known for this block: from this range's read, the stored window, or (once per block) the chain now.
+    const was = seen.get(l.blockNumber) ?? (await r.storedHash(source, l.blockNumber)) ?? (await chainHash(client, l.blockNumber));
+    if (was && was.toLowerCase() !== h) return true;
+    seen.set(l.blockNumber, h);
+  }
+  return false;
 }
 
 /** Runs the pending re-check once the indexer has caught up after a rewind. A failure leaves the list for the next pass. */
@@ -316,6 +356,7 @@ export async function recheckRouter(
       done.add(p.pos_id);
       const armed = (await read("isArmed", [p.pos_id])) as boolean;
       const keys = armed ? ((await read("keysOf", [p.pos_id])) as readonly string[]) : undefined;
+      if (armed) await r.markSwaps(p.pos_id, ((await read("swapsOf", [p.pos_id]).catch(() => [])) as readonly unknown[]).length > 0);
       if (await r.syncArm(p.pos_id, armed, keys)) {
         changed++;
         if (!armed) await r.bump("arm_reorged");
@@ -339,9 +380,12 @@ async function park(r: Repo, opts: SyncOptions, l: Log, at: number, error: unkno
 }
 
 /** Retries the parked logs that are due, oldest first. A log that still fails keeps every later log about the same thing waiting. */
-async function retryParked(r: Repo, opts: SyncOptions, now: () => number, tune: RetryTuning) {
+async function retryParked(r: Repo, opts: SyncOptions, now: () => number, tune: RetryTuning, cursor: bigint) {
   const blocked = new Set<string>();
   for (const p of await r.parkedLogs(opts.name)) {
+    // A log is only ever parked from a block behind the cursor. One at or ahead of it belongs to blocks a rewind dropped,
+    // which the re-read brings back if they are still on chain.
+    if (BigInt(p.block) >= cursor) continue;
     if (p.subject && blocked.has(p.subject)) continue;
     if (p.next_at > now()) {
       if (p.subject) blocked.add(p.subject);

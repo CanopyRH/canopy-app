@@ -1,16 +1,18 @@
-// Review V3-S02. The keeper decides that an exit job is a "listed vault" job from the position's target alone, never from
+// Review V3-S02. The keeper decided that an exit job is a "listed vault" job from the position's target alone, never from
 // the alarm key. Arming is open to anyone with a plan, and a position on a listed vault can arm keys the attacker
 // registered on contracts of their own, fire whenever they like, and replace with fresh ones. So the attacker's jobs:
-//   - run in the "listed" exits loop, which the second review split off so that attacker jobs could not delay listed exits;
-//   - are fetched ahead of a victim's job (oldest run_at first, 32 to a page);
-//   - never earn strikes: a listed job "keeps its fast retry whatever happened", so a job whose key was replaced (its exit
-//     reverts NotAuthorized) or whose position was disarmed is simulated again every 30 s for the alarm's whole day.
-// A victim's exit on that listed vault waits behind every attacker job due before it, so the delay grows with the
-// number of jobs the attacker creates (8 per fire, one re-arm per 8 keys). Local mocks and the test database only.
+//   - ran in the "listed" exits loop, which the second review split off so that attacker jobs could not delay listed exits;
+//   - were fetched ahead of a victim's job (oldest run_at first, 32 to a page);
+//   - never earned strikes: a listed job "keeps its fast retry whatever happened", so a job whose key was replaced (its exit
+//     reverts NotAuthorized) or whose position was disarmed was simulated again every 30 s for the alarm's whole day.
+// Fixed: a job is a listed job only if its key is one of the vault's presets; a job whose position is gone, disarmed or
+// re-armed without its key ends; a retry on any other job earns a strike; and one owner has at most 32 open jobs in the
+// queue. The reviewer's 256-job scenario now sends the victim's exit on the first pass. Local mocks and the test database only.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { decodeFunctionData, encodeFunctionResult, type Address, type Hex } from "viem";
+import { presetsFor } from "../../src/api/presets";
 import { erc20Abi, multicall3Abi, routerAbi } from "../../src/chain/abi";
-import { ALARM_TTL, drainExits, onFired, RETRY_SEC, type KeeperDeps } from "../../src/keeper/keeper";
+import { ALARM_TTL, drainExits, MAX_OPEN_EXITS_PER_OWNER, MAX_STRIKES, onFired, type KeeperDeps } from "../../src/keeper/keeper";
 import type { Db } from "../../src/store/db";
 import { repo, type Repo } from "../../src/store/repo";
 import { freshDb } from "../db";
@@ -26,7 +28,7 @@ const ATTACKER = "0xabababababababababababababababababababab" as Address;
 const VICTIM = "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" as Address;
 const ATTACKER_POS = `0x${"e0".repeat(32)}` as Hex;
 const VICTIM_POS = `0x${"f0".repeat(32)}` as Hex;
-const VICTIM_KEY = `0x${"c1".repeat(32)}` as Hex; // the listed vault's own preset
+const VICTIM_KEY = presetsFor(LISTED)[0]!.key; // the listed vault's own preset
 /** Keys the attacker registered on a contract of their own (a PAUSED detector they can switch on). */
 const ownKey = (i: number) => `0x${"a"}${i.toString(16).padStart(63, "0")}` as Hex;
 const FIRED = 1_000;
@@ -113,7 +115,7 @@ async function passesUntilVictim(d: KeeperDeps, st: { now: number; victimLeft: b
   return Infinity;
 }
 
-describe("V3-S02: attacker keys on a listed vault's position get the listed vault's treatment", () => {
+describe("V3-S02: attacker keys on a listed vault's position don't get the listed vault's treatment", () => {
   test("control: the same 256 attacker jobs on the attacker's own vault don't touch the listed loop", async () => {
     const { d, st } = keeper(LISTED);
     await attackerJobs(d, OWN_VAULT, 32);
@@ -122,33 +124,70 @@ describe("V3-S02: attacker keys on a listed vault's position get the listed vaul
     expect(await passesUntilVictim(d, st, 50)).toBe(1);
   });
 
-  test("256 jobs from own keys on a position in the listed vault: the victim's exit waits 9 passes and ~1,800 node requests", async () => {
+  test("256 jobs from own keys on a position in the listed vault: the victim's exit goes out on the first pass, after a handful of node requests", async () => {
     const { d, st } = keeper(LISTED);
     await attackerJobs(d, LISTED, 32); // 32 re-arms, 256 fires: one plan, a few hundred cheap transactions
     expect(Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM jobs WHERE kind='exit' AND NOT done`))[0]!.n)).toBe(256);
     st.now = FIRED + 60;
     await victimFires(d, st.now);
     const passes = await passesUntilVictim(d, st, 50);
-    // 256 attacker jobs at 32 a page, every one fetched ahead of the victim's: 8 passes of attacker work first.
-    expect(passes).toBe(9);
-    // Each attacker job costs a bundle simulation share, then runExit: 3 reads and 6 sized simulations, all failing.
-    expect(st.victimSentAtRpc).toBeGreaterThan(256 * 8);
-    console.log(`victim's exit sent on pass ${passes}, after ${st.victimSentAtRpc} node requests`);
+    expect(passes).toBe(1);
+    // Before: 8 passes of attacker work first, over 2,000 node requests. The listed loop never sees the attacker's keys.
+    expect(st.victimSentAtRpc).toBeLessThan(40);
   });
 
-  test("a job whose key was replaced never earns a strike: retried every 30 s until the alarm's day is over", async () => {
+  test("the same, with every loop running: the victim is still the first transaction of the first pass", async () => {
     const { d, st } = keeper(LISTED);
+    await attackerJobs(d, LISTED, 32);
+    st.now = FIRED + 60;
+    await victimFires(d, st.now);
+    await drainExits(d); // scope "all": listed jobs are fetched first
+    expect(st.victimLeft).toBe(0n);
+    expect(st.victimSentAtRpc).toBeLessThan(40);
+  });
+
+  test("jobs whose key was replaced end on the first pass instead of retrying all day, and the live ones earn a strike", async () => {
+    const { d } = keeper(LISTED);
     await attackerJobs(d, LISTED, 2); // the first 8 jobs' keys were replaced by the second arm
     const stale = (await db.query<{ id: string }>(`SELECT id FROM jobs WHERE payload->>'key'=$1`, [ownKey(0)]))[0]!.id;
-    // A pass every two hours of the alarm's day (the real loop runs every second, and the job is due every 30 s).
-    let passes = 0;
-    for (st.now = FIRED; st.now <= FIRED + ALARM_TTL - RETRY_SEC; st.now += 7_200) {
-      await drainExits(d, "listed");
-      passes++;
+    await drainExits(d, "unlisted");
+    expect(await db.query(`SELECT 1 FROM jobs WHERE id=$1`, [stale])).toEqual([]); // ended
+    // The 8 live keys' jobs were tried (their exit reverts) and each earned a strike.
+    const live = await db.query<{ strikes: number; done: boolean }>(`SELECT strikes, done FROM jobs WHERE payload->>'key' = ANY($1::text[])`, [`{${Array.from({ length: 8 }, (_, i) => ownKey(8 + i)).join(",")}}`]);
+    expect(live).toHaveLength(8);
+    expect(live.every((j) => j.strikes === 1 && !j.done)).toBe(true);
+  });
+
+  test("a job on a key that is armed but whose exit keeps failing earns strikes and ends after MAX_STRIKES", async () => {
+    const { d, st } = keeper(LISTED);
+    await attackerJobs(d, LISTED, 1);
+    const job = (await db.query<{ id: string }>(`SELECT id FROM jobs WHERE payload->>'key'=$1`, [ownKey(0)]))[0]!.id;
+    // A pass every two hours of the alarm's day.
+    for (st.now = FIRED; st.now <= FIRED + ALARM_TTL - 60; st.now += 7_200) await drainExits(d, "unlisted");
+    const row = (await db.query<{ done: boolean; strikes: number }>(`SELECT done, strikes FROM jobs WHERE id=$1`, [job]))[0]!;
+    expect(row).toEqual({ done: true, strikes: MAX_STRIKES });
+  });
+
+  test("a disarmed position's jobs end", async () => {
+    const { d } = keeper(LISTED);
+    await attackerJobs(d, LISTED, 1);
+    await r.disarm(ATTACKER_POS);
+    await drainExits(d, "unlisted");
+    expect(Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM jobs WHERE kind='exit' AND NOT done`))[0]!.n)).toBe(0);
+  });
+
+  test("one owner has at most MAX_OPEN_EXITS_PER_OWNER open jobs in the queue, however many positions and keys", async () => {
+    const { d } = keeper(OWN_VAULT);
+    for (let p = 0; p < 6; p++) {
+      const posId = `0x${"e"}${p.toString(16).padStart(63, "0")}` as Hex;
+      const keys = Array.from({ length: 8 }, (_, i) => ownKey(p * 8 + i));
+      await r.upsertPosition({ posId, owner: ATTACKER.toLowerCase(), adapter: ROUTER, target: OWN_VAULT.toLowerCase(), tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys });
+      for (const k of keys) await onFired(d, k, FIRED);
     }
-    const job = (await db.query<{ done: boolean; strikes: number; attempts: number }>(`SELECT done, strikes, attempts FROM jobs WHERE id=$1`, [stale]))[0]!;
-    expect(job.done).toBe(false);
-    expect(job.strikes).toBe(0);
-    expect(job.attempts).toBe(passes); // every pass retried it; at the real pace that is ~2,880 attempts, each 6+ simulations
+    expect(Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM jobs WHERE kind='exit' AND NOT done`))[0]!.n)).toBe(48);
+    expect((await r.dueJobs("exit", FIRED, 100, undefined, MAX_OPEN_EXITS_PER_OWNER)).length).toBe(MAX_OPEN_EXITS_PER_OWNER);
+    // Another owner's job is not held back by the first owner's.
+    await victimFires(d, FIRED);
+    expect((await r.dueJobs("exit", FIRED, 100, undefined, MAX_OPEN_EXITS_PER_OWNER)).length).toBe(MAX_OPEN_EXITS_PER_OWNER + 1);
   });
 });
