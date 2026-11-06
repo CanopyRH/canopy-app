@@ -1,4 +1,4 @@
-/** CI gate: user-facing copy may not use return, rate, cover or guarantee language. */
+/** CI gate: user-facing copy may not use return, rate, cover, premium, partner or guarantee language. */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -17,6 +17,9 @@ export const BANNED = [
   /\bcan'?t lose\b/i,
   /\balways gets? out\b/i,
   /\bendorsed\b/i,
+  /\bcover(s|ed|ing)?\b/i,
+  /\bpremiums?\b/i,
+  /\bpartner(s|ed|ing|ship|ships)?\b/i,
 ];
 
 export function findBanned(text: string): string[] {

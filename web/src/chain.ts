@@ -180,7 +180,7 @@ function make(c: Chain) {
 
   const disarmAll = (s: Signer) => send(s, disarmAllTx(c.router!));
 
-  /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
+  /** A plan is paid in this network's plan token to this network's payments address, and applies only to this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
   const explainPosition = async (vault: Address) => {

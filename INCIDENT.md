@@ -1,6 +1,6 @@
 # Incident runbook: pausing and stopping
 
-This page is for the people who hold a Safe signer key or the hosting dashboard. It covers the four things you may need
+This page is for the people who hold a Safe signer key or the hosting dashboard. It explains the four things you may need
 in a hurry: pausing new arming, reacting to an admin alert nobody expected, and stopping a keeper or a watcher. The
 roles and who holds them are in [SECURITY.md](SECURITY.md).
 

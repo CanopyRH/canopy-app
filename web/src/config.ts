@@ -149,7 +149,7 @@ export function saveChain(key: string, store?: Pick<Storage, "setItem">) {
   }
 }
 
-/** Says that a plan covers one network. Null when the app offers only one. */
+/** Says that a plan applies to one network. Null when the app offers only one. */
 export function planScope(c: Chain, list: Chain[]): string | null {
   const others = list.filter((o) => o.key !== c.key).map((o) => o.chainName);
   if (!others.length) return null;

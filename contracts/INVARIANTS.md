@@ -93,7 +93,7 @@ can call them for a position.
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_disarm_stopsThirdParties`, `test_disarmAll_stopsEveryPosition`, `test_disarmAll_blocksExitsUntilRearmed`, `test_revokedApproval_movesNothing`, `test_disarm_onlyOwner`.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_afterDisarmAll_ownerExits_butNoThirdParty`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_disarm_NotOwner_stranger`, `test_disarm_NotOwner_unknownPosition`.
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_onlyTheOwnerCanDisarm`: no non-owner disarm ever succeeds. `invariant_disarmedPositionsCantBeExitedByAStranger` covers that a revoke sticks.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_onlyTheOwnerCanDisarm`: no non-owner disarm ever succeeds. `invariant_disarmedPositionsCantBeExitedByAStranger` checks that a revoke sticks.
 
 ### R5. Admin can only set adapters and the guardian, and pause new arming, only until expiry; the guardian can only pause new arming; nobody can upgrade
 
@@ -139,7 +139,7 @@ is exactly one day: `arm` refuses a bare DRAIN key, a BOTH key with a DRAIN part
 key with a DRAIN part and any other window (`DrainNeedsQuorum`), and a BOTH key whose part is itself a BOTH key
 (`NestedBoth`), so one level of parts is the whole tree. These checks read only AlarmBook's stored detectors. Since a
 BOTH key fires only when both parts fired within its window, no DRAIN fire can authorize an exit unless its QUORUM
-partner (two active watchers' signatures) fired within the 24 hours before the BOTH fire (A8).
+counterpart (two active watchers' signatures) fired within the 24 hours before the BOTH fire (A8).
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_rejectsUnlistedAdapter`, `test_arm_rejectsSlipAboveCap`, `test_arm_rejectsTooManyKeys`, `test_arm_rejectsBadHarbour`, `test_arm_rejectsWhilePaused`, `test_arm_isBoundToCaller`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`, `test_arm_AlarmNotClear_unknownKey`, `test_arm_AlarmNotClear_trippedKey`, `test_arm_AlarmNotClear_firedInTheLastDay`, `test_arm_AlarmNotClear_unreadableKeyFailsClosed`, `test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes`, `test_arm_DrainNeedsQuorum`, `test_arm_DrainNeedsQuorum_bothWithoutAQuorumPart` (with the one-day window case), `test_arm_NestedBoth`.

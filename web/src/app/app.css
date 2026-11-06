@@ -61,3 +61,6 @@ a.cd-brand{color:inherit;text-decoration:none}
   .cd-chain-switch{order:3;width:100%}
   .cd-chain-switch button{flex:1}
 }
+.cd-region-notice{display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;padding:10px 12px;border:1px solid rgba(120,120,128,.28);border-radius:10px;background:rgba(120,120,128,.08);font-size:13px;line-height:1.45}
+.cd-region-notice svg{flex:none;margin-top:2px;opacity:.7}
+.cd-region-notice p{margin:0}

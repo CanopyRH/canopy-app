@@ -64,6 +64,6 @@ export function watchAlert(a: { vaultName: string; what: string; withdrawInRobin
 
 export const WELCOME = [
   "Canopy watches DeFi vaults and tells you when an alarm fires.",
-  "See the vaults we cover with /vaults, and follow one with /watch <vault address>. This needs no wallet connection.",
-  "Canopy does not promise any outcome and does not cover losses.",
+  "See the vaults we watch with /vaults, and follow one with /watch <vault address>. This needs no wallet connection.",
+  "Canopy does not promise any outcome and does not pay for losses.",
 ].join("\n");
