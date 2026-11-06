@@ -20,7 +20,7 @@ import { opsProblems } from "./keeper/ops";
 import { serialSender } from "./keeper/sender";
 import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
-import { switchContracts, switchText } from "./store/switch";
+import { alarmsCursor, contractFence, routerCursor, SwitchRefused, switchContracts, switchText } from "./store/switch";
 import { repo } from "./store/repo";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
@@ -71,13 +71,25 @@ export function stop() {
 
 await migrate(db);
 // The database may hold state from other contracts (v1). The first service to start on new addresses clears it, once.
+// That only happens when the operator says so (CONTRACT_SWITCH is this deploy's router). Any other service whose addresses
+// differ from the stored ones, such as an old copy that restarts after the switch, logs, tells the ops chat and exits.
 if (contracts) {
-  const switched = await switchContracts(db, { router, alarmBook, startBlock: env.START_BLOCK });
-  if (switched) {
-    console.warn(switchText(switched));
-    if (env.OPS_CHAT_ID !== undefined) await queueOps(r, `switch:${router.toLowerCase()}:${alarmBook.toLowerCase()}`, `Canopy ops: ${switchText(switched)}`, now());
+  try {
+    const switched = await switchContracts(db, { router, alarmBook, startBlock: env.START_BLOCK }, env.CONTRACT_SWITCH);
+    if (switched) {
+      console.warn(switchText(switched));
+      if (env.OPS_CHAT_ID !== undefined) await queueOps(r, `switch:${router.toLowerCase()}:${alarmBook.toLowerCase()}`, `Canopy ops: ${switchText(switched)}`, now());
+    }
+  } catch (e) {
+    if (!(e instanceof SwitchRefused)) throw e;
+    console.error("contract switch refused:", e.message);
+    if (env.OPS_CHAT_ID !== undefined) await queueOps(r, `switch-refused:${router.toLowerCase()}:${alarmBook.toLowerCase()}`, `Canopy ops: a service on router ${router} refused to start. ${e.message}`, now()).catch(() => {});
+    process.exit(1);
   }
 }
+/** Every writer calls this at the start of a pass: the stored addresses must still be this process's. */
+const fence = contracts ? contractFence(db, { router, alarmBook }) : undefined;
+const routerName = routerCursor(router), alarmsName = alarmsCursor(alarmBook);
 const listed = env.CARD_VAULTS.split(",").filter(Boolean).map((v) => v.toLowerCase());
 // Bot buttons open the web app, which is a different host from this service's webhook address.
 const appUrl = env.APP_URL ?? env.PUBLIC_URL;
@@ -121,6 +133,7 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
         fees,
         unlistedExitGas: env.KEEPER_UNLISTED_EXIT_GAS,
         checkGas: env.KEEPER_CHECK_GAS,
+        fence,
       };
     })()
   : null;
@@ -146,7 +159,8 @@ const reorgAlert = async (i: ReorgInfo) => {
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
     syncLogs(client, r, {
-      name: "router",
+      name: routerName,
+      fence,
       address: router,
       startBlock: env.START_BLOCK,
       onStuck: stuckAlert,
@@ -157,7 +171,8 @@ if (run("indexer") && contracts) {
     }));
   every(2_000, "alarms", () =>
     syncLogs(client, r, {
-      name: "alarms",
+      name: alarmsName,
+      fence,
       onStuck: stuckAlert,
       onRewind: (from) => r.undoAlarms(from),
       onDeepReorg: reorgAlert,
@@ -221,6 +236,7 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
   if (!keeper || firing.has(key)) return;
   firing.add(key);
   try {
+    await fence?.();
     const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook);
     if (!call) return;
     // Firing costs gas, so it's spent only on alarms in scope: a listed vault's preset, or one a position armed.
@@ -260,7 +276,7 @@ if (run("keeper") && keeper) {
     await r.setCounter("keeper_gas_wei", gasWei);
     if (env.OPS_CHAT_ID === undefined) return;
     const tip = await client.getBlockNumber();
-    const seen = await Promise.all(["router", "alarms"].map((c) => r.cursor(c)));
+    const seen = await Promise.all([routerName, alarmsName].map((c) => r.cursor(c)));
     const cursor = seen.reduce<bigint>((low, c) => (c !== null && c < low ? c : low), tip);
     const { oldestJobSec } = await r.health(now());
     for (const p of opsProblems({ lagBlocks: tip > cursor ? tip - cursor : 0n, gasWei, minGasWei: env.KEEPER_MIN_GAS_WEI, oldestJobSec, maxLagBlocks: parts.maxLagBlocks })) {
@@ -307,6 +323,7 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
   const urls = env.FEED_URLS.split(",").filter(Boolean);
   const peers = env.WATCHER_PEERS.split(",").filter(Boolean);
   every(60_000, "feeds", async () => {
+    await fence?.();
     for (const url of urls) {
       for (const text of await fetchFeed(url, now())) {
         await ingestFeed(db, classify, url, text, now()).catch((e: Error) => console.warn("feed item", e.message));
@@ -372,7 +389,7 @@ if (run("api") || run("bot")) {
     answersPaused,
     health: async () => {
       const tip = await client.getBlockNumber();
-      const cursor = await r.cursor("router");
+      const cursor = await r.cursor(routerName);
       return { chainId: env.CHAIN_ID, tip: tip.toString(), lagBlocks: cursor === null ? null : Number(tip > cursor ? tip - cursor : 0n), watchersApproved: watchers.length, ...(await r.health(now())) };
     },
   });

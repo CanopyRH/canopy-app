@@ -202,7 +202,7 @@ describe("src/index.ts, every role on", () => {
 
   test("/health needs its token and reports the chain head", async () => {
     expect((await get("/health")).status).toBe(403);
-    await until(async () => (await rows(`SELECT 1 FROM cursors WHERE name='router'`)).length > 0, "the router cursor");
+    await until(async () => (await rows(`SELECT 1 FROM cursors WHERE name LIKE 'router@%'`)).length > 0, "the router cursor");
     const res = await get("/health", { authorization: `Bearer ${HEALTH}` });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { chainId: number; tip: string; lagBlocks: number; retryingLogs: number };

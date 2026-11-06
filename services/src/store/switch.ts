@@ -2,25 +2,46 @@ import type { Db } from "./db";
 
 /**
  * The contract switch. Every service shares one database, and what the router and AlarmBook logs wrote there belongs to one
- * pair of contracts. When the addresses in the environment change (v1 to v2), that state is wrong for the new pair, so the
- * first service to start clears it, rewinds the two log cursors to the new START_BLOCK and remembers the new addresses.
- * The rest find the addresses already stored and do nothing.
+ * pair of contracts. When the addresses in the environment change (v1 to v2), that state is wrong for the new pair, so one
+ * service clears it, rewinds the two log cursors to the new START_BLOCK and remembers the new addresses. The rest find the
+ * addresses already stored and do nothing.
+ *
+ * The switch is an operator's decision, not a side effect of starting: a service whose addresses differ from the stored
+ * ones refuses to start (SwitchRefused) unless CONTRACT_SWITCH names its router, which is how the operator says "this is
+ * the deploy that moves the database". Once switched, a later start with the old addresses differs again and refuses, so a
+ * stale process can never switch the database back. The log cursors are named for the contract they follow (`router@0x...`),
+ * so a process on other addresses can't move the new ones; and every writer checks the stored addresses against its own
+ * before it acts (`contractFence`).
  *
  * Cleared: what the contracts' logs and the keeper's exit work derived. Never touched: plans, plan_payments, the payments
  * cursor, vault_follows, feed_items, signals, risk_cards, vault_snaps, vault_admins, sent_alerts, counters, alert and ops
  * jobs, and anything else about Telegram chats.
  */
 export interface Addresses { router: string; alarmBook: string; startBlock: bigint }
+
+/** Thrown when the stored addresses are not the ones a service was started with, and the operator did not authorise the switch. */
+export class SwitchRefused extends Error {}
+
+const lc = (a: string) => a.toLowerCase();
+/** The cursor name of the router log reader for one router. A reader on other addresses has a different name. */
+export const routerCursor = (router: string) => `router@${lc(router)}`;
+/** The cursor name of the AlarmBook log reader for one AlarmBook. */
+export const alarmsCursor = (alarmBook: string) => `alarms@${lc(alarmBook)}`;
 export interface SwitchResult { cleared: Record<string, number>; from: { router: string | null; alarmBook: string | null } }
 
 /** Jobs that exist because of the contracts. Alert and ops jobs belong to chats and are kept. */
 export const CONTRACT_JOB_KINDS = ["exit", "poke", "checkpoint", "claim"] as const;
-/** The log cursors that follow the contracts. The payments cursor follows the plan token and stays. */
+/**
+ * The readers that follow the contracts: `router`, `alarms` and their per-address names (`router@0x...`). The payments
+ * reader follows the plan token and stays.
+ */
 export const CONTRACT_CURSORS = ["router", "alarms"] as const;
 
 /** A list of fixed names as SQL. Only ever fed the constants above. */
 const inList = (names: readonly string[]) => `(${names.map((n) => `'${n}'`).join(",")})`;
-const JOBS = inList(CONTRACT_JOB_KINDS), CURSORS = inList(CONTRACT_CURSORS);
+const JOBS = inList(CONTRACT_JOB_KINDS);
+/** A condition on a column holding a reader's name. */
+const named = (col: string) => `(${CONTRACT_CURSORS.map((n) => `${col}='${n}' OR ${col} LIKE '${n}@%'`).join(" OR ")})`;
 
 const LOCK = 7226680; // not the migration lock (7226679)
 
@@ -37,13 +58,11 @@ const CLEAR: [name: string, sql: string][] = [
   ["attestations", "DELETE FROM attestations"],
   ["detectors", "DELETE FROM detectors"],
   ["jobs", `DELETE FROM jobs WHERE kind IN ${JOBS}`],
-  ["log_retries", `DELETE FROM log_retries WHERE source IN ${CURSORS}`],
-  ["block_hashes", `DELETE FROM block_hashes WHERE source IN ${CURSORS}`],
-  ["log_touches", `DELETE FROM log_touches WHERE source IN ${CURSORS}`],
-  ["reorg_recheck", `DELETE FROM reorg_recheck WHERE source IN ${CURSORS}`],
+  ["log_retries", `DELETE FROM log_retries WHERE ${named("source")}`],
+  ["block_hashes", `DELETE FROM block_hashes WHERE ${named("source")}`],
+  ["log_touches", `DELETE FROM log_touches WHERE ${named("source")}`],
+  ["reorg_recheck", `DELETE FROM reorg_recheck WHERE ${named("source")}`],
 ];
-
-const lc = (a: string) => a.toLowerCase();
 
 async function count(q: Db, sql: string): Promise<number> {
   const rows = await q.query<{ n: number | string }>(`WITH d AS (${sql} RETURNING 1) SELECT count(*)::int AS n FROM d`);
@@ -56,10 +75,10 @@ async function hasContractState(q: Db): Promise<boolean> {
     if ((await q.query(`SELECT 1 FROM ${t} LIMIT 1`)).length > 0) return true;
   }
   if ((await q.query(`SELECT 1 FROM jobs WHERE kind IN ${JOBS} LIMIT 1`)).length > 0) return true;
-  return (await q.query(`SELECT 1 FROM cursors WHERE name IN ${CURSORS} LIMIT 1`)).length > 0;
+  return (await q.query(`SELECT 1 FROM cursors WHERE ${named("name")} LIMIT 1`)).length > 0;
 }
 
-async function run(q: Db, a: Addresses): Promise<SwitchResult | null> {
+async function run(q: Db, a: Addresses, authorise?: string): Promise<SwitchResult | null> {
   const meta = new Map((await q.query<{ key: string; value: string }>(`SELECT key, value FROM meta WHERE key IN ('router','alarm_book')`)).map((r) => [r.key, r.value]));
   const router = lc(a.router), book = lc(a.alarmBook);
   if (meta.get("router") === router && meta.get("alarm_book") === book) return null;
@@ -73,11 +92,18 @@ async function run(q: Db, a: Addresses): Promise<SwitchResult | null> {
     await store();
     return null;
   }
+  if (!authorise || lc(authorise) !== router) {
+    throw new SwitchRefused(
+      `the database holds state for router ${meta.get("router") ?? "none"} and alarm book ${meta.get("alarm_book") ?? "none"}, not for this service's addresses. ` +
+      `Refusing to start. To move the database to these addresses on purpose, set CONTRACT_SWITCH to this router's address for this deploy only.`,
+    );
+  }
   const cleared: Record<string, number> = {};
   for (const [name, sql] of CLEAR) cleared[name] = await count(q, sql);
   // The cursor is the next block to read. One block early costs one empty read and can't skip a log.
   const start = a.startBlock > 0n ? a.startBlock - 1n : 0n;
-  for (const c of CONTRACT_CURSORS) {
+  await q.query(`DELETE FROM cursors WHERE ${named("name")}`);
+  for (const c of [routerCursor(router), alarmsCursor(book)]) {
     await q.query(`INSERT INTO cursors (name, block) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET block=$2`, [c, start.toString()]);
   }
   await store();
@@ -89,12 +115,31 @@ async function run(q: Db, a: Addresses): Promise<SwitchResult | null> {
  * one transaction under an advisory lock, so one does the work and the others wait, then find nothing to do. Returns what
  * it cleared, or null when there was nothing to do.
  */
-export async function switchContracts(db: Db, a: Addresses): Promise<SwitchResult | null> {
-  if (!db.transaction) return run(db, a); // a single-process stand-in
+export async function switchContracts(db: Db, a: Addresses, authorise?: string): Promise<SwitchResult | null> {
+  if (!db.transaction) return run(db, a, authorise); // a single-process stand-in
   return db.transaction(async (q) => {
     await q.query("SELECT pg_advisory_xact_lock($1)", [LOCK]);
-    return run(q, a);
+    return run(q, a, authorise);
   });
+}
+
+/** Thrown by a fence when the database has moved to (or never had) the addresses the caller was started with. */
+export class ContractMismatch extends Error {}
+
+/**
+ * A check every writer runs at the start of a pass: the stored addresses are the ones this process was started with.
+ * One small read per call. A process that was started before a switch, or whose addresses were never stored, throws
+ * instead of writing rows that belong to other contracts.
+ */
+export function contractFence(db: Db, a: Pick<Addresses, "router" | "alarmBook">): () => Promise<void> {
+  const router = lc(a.router), book = lc(a.alarmBook);
+  return async () => {
+    const rows = await db.query<{ key: string; value: string }>(`SELECT key, value FROM meta WHERE key IN ('router','alarm_book')`);
+    const meta = new Map(rows.map((r) => [r.key, r.value]));
+    if (meta.get("router") !== router || meta.get("alarm_book") !== book) {
+      throw new ContractMismatch(`the database belongs to router ${meta.get("router") ?? "none"} and alarm book ${meta.get("alarm_book") ?? "none"}, not to ${router} and ${book}`);
+    }
+  };
 }
 
 /** The one log line and the operator message for a switch. No URLs. */

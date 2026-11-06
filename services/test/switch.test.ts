@@ -3,11 +3,12 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { postgres, type Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
-import { switchContracts, switchText } from "../src/store/switch";
+import { alarmsCursor, contractFence, ContractMismatch, routerCursor, SwitchRefused, switchContracts, switchText } from "../src/store/switch";
 import { freshDb } from "./db";
 
 const V1 = { router: "0x00000000000000000000000000000000000000a1", alarmBook: "0x00000000000000000000000000000000000000a2", startBlock: 100n };
 const V2 = { router: "0x00000000000000000000000000000000000000b1", alarmBook: "0x00000000000000000000000000000000000000b2", startBlock: 5_000n };
+const GO = { router: V2.router }; // CONTRACT_SWITCH = the new router: the operator authorises the move
 const OWNER = "0x00000000000000000000000000000000000000c1";
 const KEY = `0x${"11".repeat(32)}`;
 const POS = `0x${"22".repeat(32)}`;
@@ -30,8 +31,8 @@ async function seed() {
   await db.query(`INSERT INTO owed_logs (tx, log_index, owner, token, amount, block) VALUES ($1,0,$2,$2,7,131)`, [TX, OWNER]);
   await db.query(`INSERT INTO attestations (key, evidence_hash, deadline, signer, sig) VALUES ($1,$2,9,$3,'0x01')`, [KEY, HASH, OWNER]);
   await r.enqueue("exit", `${KEY}:1000:${POS}`, { posId: POS }, 1);
-  await r.parkLog({ source: "router", tx: TX, logIndex: 0, subject: POS, block: 125n, log: { x: 1 }, now: 1, nextAt: 2, error: "e" });
-  for (const source of ["router", "alarms", "payments"]) {
+  await r.parkLog({ source: routerCursor(V1.router), tx: TX, logIndex: 0, subject: POS, block: 125n, log: { x: 1 }, now: 1, nextAt: 2, error: "e" });
+  for (const source of [routerCursor(V1.router), alarmsCursor(V1.alarmBook), "router", "alarms", "payments"]) {
     await db.query(`INSERT INTO block_hashes (source, block, hash) VALUES ($1,140,$2)`, [source, HASH]);
     await db.query(`INSERT INTO log_touches (source, block, subject) VALUES ($1,140,$2)`, [source, POS]);
     await db.query(`INSERT INTO reorg_recheck (source, subject) VALUES ($1,$2)`, [source, POS]);
@@ -62,7 +63,7 @@ describe("the contract switch", () => {
     await seed();
     await db.query(`INSERT INTO meta (key, value) VALUES ('router',$1), ('alarm_book',$2)`, [V1.router, V1.alarmBook]);
     const before = { plans: await n("plans"), pay: await n("plan_payments"), follows: await n("vault_follows"), feed: await n("feed_items"), signals: await n("signals"), cards: await n("risk_cards"), snaps: await n("vault_snaps"), sent: await n("sent_alerts") };
-    const res = await switchContracts(db, V2);
+    const res = await switchContracts(db, V2, GO.router);
     expect(res).not.toBeNull();
     expect(res!.cleared).toMatchObject({ positions: 1, position_keys: 1, owner_epochs: 1, detectors: 1, alarms: 1, exits: 1, exit_payouts: 1, owed: 1, owed_logs: 1, attestations: 1, jobs: 1, log_retries: 1 });
     for (const t of contractTables) expect([t, await n(t)]).toEqual([t, 0]);
@@ -70,11 +71,14 @@ describe("the contract switch", () => {
     expect(await n("jobs", "kind='exit'")).toBe(0);
     expect(await n("jobs", "kind IN ('alert','ops')")).toBe(2);
     // The router and alarms logs restart at the new START_BLOCK, one block early. Their remembered hashes go.
-    expect((await r.cursor("router"))).toBe(4_999n);
-    expect((await r.cursor("alarms"))).toBe(4_999n);
-    expect(await n("block_hashes", "source IN ('router','alarms')")).toBe(0);
-    expect(await n("log_touches", "source IN ('router','alarms')")).toBe(0);
-    expect(await n("reorg_recheck", "source IN ('router','alarms')")).toBe(0);
+    // The cursors are named for the contract they follow, and the old ones (named for v1 or not at all) are gone.
+    expect((await r.cursor(routerCursor(V2.router)))).toBe(4_999n);
+    expect((await r.cursor(alarmsCursor(V2.alarmBook)))).toBe(4_999n);
+    expect((await db.query<{ name: string }>(`SELECT name FROM cursors ORDER BY name`)).map((x) => x.name)).toEqual([alarmsCursor(V2.alarmBook), "payments", routerCursor(V2.router)].sort());
+    const reader = "(source='router' OR source='alarms' OR source LIKE 'router@%' OR source LIKE 'alarms@%')";
+    expect(await n("block_hashes", reader)).toBe(0);
+    expect(await n("log_touches", reader)).toBe(0);
+    expect(await n("reorg_recheck", reader)).toBe(0);
     // The payments reader is not touched.
     expect((await r.cursor("payments"))).toBe(900n);
     expect(await n("block_hashes", "source='payments'")).toBe(1);
@@ -90,40 +94,40 @@ describe("the contract switch", () => {
   test("a second start on the same addresses does nothing, and state written since is kept", async () => {
     await seed();
     await db.query(`INSERT INTO meta (key, value) VALUES ('router',$1), ('alarm_book',$2)`, [V1.router, V1.alarmBook]);
-    expect(await switchContracts(db, V2)).not.toBeNull();
+    expect(await switchContracts(db, V2, GO.router)).not.toBeNull();
     await r.upsertPosition({ posId: POS, owner: OWNER, adapter: V2.router, target: V2.alarmBook, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 5_100n, termsHash: "t", keys: [KEY] });
-    await r.setCursor("router", 5_200n);
-    expect(await switchContracts(db, V2)).toBeNull();
+    await r.setCursor(routerCursor(V2.router), 5_200n);
+    expect(await switchContracts(db, V2, GO.router)).toBeNull();
     expect(await switchContracts(db, { ...V2, router: V2.router.toUpperCase().replace("0X", "0x") })).toBeNull(); // case does not matter
     expect(await n("positions")).toBe(1);
-    expect(await r.cursor("router")).toBe(5_200n);
+    expect(await r.cursor(routerCursor(V2.router))).toBe(5_200n);
   });
 
   test("v1 rows with no stored addresses (a database from before this existed) are cleared too", async () => {
     await seed();
-    const res = await switchContracts(db, V2);
+    const res = await switchContracts(db, V2, GO.router);
     expect(res).not.toBeNull();
     expect(res!.from).toEqual({ router: null, alarmBook: null });
     expect(await n("positions")).toBe(0);
     expect(await r.paidUntil(OWNER)).toBe(4_000_000_000);
-    expect(await switchContracts(db, V2)).toBeNull();
+    expect(await switchContracts(db, V2, GO.router)).toBeNull();
   });
 
   test("a new database just remembers the addresses and clears nothing", async () => {
-    expect(await switchContracts(db, V2)).toBeNull();
+    expect(await switchContracts(db, V2, GO.router)).toBeNull();
     expect(await n("meta")).toBe(2);
-    expect(await r.cursor("router")).toBeNull();
+    expect(await r.cursor(routerCursor(V2.router))).toBeNull();
     // The payments cursor alone is not contract state either.
     await db.query(`DELETE FROM meta`);
     await r.setCursor("payments", 10n);
-    expect(await switchContracts(db, V2)).toBeNull();
+    expect(await switchContracts(db, V2, GO.router)).toBeNull();
     expect(await r.cursor("payments")).toBe(10n);
   });
 
   test("a START_BLOCK of 0 resets to block 0, not below it", async () => {
     await seed();
-    await switchContracts(db, { ...V2, startBlock: 0n });
-    expect(await r.cursor("router")).toBe(0n);
+    await switchContracts(db, { ...V2, startBlock: 0n }, GO.router);
+    expect(await r.cursor(routerCursor(V2.router))).toBe(0n);
   });
 
   test("two services starting at once switch only once", async () => {
@@ -132,7 +136,7 @@ describe("the contract switch", () => {
     // Separate connections when there is a real server, as the services have.
     const url = process.env.TEST_DATABASE_URL;
     const dbs = url ? Array.from({ length: 7 }, () => postgres(url, 2)) : [db, db];
-    const results = await Promise.all(dbs.map((d) => switchContracts(d, V2)));
+    const results = await Promise.all(dbs.map((d) => switchContracts(d, V2, GO.router)));
     expect(results.filter((x) => x !== null)).toHaveLength(1);
     expect(await n("positions")).toBe(0);
     expect(await r.paidUntil(OWNER)).toBe(4_000_000_000);
@@ -140,7 +144,7 @@ describe("the contract switch", () => {
 
   test("the message says what was cleared, with no URLs", async () => {
     await seed();
-    const text = switchText((await switchContracts(db, V2))!);
+    const text = switchText((await switchContracts(db, V2, GO.router))!);
     expect(text).toContain("positions 1");
     expect(text).toContain("Plans, payments and follows kept");
     expect(text).not.toMatch(/https?:/);

@@ -107,6 +107,8 @@ async function boot(role: string, tag: string) {
     ROLE: role, PORT: "0", PUBLIC_URL: "https://api.example.test", DATABASE_URL: "pglite://memory", CHAIN_ID: "4663",
     RPC_URL: "http://rpc.test/a", RPC_URL_BACKUP: "http://rpc.test/b",
     ROUTER, ALARM_BOOK: BOOK, ADAPTER_4626: ADAPTER, PLAN_TOKEN: TOKEN, PLAN_PAY_ADDRESS: PAY, START_BLOCK: "990",
+    // These tests seed a database with positions and no stored addresses; the operator authorises the move to these ones.
+    CONTRACT_SWITCH: ROUTER,
     WATCHER_PRIVATE_KEY: generatePrivateKey(), ANTHROPIC_API_KEY: "test-key-not-real", FEED_URLS: "",
     CARD_VAULTS: LISTED, TELEGRAM_BOT_TOKEN: "1:test", TELEGRAM_WEBHOOK_SECRET: "w".repeat(20), BOT_MODE: "polling", LOOP_SCALE: "0.001",
   });

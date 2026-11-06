@@ -17,6 +17,9 @@ export const Env = z.object({
   ALARM_BOOK: addr.optional(),
   ADAPTER_4626: addr.optional(),
   START_BLOCK: z.coerce.bigint().default(0n),
+  // Set to the new ROUTER for the one deploy that moves the shared database to new contracts. Without it a service whose
+  // ROUTER/ALARM_BOOK differ from the stored ones refuses to start. Remove it once every service is running on the new addresses.
+  CONTRACT_SWITCH: addr.optional(),
   PLAN_PAY_ADDRESS: addr.optional(), // receives prepaid plan payments; a multisig
   PLAN_TOKEN: addr.optional(),
   KEEPER_PRIVATE_KEY: z.string().optional(), // pays gas only; holds no user funds
