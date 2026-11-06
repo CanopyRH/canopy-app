@@ -300,6 +300,7 @@ if (run("api") || run("bot")) {
     // In polling mode the webhook route has no handler, so it refuses every request.
     telegram: hook ? async (u) => void (await hook(new Request("http://local", { method: "POST", body: JSON.stringify(u) }))) : undefined,
     healthToken: env.HEALTH_TOKEN,
+    rateLimit: { perMin: env.RATE_LIMIT_PER_MIN, proxyHops: env.TRUSTED_PROXY_HOPS },
     health: async () => {
       const tip = await client.getBlockNumber();
       const cursor = await r.cursor("router");

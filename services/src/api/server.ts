@@ -9,6 +9,7 @@ import type { Repo } from "../store/repo";
 import { acceptAttestation } from "../watcher/watcher";
 import { PLUGINS, type Plugin } from "../plugins";
 import { sameSecret } from "./secret";
+import { DEFAULT_RATE_LIMIT, rateLimit, type RateLimit } from "./ratelimit";
 
 const AttestBody = z.strictObject({
   key: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
@@ -34,6 +35,8 @@ export interface ApiDeps {
   telegramSecret?: string;
   health?: () => Promise<unknown>;
   healthToken?: string;
+  /** Reads allowed per address per minute, and how many proxies to trust. Defaults to 120 and one proxy. */
+  rateLimit?: RateLimit;
   /** Feature routes. Defaults to the files in src/plugins/. */
   plugins?: Plugin[];
 }
@@ -43,6 +46,9 @@ export function createApi(d: ApiDeps) {
   const app = new Hono();
   // The web app is hosted elsewhere, including IPFS. Nothing here is private, and it sends no credentials.
   app.use("/*", cors({ origin: "*", allowMethods: ["GET"] }));
+  // Every public read, plugin routes included, shares one per-address limit. The token-guarded health check is left out so a
+  // monitor is never turned away, and the POST routes have their own checks.
+  app.use("/*", rateLimit(d.rateLimit ?? DEFAULT_RATE_LIMIT, d.now, (path) => path === "/health"));
   const small = bodyLimit({ maxSize: MAX_BODY, onError: (c) => c.json({ error: "too large" }, 413) });
   const vaultParam = (t: string) => (isAddress(t) ? (t as Address) : null);
 

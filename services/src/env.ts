@@ -40,6 +40,8 @@ export const Env = z.object({
   // Blocks a plan payment must be buried under before it is credited, and an arm before it is re-checked on chain. Off means
   // about 10 seconds of blocks for the chain: 100 on Robinhood Chain (10 blocks a second), 5 on Base (one every 2 seconds).
   CONFIRMATIONS: z.coerce.bigint().min(0n).max(100_000n).optional(),
+  RATE_LIMIT_PER_MIN: z.coerce.number().int().min(0).default(120), // reads per address per minute on the public GET routes; 0 is off
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1), // proxies in front of the API that append to X-Forwarded-For (Railway: 1); 0 trusts no header
   KEEPER_MIN_GAS_WEI: z.coerce.bigint().default(500_000_000_000_000n), // warn below 0.0005 ETH
 }).superRefine((e, c) => {
   if (e.ALERTS_ONLY) return;
