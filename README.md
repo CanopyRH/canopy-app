@@ -141,7 +141,17 @@ Every High, Medium and Low found in the services is fixed, with a regression tes
 
 ## Run your own keeper
 
-Anyone can run the services against the deployed contracts. Copy `deploy/services.env.example`, set `ROLE=keeper`, your own RPC, a Postgres URL and a keeper key that holds a little ETH for gas, and set `KEEPER_PAID_ONLY=false` to exit every armed position. `services/Dockerfile` builds the image.
+Anyone can exit any armed position while one of its alarms is live, and the funds still go to the owner. To keep exits running without Canopy, run the indexer and the keeper together in one process (`ROLE` takes several roles joined by commas). They need no Telegram bot, no public URL and no plan settings:
+
+```bash
+cd services && ROLE=indexer,keeper KEEPER_PAID_ONLY=false \
+  DATABASE_URL=postgres://... CHAIN_ID=4663 RPC_URL=https://... RPC_URL_BACKUP=https://... \
+  ROUTER=0x1c3ca2B2f01C30B731909563Dad550062B340757 ALARM_BOOK=0x6A391f2c489dDFcb60Ad64eDddda5Ea0921584cf \
+  ADAPTER_4626=0x32C39abF03a12303Cc3150be50eD7b0e03Ab9D38 START_BLOCK=107737863 \
+  KEEPER_PRIVATE_KEY=0x... bun src/index.ts
+```
+
+The keeper key only pays gas, so fund it with a little ETH and nothing else. `KEEPER_PAID_ONLY=false` makes it run every armed position, not just paid ones. A database needs Postgres, and `services/Dockerfile` builds the image.
 
 ## Security
 
