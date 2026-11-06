@@ -75,6 +75,9 @@ const alarmIo: AlarmIo = {
   check: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "check", args: [key] }),
   firedAt: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => BigInt(s[1])),
   now: () => client.getBlock().then((b) => b.timestamp),
+  // The contract's own answer for every key of a preset, parts included, so a pending DRAIN confirmation blocks arming.
+  armable: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "armable", args: [key] }),
+  known: (key) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => s[0]),
 };
 
 /** Whether a vault answers paused(). Many have no pause switch, so a Paused alarm could never fire there and is not offered. */
@@ -116,7 +119,9 @@ export async function arm(s: Signer, vault: Address, keys: Hex[]) {
   if (allowed < maxUint256 / 2n) await send(s, approveTx(vault, CONFIG.router!));
   // The contract's own answer, now that every key is registered: the router asks it again inside arm and reverts if any key fails it.
   const armable = (key: Hex) => client.readContract({ address: CONFIG.alarmBook!, abi: alarmBookAbi, functionName: "armable", args: [key] });
-  if ((await notArmable(armable, keys)).length > 0) throw new Error(COPY.armRefused);
+  // The parts of a chosen preset are asked too: the router only asks about the keys it arms.
+  const asked = [...new Set(presets.filter((p) => keys.includes(p.key)).flatMap((p) => [p.key, ...(p.requires ?? []).map((q) => q.key)]))];
+  if ((await notArmable(armable, asked)).length > 0) throw new Error(COPY.armRefused);
   const tx = armTx(CONFIG.router!, CONFIG.adapter!, vault, keys);
   // Run it once without sending, so a refusal reads in plain words and not as a wallet's raw error.
   await client.call({ account: s.account, to: tx.to, data: tx.data }).catch((e) => {

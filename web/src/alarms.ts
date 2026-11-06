@@ -9,7 +9,7 @@ import type { Preset } from "../../services/src/api/presets";
  */
 export const REFIRE_SECONDS = 86_400n;
 
-/** The three chain reads the decision needs, so it can be tested without a chain. */
+/** The chain reads the decision needs, so it can be tested without a chain. */
 export interface AlarmIo {
   /** AlarmBook.check(key): would a poke fire this key right now? */
   check: (key: Hex) => Promise<boolean>;
@@ -17,6 +17,13 @@ export interface AlarmIo {
   firedAt: (key: Hex) => Promise<bigint>;
   /** The chain's own clock, not the browser's. */
   now: () => Promise<bigint>;
+  /**
+   * AlarmBook.armable(key): the contract's own answer, which is false while a DRAIN drop is pending its confirmation (check()
+   * reads false then) as well as when the key is tripped or fired in the last day. When given, every key is asked.
+   */
+  armable?: (key: Hex) => Promise<boolean>;
+  /** Whether the key is registered. An unknown key is not armable, so armable() is only asked about keys that are registered. */
+  known?: (key: Hex) => Promise<boolean>;
 }
 
 /** clear: safe to offer. going-off: tripped now or fired in the last 24 hours. unreadable: Canopy could not tell. */
@@ -26,7 +33,10 @@ export async function keyStatus(io: AlarmIo, key: Hex): Promise<AlarmStatus> {
   try {
     const [tripped, firedAt, now] = await Promise.all([io.check(key), io.firedAt(key), io.now()]);
     if (tripped) return "going-off";
-    return firedAt !== 0n && now <= firedAt + REFIRE_SECONDS ? "going-off" : "clear";
+    if (firedAt !== 0n && now <= firedAt + REFIRE_SECONDS) return "going-off";
+    // A pending DRAIN confirmation reads clear above. The contract's own answer does not.
+    if (io.armable && (io.known ? await io.known(key) : true) && !(await io.armable(key))) return "going-off";
+    return "clear";
   } catch {
     return "unreadable"; // Fails closed: an alarm that can't be read is not offered.
   }
@@ -42,7 +52,7 @@ export async function notArmable(armable: (key: Hex) => Promise<boolean>, keys: 
   return keys.filter((_, i) => !answers[i]);
 }
 
-/** Every key a preset arms: its own key and the parts it depends on. The worst status wins. */
+/** Every key a preset arms: its own key and the parts it depends on, each asked of armable() too. The worst status wins. */
 export async function presetStatus(io: AlarmIo, preset: Preset): Promise<AlarmStatus> {
   const keys = [preset.key, ...(preset.requires ?? []).map((p) => p.key)];
   const all = await Promise.all(keys.map((k) => keyStatus(io, k)));

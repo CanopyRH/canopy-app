@@ -1,8 +1,10 @@
 // Review V3-S05. The app refuses to arm any preset whose keys are "going off" (tripped now, or fired in the last day):
 // it asks AlarmBook.check() for each key and its parts, then armable() for the keys it arms. In v2, check() answers false
-// while a DRAIN drop is pending its 60 s confirmation, and the app arms the BOTH key, not the DRAIN part, so armable() is
-// never asked about the part. During that minute the "Vault drain + confirmation" preset reads clear and arms, and the
-// DRAIN part fires 60 s later for a drop that began before the owner armed.
+// while a DRAIN drop is pending its 60 s confirmation, and the app arms the BOTH key, not the DRAIN part, so armable() was
+// never asked about the part. During that minute the "Vault drain + confirmation" preset read clear and armed, and the
+// DRAIN part fired 60 s later for a drop that began before the owner armed.
+// Fixed: presetStatus asks armable() for every key of a preset, parts included (once they are registered), and the arm
+// flow asks it for the parts too. A pending DRAIN part now blocks the preset.
 //
 // Real AlarmBook and MockVault bytecode on a local anvil, and the app's own presetStatus/notArmable.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -12,7 +14,7 @@ import { join } from "node:path";
 import { createPublicClient, createTestClient, createWalletClient, encodeAbiParameters, encodeFunctionData, http, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
-import { notArmable, presetStatus, type AlarmIo } from "../../src/alarms";
+import { presetStatus, refusedPresets, type AlarmIo } from "../../src/alarms";
 import { alarmBookAbi } from "../../src/tx";
 import { keyOf, Kind, presetsFor, registrationOrder } from "../../../services/src/api/presets";
 
@@ -64,14 +66,21 @@ beforeAll(async () => {
 
 afterAll(() => anvil.kill());
 
-const io: AlarmIo = {
+/** What the app reads before it offers a preset, without the contract's own answer (the reviewed code). */
+const plainIo: AlarmIo = {
   check: (key) => client.readContract({ address: book, abi: alarmBookAbi, functionName: "check", args: [key] }),
   firedAt: (key) => client.readContract({ address: book, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => BigInt(s[1])),
   now: () => client.getBlock().then((b) => b.timestamp),
 };
+/** What the app reads now: the same, plus armable() for every registered key. */
+const io: AlarmIo = {
+  ...plainIo,
+  armable: (key) => client.readContract({ address: book, abi: bookAbi, functionName: "armable", args: [key] }),
+  known: (key) => client.readContract({ address: book, abi: bookAbi, functionName: "state", args: [key] }).then((s) => s[0] as boolean),
+};
 
-describe("V3-S05: a pending DRAIN drop reads clear to the app", () => {
-  test("the drain + confirmation preset arms during the confirmation minute, and its drain part fires a minute later", async () => {
+describe("V3-S05: a pending DRAIN drop blocks the preset that depends on it", () => {
+  test("the drain + confirmation preset is refused during the confirmation minute, and clear again once it has passed", async () => {
     const presets = presetsFor(vault, vault);
     const drainBoth = presets.find((p) => p.requires?.some((r) => r.detector.kind === Kind.DRAIN))!;
     const drain = drainBoth.requires!.find((r) => r.detector.kind === Kind.DRAIN)!;
@@ -80,6 +89,8 @@ describe("V3-S05: a pending DRAIN drop reads clear to the app", () => {
     for (const d of registrationOrder(vault, vault).filter((d) => needed.has(keyOf(d)))) {
       await send(book, encodeFunctionData({ abi: bookAbi, functionName: "register", args: [d] }));
     }
+    // Before any drop, the preset is clear.
+    expect(await presetStatus(io, drainBoth)).toBe("clear");
 
     // The keeper samples once a period, so the DRAIN reference is live. Then 40% of the vault's assets leave.
     await warp(1_801);
@@ -92,15 +103,26 @@ describe("V3-S05: a pending DRAIN drop reads clear to the app", () => {
 
     // AlarmBook itself says the drain part is not armable (it reads TRIPPED)...
     expect(await client.readContract({ address: book, abi: bookAbi, functionName: "armable", args: [drain.key] })).toBe(false);
-    // ...but the app's own checks pass: presetStatus reads check() (false while pending) and armable() is asked only for the BOTH key.
+    // ...and now so does the app. The reviewed checks (check, firedAt) alone still read clear: that is the control.
     await warp(10);
-    expect(await presetStatus(io, drainBoth)).toBe("clear");
-    const armable = (key: Hex) => client.readContract({ address: book, abi: bookAbi, functionName: "armable", args: [key] });
-    expect(await notArmable(armable, [drainBoth.key])).toEqual([]);
+    expect(await presetStatus(plainIo, drainBoth)).toBe("clear");
+    expect(await presetStatus(io, drainBoth)).toBe("going-off");
+    // The DRAIN part on its own is refused, and the BOTH preset's own key too.
+    expect(await presetStatus(io, drain)).toBe("going-off");
+    // The preset the user would arm is among the refused ones.
+    expect((await refusedPresets(io, presets, [drainBoth.key])).map((x) => x.preset.key)).toEqual([drainBoth.key]);
 
-    // A minute after the first sighting, the drain part fires: a drop that began before the owner armed.
+    // A minute after the first sighting, the drain part fires; the preset stays refused for the alarm's day.
     await warp(55);
     await send(book, encodeFunctionData({ abi: bookAbi, functionName: "poke", args: [drain.key] }));
     expect((await client.readContract({ address: book, abi: bookAbi, functionName: "state", args: [drain.key] }))[1]).toBeGreaterThan(pendingAt);
+    expect(await presetStatus(io, drainBoth)).toBe("going-off");
   }, 60_000);
+
+  test("an unregistered key is not mistaken for a pending one: the offer shows it clear before it is registered", async () => {
+    const other = presetsFor(vault, vault).find((p) => p.name === "Vault loss")!;
+    const fresh = presetsFor("0x00000000000000000000000000000000000000f1" as Address).find((p) => p.name === "Vault loss")!;
+    expect(await presetStatus(io, fresh)).toBe("clear");
+    void other;
+  });
 });
