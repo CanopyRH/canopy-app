@@ -789,7 +789,10 @@ export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlis
       const out = await withBudget((signal) => runExit(d, j, signal), budget);
       if (out === "done") await d.repo.finishJob(job.id);
       // A listed vault's own preset keeps its fast retry whatever happened; every other job, a retry included, earns a strike.
-      else if (isListedJob(d, j)) await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+      // So does an exit with owner swap legs, even on a listed preset: a failed swap only skips the swap (the router pays the
+      // raw token), so an exit that keeps failing with legs is running the owner's own token code, and must not cost the
+      // keeper a large send every 30 seconds for a day.
+      else if (isListedJob(d, j) && !j.swaps) await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
       else await strike(d, job, out === "refused" ? "exit_gas_refused" : out === "retry" ? "exit_rejected" : "exit_stalled");
     } catch (e) {
       console.warn("exit", j.posId, (e as Error).message);

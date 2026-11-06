@@ -168,6 +168,18 @@ describe("V3-S02: attacker keys on a listed vault's position don't get the liste
     expect(row).toEqual({ done: true, strikes: MAX_STRIKES });
   });
 
+  test("a listed preset's exit that carries owner swap legs and keeps failing earns strikes and ends, instead of a large send every 30 s all day", async () => {
+    const { d, st } = keeper(LISTED);
+    // The attacker arms the listed vault's own preset (so the job is listed) with swap legs of their own; their exit fails.
+    await r.upsertPosition({ posId: ATTACKER_POS, owner: ATTACKER.toLowerCase(), adapter: ROUTER, target: LISTED.toLowerCase(), tokenId: 0n, harbour: 1, maxSlipBps: 0, epoch: 0n, block: 10n, termsHash: "t", keys: [VICTIM_KEY] });
+    await r.markSwaps(ATTACKER_POS, true);
+    expect(await onFired(d, VICTIM_KEY, FIRED)).toBe(1);
+    const job = (await db.query<{ id: string }>(`SELECT id FROM jobs WHERE payload->>'posId' ILIKE $1`, [ATTACKER_POS]))[0]!.id;
+    for (st.now = FIRED; st.now <= FIRED + ALARM_TTL - 60; st.now += 7_200) await drainExits(d, "listed");
+    const row = (await db.query<{ done: boolean; strikes: number }>(`SELECT done, strikes FROM jobs WHERE id=$1`, [job]))[0]!;
+    expect(row).toEqual({ done: true, strikes: MAX_STRIKES });
+  });
+
   test("a disarmed position's jobs end", async () => {
     const { d } = keeper(LISTED);
     await attackerJobs(d, LISTED, 1);
