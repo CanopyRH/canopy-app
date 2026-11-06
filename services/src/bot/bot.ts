@@ -106,10 +106,10 @@ export function createBot(token: string, r: Repo, publicUrl: string, apiRoot?: s
   return bot;
 }
 
-/** Sends one alert to everyone following a vault. A failed chat never stops the rest. */
-export async function notifyText(r: Repo, send: (chatId: number, text: string, vault: string) => Promise<unknown>, target: string, text: string) {
+/** Sends one alert to everyone following a vault (except chats that muted its topic). A failed chat never stops the rest. */
+export async function notifyText(r: Repo, send: (chatId: number, text: string, vault: string) => Promise<unknown>, target: string, text: string, topic?: string) {
   let sent = 0;
-  for (const chat of await r.followers(target)) {
+  for (const chat of await r.followers(target, topic)) {
     try {
       await send(chat, text, target).catch(async (e: { error_code?: number; parameters?: { retry_after?: number } }) => {
         if (e.error_code !== 429) throw e;

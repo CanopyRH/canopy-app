@@ -29,6 +29,7 @@ import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
 import { alarmsCursor, contractFence, routerCursor, SwitchRefused, switchContracts, switchText } from "./store/switch";
 import { repo } from "./store/repo";
+import { PLUGINS } from "./plugins";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
 import { quorumScope, quorumScopeNow } from "./watcher/scope";
@@ -206,6 +207,14 @@ const reorgAlert = async (i: ReorgInfo) => {
   await queueOps(r, `reorg:${i.source}:${i.cursor}:${i.rewoundTo}`, deepReorgText(i), now());
 };
 
+// Feature plugins start their own loops (src/plugins/). They get the same pieces the core loops use.
+for (const p of PLUGINS) {
+  p.start?.({
+    client: client as never, db, repo: r, chainId: env.CHAIN_ID, now, run, contracts, listed, confirmations, every, fence,
+    onStuck: stuckAlert, onDeepReorg: reorgAlert, appUrl, queueAlert: (vault, text, tag, topic) => enqueueAlert(r, vault, text, now(), tag, topic),
+  });
+}
+
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
     syncLogs(client, r, {
@@ -285,7 +294,7 @@ if (run("indexer") && contracts) {
   // Arms are applied at the tip, so exits stay fast. Each is checked against the chain once it is deep enough to be settled.
   every(5_000, "confirm arms", () => confirmArms(client, r, router, confirmations));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
-  if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text, topic) => notifyText(r, sendAlert, vault, text, topic), now));
   const opsChat = env.OPS_CHAT_ID;
   if (bot && opsChat !== undefined) every(1_000, "ops alerts", () => sendQueuedOps(r, (text) => sendOps(opsChat, text), now));
   if (env.PLAN_TOKEN && env.PLAN_PAY_ADDRESS) every(30_000, "payments", () =>
@@ -400,7 +409,7 @@ if (run("detector")) {
   // Done jobs, old alarms, signals, attestations, reports and vault readings only take space. Every operator runs a detector.
   every(3_600_000, "prune", () => r.prune(now()));
   // On a chain with no Canopy contracts the indexer role has nothing to do, so the scan's alerts go out from here.
-  if (!contracts) if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (!contracts && bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text, topic) => notifyText(r, sendAlert, vault, text, topic), now));
 }
 
 if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_KEY) {

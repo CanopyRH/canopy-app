@@ -5,6 +5,11 @@ services, the web app or the tooling unless it says otherwise.
 
 ## 2026-11-06
 
+- **Whale alerts.** "Know when whales run before you do." The indexer reads ERC-4626 deposits and withdrawals on the listed
+  vaults; one that is at least `WHALE_MIN_USD` (250,000) and `WHALE_MIN_PCT` (2%) of the vault tells its followers, with the
+  vault, amount, share of the vault, idle liquidity and a Blockscout link. `/whales` and `/whales off` in the bot,
+  `GET /whales`, and a panel on the risk card. Added as a plugin; the core changes are a plugin `start` hook, a topic on
+  queued alerts and a `chat_mutes` table.
 - **Web: "What Canopy can't do" page** (`limits.html`). Reads the router, Timelock and AlarmBook straight from the chain in
   the browser: the countdown to `ADMIN_EXPIRY`, what nobody can do (each tied to a line of the verified source), the adapters,
   guardian, arming pause, Timelock delay and proposer, and each watcher's start and end. A fact that can't be read is marked
