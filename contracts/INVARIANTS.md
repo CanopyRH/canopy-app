@@ -133,12 +133,13 @@ plus anything strangers sent it directly. Direct gifts are never swept and never
 ### R9. Only the caller can arm for themselves, within bounds, and only on clear alarms
 
 `arm` always arms for the caller, only through an allowed adapter, with a known harbour, a slippage cap of at most
-10%, at most 8 keys each armable in AlarmBook (A11), valid swap legs (R11), a token id only for NFTs, and an NFT only by
-its holder.
+10%, at most 8 keys each armable in AlarmBook (A11) and none of them a DRAIN key (`DrainNeedsQuorum`: DRAIN only counts
+as a part of a BOTH key with a QUORUM key), valid swap legs (R11), a token id only for NFTs, and an NFT only by its
+holder.
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_rejectsUnlistedAdapter`, `test_arm_rejectsSlipAboveCap`, `test_arm_rejectsTooManyKeys`, `test_arm_rejectsBadHarbour`, `test_arm_rejectsWhilePaused`, `test_arm_isBoundToCaller`.
-- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`, `test_arm_AlarmNotClear_unknownKey`, `test_arm_AlarmNotClear_trippedKey`, `test_arm_AlarmNotClear_firedInTheLastDay`, `test_arm_AlarmNotClear_unreadableKeyFailsClosed`, `test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes`.
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_armingNeedsEveryKeyClear`: `arm` succeeded exactly when the model said every key was armable (and the other arguments were valid), and refused with `AlarmNotClear` when one wasn't.
+- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`, `test_arm_AlarmNotClear_unknownKey`, `test_arm_AlarmNotClear_trippedKey`, `test_arm_AlarmNotClear_firedInTheLastDay`, `test_arm_AlarmNotClear_unreadableKeyFailsClosed`, `test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes`, `test_arm_DrainNeedsQuorum`.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_armingNeedsEveryKeyClear`: `arm` succeeded exactly when the model said every key was armable and none was the DRAIN key (and the other arguments were valid), and refused with `DrainNeedsQuorum` or `AlarmNotClear`, whichever key came first, when one wasn't. The handler arms the DRAIN key only through its BOTH(DRAIN, QUORUM) key.
 
 ### R10. A third party's swap never pays below 99% of the oracle price
 
@@ -217,12 +218,16 @@ it. A poke that sees the vault whole, or can't read it, never cancels a sighting
 older than the window, so a flash deposit between the two sightings can't hold a real drain off. Windows under 1,200
 seconds are refused.
 
-What stays (documented limits): a whale who dips twice a minute apart, within the window, can still fire; an attacker
-who is the only sampler for two consecutive periods can inflate the reference; and low samples taken by `checkpoint`
-lower the next reference. The app offers DRAIN only inside `BOTH` with a watcher quorum, and the keeper samples listed
-vaults every period.
+What stays in AlarmBook (documented limits): a whale who dips twice a minute apart, within the window, can fire a DRAIN
+key; an attacker who is the only sampler for two consecutive periods can inflate the reference, and then, by taking
+every roll with a flash deposit, keep the key tripped and refiring daily even against a keeper that samples every
+period (V3V-01); and low samples taken by `checkpoint` lower the next reference. None of these can exit anyone on its
+own: `ExitRouter.arm` refuses a DRAIN key (R9), so a DRAIN fire counts only through a BOTH key, which fires only if a
+QUORUM key (two active watchers' signatures) also fired within its 24-hour window.
 
-- [V3Drain.t.sol](test/review/V3Drain.t.sol) `test_V3_01_oneFlashPeriodCantFire`, `test_V3_01_control_oneHonestSamplePerPeriodPreventsIt`, `test_V3_01_attackerWhoWinsEachRoll_againstAKeeperSamplingEachPeriod_neverFires`, `test_V3_01_realDrainStillFires` (V3-01 fixed, the review's proofs of concept inverted); `test_V3_01_twoUnsampledPeriodsAreNeeded_documentedLimit` (the boundary).
+- [V3Drain.t.sol](test/review/V3Drain.t.sol) `test_V3_01_oneFlashPeriodCantFire`, `test_V3_01_control_oneHonestSamplePerPeriodPreventsIt`, `test_V3_01_attackerWhoWinsEachRoll_againstAKeeperSamplingEachPeriod_neverFires`, `test_V3_01_realDrainStillFires` (V3-01 fixed, the review's proofs of concept inverted); `test_V3_01_twoUnsampledPeriodsAreNeeded_documentedLimit` (the boundary: the DRAIN part fires, the BOTH key the owner armed doesn't).
+- [V3Verify.t.sol](test/review/V3Verify.t.sol) `test_V3V_01_oneHourLapse_thenWinningEachRoll_keepsDrainFiringAgainstASamplingKeeper`: the DRAIN key keeps refiring for two days with the vault whole, but it can't be armed alone, and the BOTH key armed on the position never fires without the quorum, so nobody is exited. `test_V3V_01_control_oneHonestRollHeals`, `test_V3V_01_growthLagsOneMorePeriod_aRealDrainAfterAnInflowWaits`.
+- [V3Arming.t.sol](test/review/V3Arming.t.sol) `test_V3_04_insideBoth_aPreArmingSightingStillNeedsTheQuorum`: a sighting from before a BOTH arming can complete into a DRAIN fire after it, and the BOTH key still needs the quorum.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_flashDeposit_cantRaiseTheBaseline`, `test_flashDeposit_onANewDetector_cantFire`, `test_flashSample_isPulledDownByTheNextHonestSample`, `test_midDrainCheckpoint_cantHideADrain`, `test_midDrainRoll_cantHideADrain`, `test_flashDeposit_cantResetATrippedDrain`, `test_samplesDuringATrippedDrain_cantLowerTheNextBaseline`, `test_quietVault_baselineFollowsRealGrowth`.
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_drain_snapshotCannotResetAfterWindowWhileTripped`, `test_drain_snapshotExpires`, `test_drain_andCheckpointRules`.
 - [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_drainIgnoresASingleLowReadingFromAFlashWithdrawal`, `test_drainFiresWhenTheDropIsSeenTwiceAMinuteApart`, `test_drainConfirmationLapsesAfterTheWindow`, `test_flashDepositBetweenSightingsCantHoldOffARealDrain`, `test_drainWindowsUnder1200sAreRefused_andTwoSamplesInOneFlashCantFire` (A2-02 fixed); `test_drainWhaleDippingTwiceAMinuteApartStillFires_documentedLimit` and `test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen` (the documented limits).
