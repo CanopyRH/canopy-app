@@ -5,7 +5,7 @@ import { alarmBookAbi, erc20Abi, routerAbi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
-import { appKeyboard, createBot, notifyText } from "./bot/bot";
+import { alertKeyboard, createBot, notifyText } from "./bot/bot";
 import { queueAlert as enqueueAlert, queueOps, sendQueuedAlerts, sendQueuedOps } from "./bot/queue";
 import { ALARM_NAMES, alarmAlert, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
@@ -81,8 +81,8 @@ if (!bot && (run("indexer") || run("detector"))) console.warn("TELEGRAM_BOT_TOKE
 const sendOps = async (chat: number, text: string) => {
   if (bot) await bot.api.sendMessage(chat, text);
 };
-const sendAlert = async (chat: number, text: string) => {
-  if (bot) await bot.api.sendMessage(chat, text, { reply_markup: appKeyboard(appUrl) });
+const sendAlert = async (chat: number, text: string, vault: string) => {
+  if (bot) await bot.api.sendMessage(chat, text, { reply_markup: alertKeyboard(appUrl, vault) });
 };
 // Without a bot there is no one to tell, so nothing is queued.
 const queueAlert = (vault: string, text: string) => (bot ? enqueueAlert(r, vault, text, now()) : Promise.resolve());

@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { isAddress } from "viem";
-import { alarmAlert, WELCOME, type AlertInput } from "../copy/alerts";
+import { alarmAlert, DISARM_BUTTON, EXIT_BUTTON, EXIT_USAGE, exitButtonFor, exitMany, exitNotFound, exitReply, PANIC_NO_VAULTS, PANIC_TEXT, RISK_BUTTON, WELCOME, type AlertInput } from "../copy/alerts";
+import { disarmAllLink, exitLink, riskLink } from "./links";
 import type { Repo } from "../store/repo";
 import type { Db } from "../store/db";
 import { PLUGINS, type Plugin } from "../plugins";
@@ -11,9 +12,16 @@ const MAX_FOLLOWS = 20;
 /** Distinct vaults followed across every chat. Each one is scanned every minute, so the total has to stop somewhere. */
 export const MAX_FOLLOWED_VAULTS = 500;
 const MAX_MESSAGE = 4000; // Telegram's limit is 4096.
-const BUILT_IN = ["start", "vaults", "watch", "unwatch", "list", "card"];
+const BUILT_IN = ["start", "vaults", "watch", "unwatch", "list", "card", "exit", "panic"];
 
 export const appKeyboard = (url: string) => new InlineKeyboard().url("Open Canopy", url);
+
+/** The buttons under an alert for one vault. Both open the web app, where the user's own wallet signs. */
+export const alertKeyboard = (appUrl: string, vault: string) =>
+  new InlineKeyboard().url(EXIT_BUTTON, exitLink(appUrl, vault)).row().url(RISK_BUTTON, riskLink(appUrl, vault));
+
+const shortAddress = (v: string) => `${v.slice(0, 6)}…${v.slice(-4)}`;
+const vaultName = async (r: Repo, v: string) => ((await r.card(v)) as { numbers?: { name?: string } } | null)?.numbers?.name ?? shortAddress(v);
 
 /** Command logic, kept apart from Telegram so it can be tested. It stores chats and vaults, never wallets. */
 export async function handle(
@@ -49,6 +57,31 @@ export async function handle(
       const c = await r.card(vault);
       return { text: (c?.text ?? "No card for that vault yet.").slice(0, MAX_MESSAGE) };
     }
+    case "exit": {
+      const q = arg.trim();
+      if (!q) return { text: EXIT_USAGE };
+      if (isAddress(q, { strict: false })) {
+        const v = q.toLowerCase();
+        return { text: exitReply(await vaultName(r, v)), keyboard: new InlineKeyboard().url(EXIT_BUTTON, exitLink(publicUrl, v)) };
+      }
+      // A name: look among the vaults this chat follows and the listed ones.
+      const pool = [...new Set([...(await r.following(chatId)), ...listed.map((v) => v.toLowerCase())])];
+      const named = await Promise.all(pool.map(async (v) => ({ v, name: await vaultName(r, v) })));
+      const hits = named.filter((x) => x.name.toLowerCase().includes(q.toLowerCase()));
+      const exact = hits.filter((x) => x.name.toLowerCase() === q.toLowerCase());
+      const pick = exact.length === 1 ? exact : hits;
+      if (pick.length === 0) return { text: exitNotFound(q) };
+      if (pick.length === 1) return { text: exitReply(pick[0]!.name), keyboard: new InlineKeyboard().url(EXIT_BUTTON, exitLink(publicUrl, pick[0]!.v)) };
+      const kb = new InlineKeyboard();
+      for (const x of pick.slice(0, 8)) kb.url(exitButtonFor(x.name), exitLink(publicUrl, x.v)).row();
+      return { text: exitMany, keyboard: kb };
+    }
+    case "panic": {
+      const followed = await r.following(chatId);
+      const kb = new InlineKeyboard().url(DISARM_BUTTON, disarmAllLink(publicUrl)).row();
+      for (const v of followed) kb.url(exitButtonFor(await vaultName(r, v)), exitLink(publicUrl, v)).row();
+      return { text: followed.length ? PANIC_TEXT : `${PANIC_TEXT}\n\n${PANIC_NO_VAULTS}`, keyboard: kb };
+    }
     default: {
       // Feature commands come from src/plugins/ and need the database for their own tables.
       const run = plugins.find((p) => p.commands?.[cmd])?.commands?.[cmd];
@@ -74,14 +107,14 @@ export function createBot(token: string, r: Repo, publicUrl: string, apiRoot?: s
 }
 
 /** Sends one alert to everyone following a vault. A failed chat never stops the rest. */
-export async function notifyText(r: Repo, send: (chatId: number, text: string) => Promise<unknown>, target: string, text: string) {
+export async function notifyText(r: Repo, send: (chatId: number, text: string, vault: string) => Promise<unknown>, target: string, text: string) {
   let sent = 0;
   for (const chat of await r.followers(target)) {
     try {
-      await send(chat, text).catch(async (e: { error_code?: number; parameters?: { retry_after?: number } }) => {
+      await send(chat, text, target).catch(async (e: { error_code?: number; parameters?: { retry_after?: number } }) => {
         if (e.error_code !== 429) throw e;
         await Bun.sleep((e.parameters?.retry_after ?? 1) * 1000);
-        await send(chat, text);
+        await send(chat, text, target);
       });
       sent++;
     } catch {
@@ -91,5 +124,5 @@ export async function notifyText(r: Repo, send: (chatId: number, text: string) =
   return sent;
 }
 
-export const notifyFollowers = (r: Repo, send: (chatId: number, text: string) => Promise<unknown>, target: string, a: AlertInput) =>
+export const notifyFollowers = (r: Repo, send: (chatId: number, text: string, vault: string) => Promise<unknown>, target: string, a: AlertInput) =>
   notifyText(r, send, target, alarmAlert(a));

@@ -18,9 +18,28 @@ export function alarmAlert(a: AlertInput): string {
       : "Armed positions with a paid plan are exiting now. Funds go only to each owner's wallet.",
   );
   lines.push("You can also withdraw yourself at any time.");
+  if (!a.withdrawInRobinhoodApp) lines.push(EXIT_HINT);
   if (a.evidenceUrl) lines.push(`Evidence: ${a.evidenceUrl}`);
   return lines.join("\n");
 }
+
+export const EXIT_HINT = "To leave this vault yourself, tap Exit now below and sign in your own wallet. Canopy never signs for you.";
+export const EXIT_BUTTON = "Exit now";
+export const RISK_BUTTON = "Open risk card";
+export const DISARM_BUTTON = "Disarm all";
+export const exitButtonFor = (name: string) => `Exit ${name}`.slice(0, 60);
+
+export const PANIC_TEXT = [
+  "Panic button. Nothing happens until you tap a button below and confirm in your own wallet.",
+  "Disarm all stops every armed exit for your wallet. Exit moves one vault's position back to your wallet.",
+  "Canopy never signs for you and never holds your keys. The Canopy app opens, you connect your wallet, and you sign there.",
+].join("\n");
+export const PANIC_NO_VAULTS = "You aren't following any vaults yet, so there are no Exit buttons. Follow one with /watch <vault address>. Disarm all still works for any wallet.";
+export const exitReply = (name: string) =>
+  `Exit ${name}: tap the button, connect your wallet in the Canopy app, check the details and sign. Canopy never signs for you and never holds your keys. Funds go only to your wallet.`;
+export const EXIT_USAGE = "Send a vault address or name: /exit 0x... or /exit <vault name>. /panic shows buttons for every vault you follow.";
+export const exitNotFound = (q: string) => `No vault found for "${q.slice(0, 60)}". Send its address, or see the vaults we cover with /vaults.`;
+export const exitMany = "More than one vault matches. Pick the one you mean. Each button opens the Canopy app, where you sign in your own wallet.";
 
 /** Plain wording for a signal read from the chain. */
 export function signalLine(kind: string, value: number): string {
