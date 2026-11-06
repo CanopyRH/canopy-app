@@ -4,7 +4,7 @@ Run it on a scratch COPY of contracts/ (it edits src/ in place and restores each
     cp -R contracts /some/scratch/dir && FORGE=/path/to/forge python3 -I mutants.py /some/scratch/dir/contracts
 Each mutant is (file, name, exact old text, new text); the old text must occur exactly once. A mutant is KILLED when
 `forge test` fails, SURVIVED when it passes. Results are in mutants.results.tsv: the review run (existing suite, then with the review tests) and the v2_fix run
-(121 mutants after the V3 fixes and the DRAIN-needs-quorum checks: 106 killed, 2 equivalent, and the 13 the review
+(122 mutants after the V3 fixes and the DRAIN-needs-quorum checks: 107 killed, 2 equivalent, and the 13 the review
 also left alive).
 """
 import subprocess, sys, json, os
@@ -22,7 +22,8 @@ M = [
  (ER, "arm: keys cap >=", "if (a.keys.length > MAX_KEYS) revert TooManyKeys();", "if (a.keys.length >= MAX_KEYS) revert TooManyKeys();"),
  (ER, "arm: bare DRAIN allowed", "if (kind == KIND_DRAIN) revert DrainNeedsQuorum(k);", ""),
  (ER, "arm: nested BOTH allowed", "if (ka == KIND_BOTH || kb == KIND_BOTH) revert NestedBoth(k);", ""),
- (ER, "arm: BOTH drain part unchecked", "if ((ka == KIND_DRAIN && kb != KIND_QUORUM) || (kb == KIND_DRAIN && ka != KIND_QUORUM)) revert DrainNeedsQuorum(k);", ""),
+ (ER, "arm: BOTH drain part unchecked", "if (window != DRAIN_BOTH_WINDOW || (ka == KIND_DRAIN && kb != KIND_QUORUM) || (kb == KIND_DRAIN && ka != KIND_QUORUM)) {\n            revert DrainNeedsQuorum(k);\n        }", ""),
+ (ER, "arm: DRAIN BOTH window unchecked", "window != DRAIN_BOTH_WINDOW || ", ""),
  (ER, "arm: BOTH drain part one side only", "(ka == KIND_DRAIN && kb != KIND_QUORUM) || (kb == KIND_DRAIN && ka != KIND_QUORUM)", "(ka == KIND_DRAIN && kb != KIND_QUORUM)"),
  (ER, "arm: armable check off", "if (!ALARMS.armable(k)) revert AlarmNotClear(k);", "if (false) revert AlarmNotClear(k);"),
  (ER, "arm: NFT owner check off", "if (IERC721(asset).ownerOf(a.tokenId) != msg.sender) revert NotOwner();", "if (false) revert NotOwner();"),

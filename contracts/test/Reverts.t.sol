@@ -320,8 +320,9 @@ contract ExitRouterReverts is Base {
         router.arm(_params(address(vault), RAW, 0, _keys(both)));
     }
 
-    /// A BOTH key that carries a DRAIN part without a QUORUM other part is refused, in either order; BOTH(DRAIN, QUORUM)
-    /// and BOTH of two non-DRAIN keys are accepted.
+    /// A BOTH key that carries a DRAIN part without a QUORUM other part is refused, in either order, and so is
+    /// BOTH(DRAIN, QUORUM) with any window but one day; the one-day BOTH(DRAIN, QUORUM) and a BOTH of two non-DRAIN keys
+    /// (any window) are accepted.
     function test_arm_DrainNeedsQuorum_bothWithoutAQuorumPart() public {
         vault.deposit(OWNER, 100e18);
         bytes32 drain = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
@@ -337,8 +338,14 @@ contract ExitRouterReverts is Base {
             vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, bad[i]));
             router.arm(_params(address(vault), RAW, 0, _keys(bad[i])));
         }
+        // V3C-01: with a DRAIN part the window must be exactly one day; a longer one is refused.
+        bytes32 longWindow = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days + 1, drain, q));
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, longWindow));
+        router.arm(_params(address(vault), RAW, 0, _keys(longWindow)));
         bytes32 qFirst = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, q, drain));
-        bytes32 noDrain = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, pauseKey, q));
+        // A BOTH without a DRAIN part may have any window AlarmBook allows.
+        bytes32 noDrain = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 7 days, pauseKey, q));
         bytes32[] memory ok = new bytes32[](2);
         ok[0] = qFirst;
         ok[1] = noDrain;

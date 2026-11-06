@@ -56,6 +56,7 @@ contract ExitRouter is ReentrancyGuard {
     uint8 internal constant KIND_DRAIN = 4; // AlarmBook.Kind.DRAIN
     uint8 internal constant KIND_QUORUM = 5; // AlarmBook.Kind.QUORUM
     uint8 internal constant KIND_BOTH = 6; // AlarmBook.Kind.BOTH
+    uint32 internal constant DRAIN_BOTH_WINDOW = 1 days; // the only window for a BOTH with a DRAIN part: AlarmBook's REFIRE_AFTER
 
     /// @notice The 6-decimal stablecoin every swap ends in.
     address public immutable STABLE;
@@ -261,9 +262,10 @@ contract ExitRouter is ReentrancyGuard {
     /// @notice Two swap legs name the same token.
     /// @param token The token.
     error DuplicateSwap(address token);
-    /// @notice A DRAIN key can't be armed except as a part of a BOTH key whose other part is a QUORUM key: DRAIN trusts
-    /// the vault's own readings, so it must never exit anyone without watcher signatures.
-    /// @param key The armed key that carries a DRAIN without a QUORUM: a bare DRAIN key, or such a BOTH key.
+    /// @notice A DRAIN key can't be armed except as a part of a BOTH key whose other part is a QUORUM key and whose window
+    /// is exactly DRAIN_BOTH_WINDOW (1 day): DRAIN trusts the vault's own readings, so it must never exit anyone without
+    /// watcher signatures from the same day.
+    /// @param key The armed key that carries a DRAIN without such a QUORUM: a bare DRAIN key, or such a BOTH key.
     error DrainNeedsQuorum(bytes32 key);
     /// @notice A BOTH key whose part is itself a BOTH key can't be armed, so the check of a BOTH key's parts is complete.
     /// @param key The BOTH key.
@@ -313,9 +315,10 @@ contract ExitRouter is ReentrancyGuard {
 
     /// @notice Arm a position. The caller is always the owner: nobody can arm on someone else's behalf. Re-arming replaces
     /// the keys and swap legs. Every key must be armable in AlarmBook now (clear, readable, not fired in the last day). A
-    /// DRAIN key counts only as a part of a BOTH key whose other part is a QUORUM key: a bare DRAIN key, or a BOTH key with
-    /// a DRAIN part and a non-QUORUM other part, reverts DrainNeedsQuorum, and a BOTH key with a BOTH part reverts
-    /// NestedBoth. These checks read only AlarmBook's stored detectors.
+    /// DRAIN key counts only as a part of a BOTH key whose other part is a QUORUM key and whose window is exactly
+    /// DRAIN_BOTH_WINDOW: a bare DRAIN key, or a BOTH key with a DRAIN part and a non-QUORUM other part or another window,
+    /// reverts DrainNeedsQuorum, and a BOTH key with a BOTH part reverts NestedBoth. These checks read only AlarmBook's
+    /// stored detectors.
     /// @param a The position, keys and swap legs.
     /// @return posId The position id.
     function arm(ArmParams calldata a) external returns (bytes32 posId) {
@@ -587,16 +590,20 @@ contract ExitRouter is ReentrancyGuard {
         }
     }
 
-    /// @dev A DRAIN may reach an exit only through BOTH(DRAIN, QUORUM). BOTH parts can't be BOTH keys, so one level of
-    /// parts is the whole tree. Reads AlarmBook's stored detectors only (no call to any target).
+    /// @dev A DRAIN may reach an exit only through BOTH(DRAIN, QUORUM) with a window of exactly DRAIN_BOTH_WINDOW, so the
+    /// watchers' signatures behind any DRAIN exit are at most a day older than the DRAIN fire. BOTH parts can't be BOTH
+    /// keys, so one level of parts is the whole tree. Reads AlarmBook's stored detectors only (no call to any target).
     function _checkDrainHasQuorum(bytes32 k) internal view {
-        (uint8 kind,,,, bytes32 pa, bytes32 pb) = IAlarmBookDetector(address(ALARMS)).detector(k);
+        (uint8 kind,,, uint32 window, bytes32 pa, bytes32 pb) = IAlarmBookDetector(address(ALARMS)).detector(k);
         if (kind == KIND_DRAIN) revert DrainNeedsQuorum(k);
         if (kind != KIND_BOTH) return;
         (uint8 ka,,,,,) = IAlarmBookDetector(address(ALARMS)).detector(pa);
         (uint8 kb,,,,,) = IAlarmBookDetector(address(ALARMS)).detector(pb);
         if (ka == KIND_BOTH || kb == KIND_BOTH) revert NestedBoth(k);
-        if ((ka == KIND_DRAIN && kb != KIND_QUORUM) || (kb == KIND_DRAIN && ka != KIND_QUORUM)) revert DrainNeedsQuorum(k);
+        if (ka != KIND_DRAIN && kb != KIND_DRAIN) return;
+        if (window != DRAIN_BOTH_WINDOW || (ka == KIND_DRAIN && kb != KIND_QUORUM) || (kb == KIND_DRAIN && ka != KIND_QUORUM)) {
+            revert DrainNeedsQuorum(k);
+        }
     }
 
     /// @dev The only `from` ever used is the position owner; the only `to` is the owner's chosen adapter.

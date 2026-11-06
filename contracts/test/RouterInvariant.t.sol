@@ -175,14 +175,16 @@ contract RouterHandler {
     uint256 internal constant NV = 4;
     // 0, 1: PAUSED; 2: SHARE_DROP on vault 0; 3: DRAIN on vault 0 (never armable on its own); 4: QUORUM;
     // 5: BOTH(DRAIN, QUORUM), the only way a DRAIN key can be armed; 6: BOTH(DRAIN, PAUSED 0), refused (no quorum);
-    // 7: BOTH(BOTH(DRAIN, QUORUM), QUORUM), refused (nested)
-    uint256 internal constant NK = 8;
+    // 7: BOTH(BOTH(DRAIN, QUORUM), QUORUM), refused (nested); 8: BOTH(DRAIN, QUORUM) with a 2-day window, refused
+    uint256 internal constant NK = 9;
     uint256 internal constant K_SD = 2;
     uint256 internal constant K_DRAIN = 3;
     uint256 internal constant K_Q = 4;
     uint256 internal constant K_BOTH = 5;
     uint256 internal constant K_DRAIN_NO_Q = 6;
     uint256 internal constant K_NESTED = 7;
+    uint256 internal constant K_DRAIN_LONG = 8;
+    uint256 internal constant LONG_WINDOW = 2 days;
     uint256 internal constant BOTH_WINDOW = 1 days;
     uint256 internal constant NW = 3;
     uint256 internal constant SD_BPS = 50;
@@ -211,7 +213,7 @@ contract RouterHandler {
 
     // ghost model of who is armed, with which keys, and since when
     bool[NV][NO] internal gArmed;
-    uint8[NV][NO] internal gMask;
+    uint16[NV][NO] internal gMask;
     uint64[NV][NO] internal gArmedAt;
     uint16[NV][NO] internal gSlip;
 
@@ -345,6 +347,9 @@ contract RouterHandler {
         );
         keys[K_DRAIN_NO_Q] = book.register(_both(keys[K_DRAIN], keys[0]));
         keys[K_NESTED] = book.register(_both(keys[K_BOTH], keys[K_Q]));
+        AlarmBook.Detector memory longBoth = _both(keys[K_DRAIN], keys[K_Q]);
+        longBoth.window = uint32(LONG_WINDOW);
+        keys[K_DRAIN_LONG] = book.register(longBoth);
 
         // Every owner starts with shares in every vault, approved to the router, so sequences reach exits quickly.
         for (uint256 o; o < NO; ++o) {
@@ -422,11 +427,16 @@ contract RouterHandler {
         if (k == K_BOTH) return _mFiredWithin(K_DRAIN) && _mFiredWithin(K_Q);
         if (k == K_DRAIN_NO_Q) return _mFiredWithin(K_DRAIN) && _mFiredWithin(0);
         if (k == K_NESTED) return _mFiredWithin(K_BOTH) && _mFiredWithin(K_Q);
+        if (k == K_DRAIN_LONG) return _mFiredWithinFor(K_DRAIN, LONG_WINDOW) && _mFiredWithinFor(K_Q, LONG_WINDOW);
         return false; // QUORUM: only signatures fire it
     }
 
     function _mFiredWithin(uint256 k) internal view returns (bool) {
-        return gFiredAt[k] != 0 && block.timestamp <= uint256(gFiredAt[k]) + BOTH_WINDOW;
+        return _mFiredWithinFor(k, BOTH_WINDOW);
+    }
+
+    function _mFiredWithinFor(uint256 k, uint256 window) internal view returns (bool) {
+        return gFiredAt[k] != 0 && block.timestamp <= uint256(gFiredAt[k]) + window;
     }
 
     function _mPendingLive() internal view returns (bool) {
@@ -517,7 +527,7 @@ contract RouterHandler {
     function arm(uint256 oi, uint256 vi, uint256 harbour, uint256 slip, uint256 mask) external {
         uint256 o = oi % NO;
         uint256 v = vi % NV;
-        uint8 m = mask % 5 == 0 ? 0 : uint8(1 + (mask >> 4) % 255); // mostly non-empty
+        uint16 m = mask % 5 == 0 ? 0 : uint16(1 + (mask >> 4) % 511); // mostly non-empty
         (bytes32[] memory ks, bytes4 expectErr) = _keysFor(m);
         bool allArmable = expectErr == bytes4(0);
         uint8 hb = uint8(harbour % 3); // 2 is invalid and must be refused
@@ -532,7 +542,7 @@ contract RouterHandler {
             keys: ks,
             swaps: _legsFor(hb, harbour)
         });
-        bool paramsOk = hb <= 1 && sl <= 1000 && !(router.armingPaused() && block.timestamp < expiry);
+        bool paramsOk = hb <= 1 && sl <= 1000 && ks.length <= 8 && !(router.armingPaused() && block.timestamp < expiry);
         ledger.setExpected(address(0));
         vm.prank(owners[o]);
         try router.arm(p) {
@@ -555,14 +565,14 @@ contract RouterHandler {
 
     /// @dev The keys of a mask, and the error the model expects from `arm`: the router checks key by key, in order, first
     /// the shape (a DRAIN carried without a QUORUM, or a nested BOTH), then whether it is armable.
-    function _keysFor(uint8 m) internal view returns (bytes32[] memory ks, bytes4 expectErr) {
+    function _keysFor(uint16 m) internal view returns (bytes32[] memory ks, bytes4 expectErr) {
         ks = new bytes32[](_pop(m));
         uint256 n;
         for (uint256 k; k < NK; ++k) {
             if ((m >> k) & 1 == 1) {
                 ks[n++] = keys[k];
                 if (expectErr != bytes4(0)) continue;
-                if (k == K_DRAIN || k == K_DRAIN_NO_Q) expectErr = ExitRouter.DrainNeedsQuorum.selector;
+                if (k == K_DRAIN || k == K_DRAIN_NO_Q || k == K_DRAIN_LONG) expectErr = ExitRouter.DrainNeedsQuorum.selector;
                 else if (k == K_NESTED) expectErr = ExitRouter.NestedBoth.selector;
                 else if (!_mArmable(k)) expectErr = ExitRouter.AlarmNotClear.selector;
             }
@@ -573,7 +583,7 @@ contract RouterHandler {
         return AlarmBook.Detector({kind: AlarmBook.Kind.BOTH, target: address(0xB07), threshold: 0, window: uint32(BOTH_WINDOW), a: a, b: b});
     }
 
-    function _pop(uint8 m) internal pure returns (uint256 c) {
+    function _pop(uint16 m) internal pure returns (uint256 c) {
         for (uint256 k; k < NK; ++k) {
             c += (m >> k) & 1;
         }
@@ -950,7 +960,7 @@ contract RouterHandler {
         return (o, v);
     }
 
-    function _pickKey(uint8 mask, uint256 seed) internal pure returns (uint256) {
+    function _pickKey(uint16 mask, uint256 seed) internal pure returns (uint256) {
         uint256 n;
         for (uint256 k; k < NK; ++k) {
             n += (mask >> k) & 1;
@@ -1284,6 +1294,8 @@ contract RouterInvariants {
         _eq(h.armRefusedBareDrain(), 2, "a BOTH carrying DRAIN without a QUORUM is refused");
         h.arm(2, 0, 0, 0, 2032); // mask 128: a BOTH whose part is a BOTH
         _eq(h.armRefusedNested(), 1, "a nested BOTH is refused");
+        h.arm(2, 0, 0, 0, 4081); // mask 256: BOTH(DRAIN, QUORUM) with a 2-day window
+        _eq(h.armRefusedBareDrain(), 3, "a DRAIN BOTH with any window but one day is refused");
         h.poke(5, 0);
         require(!h.book().isLive(h.keys(5), 1 days), "BOTH is silent with only the DRAIN part fired");
         h.fireQuorum(0);
