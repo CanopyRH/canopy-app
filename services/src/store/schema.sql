@@ -33,3 +33,19 @@ CREATE TABLE IF NOT EXISTS owed_logs (tx TEXT, log_index INT, PRIMARY KEY (tx, l
 CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value NUMERIC NOT NULL);
 CREATE TABLE IF NOT EXISTS log_retries (source TEXT NOT NULL, tx TEXT NOT NULL, log_index INT NOT NULL, subject TEXT NOT NULL DEFAULT '', block BIGINT NOT NULL, log JSONB NOT NULL,
   attempts INT NOT NULL DEFAULT 0, first_failed_at BIGINT NOT NULL, next_at BIGINT NOT NULL, last_error TEXT NOT NULL DEFAULT '', alerted BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY (source, tx, log_index));
+-- Reorg tracking. block_hashes holds the hash of each block the indexer read, a bounded recent window per cursor. log_touches
+-- remembers what each applied log was about, so a rewind knows which records to re-check on chain. reorg_recheck is that
+-- list after a rewind, kept until the check has run.
+CREATE TABLE IF NOT EXISTS block_hashes (source TEXT NOT NULL, block BIGINT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (source, block));
+CREATE TABLE IF NOT EXISTS log_touches (source TEXT NOT NULL, block BIGINT NOT NULL, subject TEXT NOT NULL, PRIMARY KEY (source, block, subject));
+CREATE TABLE IF NOT EXISTS reorg_recheck (source TEXT NOT NULL, subject TEXT NOT NULL, PRIMARY KEY (source, subject));
+-- The block a row came from, so a rewind can undo exactly what the dropped blocks wrote. Rows older than this column have none.
+ALTER TABLE plan_payments ADD COLUMN IF NOT EXISTS block BIGINT;
+ALTER TABLE plan_payments ADD COLUMN IF NOT EXISTS rewound BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE exit_payouts ADD COLUMN IF NOT EXISTS block BIGINT;
+ALTER TABLE alarms ADD COLUMN IF NOT EXISTS block BIGINT;
+ALTER TABLE detectors ADD COLUMN IF NOT EXISTS block BIGINT;
+ALTER TABLE owed_logs ADD COLUMN IF NOT EXISTS owner TEXT;
+ALTER TABLE owed_logs ADD COLUMN IF NOT EXISTS token TEXT;
+ALTER TABLE owed_logs ADD COLUMN IF NOT EXISTS amount NUMERIC;
+ALTER TABLE owed_logs ADD COLUMN IF NOT EXISTS block BIGINT;

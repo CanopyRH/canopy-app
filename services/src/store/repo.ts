@@ -109,10 +109,22 @@ export const repo = (db: Db) => ({
     await db.query(`INSERT INTO plans (wallet, paid_until) VALUES ($1,$2) ON CONFLICT (wallet) DO UPDATE SET paid_until=$2`, [wallet, until]);
   },
   /** Records a payment once. Returns false if this log was already fully applied. */
-  async recordPayment(p: { tx: string; logIndex: number; wallet: string; amount: bigint; credited: boolean; at: number }) {
+  async recordPayment(p: { tx: string; logIndex: number; wallet: string; amount: bigint; credited: boolean; at: number; block?: bigint | null }) {
+    const block = p.block == null ? null : p.block.toString();
+    // A rewind marks the payments of the dropped blocks. The same transfer read again, even at another log index, takes
+    // its old row back and credits nothing more.
+    const same = await db.query(`UPDATE plan_payments SET block=$3, rewound=false WHERE tx=$1 AND log_index=$2 AND rewound RETURNING 1`, [p.tx, p.logIndex, block]);
+    if (same.length > 0) return false;
+    const moved = await db.query(
+      `UPDATE plan_payments SET log_index=$2, block=$3, rewound=false WHERE ctid = (
+         SELECT ctid FROM plan_payments WHERE tx=$1 AND rewound AND wallet=$4 AND amount=$5
+           AND NOT EXISTS (SELECT 1 FROM plan_payments x WHERE x.tx=$1 AND x.log_index=$2) ORDER BY log_index LIMIT 1) RETURNING 1`,
+      [p.tx, p.logIndex, block, p.wallet, p.amount.toString()],
+    );
+    if (moved.length > 0) return false;
     await db.query(
-      `INSERT INTO plan_payments (tx, log_index, wallet, amount, credited, at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-      [p.tx, p.logIndex, p.wallet, p.amount.toString(), p.credited, p.at],
+      `INSERT INTO plan_payments (tx, log_index, wallet, amount, credited, at, block) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+      [p.tx, p.logIndex, p.wallet, p.amount.toString(), p.credited, p.at, block],
     );
     const r = await db.query<{ applied: boolean }>(`SELECT applied FROM plan_payments WHERE tx=$1 AND log_index=$2`, [p.tx, p.logIndex]);
     return r[0]?.applied === false;
@@ -158,6 +170,112 @@ export const repo = (db: Db) => ({
   },
   async setCursor(name: string, block: bigint) {
     await db.query(`INSERT INTO cursors (name, block) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET block=$2`, [name, block.toString()]);
+  },
+  // ---- Reorg tracking ----
+  /** Remembers the hash of blocks the indexer has read. A block read again after a rewind gets its new hash. */
+  async saveHashes(source: string, blocks: readonly { block: bigint; hash: string }[]) {
+    for (const b of blocks) {
+      await db.query(
+        `INSERT INTO block_hashes (source, block, hash) VALUES ($1,$2,$3) ON CONFLICT (source, block) DO UPDATE SET hash=$3`,
+        [source, b.block.toString(), b.hash.toLowerCase()],
+      );
+    }
+  },
+  async hasHash(source: string, block: bigint) {
+    return (await db.query(`SELECT 1 FROM block_hashes WHERE source=$1 AND block=$2`, [source, block.toString()])).length > 0;
+  },
+  /** Stored hashes of blocks below `below`, oldest first. */
+  async storedHashes(source: string, below: bigint) {
+    const rows = await db.query<{ block: string; hash: string }>(`SELECT block, hash FROM block_hashes WHERE source=$1 AND block<$2 ORDER BY block`, [source, below.toString()]);
+    return rows.map((x) => ({ block: BigInt(x.block), hash: x.hash }));
+  },
+  /** Notes what a log in a block was about. */
+  async touch(source: string, block: bigint, subject: string) {
+    await db.query(`INSERT INTO log_touches (source, block, subject) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [source, block.toString(), subject]);
+  },
+  /** Moves what the dropped blocks touched onto the list to re-check on chain. */
+  async queueRecheck(source: string, from: bigint) {
+    await db.query(`INSERT INTO reorg_recheck (source, subject) SELECT source, subject FROM log_touches WHERE source=$1 AND block>=$2 ON CONFLICT DO NOTHING`, [source, from.toString()]);
+  },
+  async pendingRecheck(source: string): Promise<string[]> {
+    return (await db.query<{ subject: string }>(`SELECT subject FROM reorg_recheck WHERE source=$1 ORDER BY subject`, [source])).map((x) => x.subject);
+  },
+  async clearRecheck(source: string, subjects: readonly string[]) {
+    for (const s of subjects) await db.query(`DELETE FROM reorg_recheck WHERE source=$1 AND subject=$2`, [source, s]);
+  },
+  /** Forgets what was remembered for blocks from `from` on, including logs parked from them. The re-read brings back whatever is still on chain. */
+  async dropFrom(source: string, from: bigint) {
+    const b = from.toString();
+    await db.query(`DELETE FROM block_hashes WHERE source=$1 AND block>=$2`, [source, b]);
+    await db.query(`DELETE FROM log_touches WHERE source=$1 AND block>=$2`, [source, b]);
+    await db.query(`DELETE FROM log_retries WHERE source=$1 AND block>=$2`, [source, b]);
+  },
+  /** Keeps the recent window only. */
+  async pruneBlocks(source: string, below: bigint) {
+    await db.query(`DELETE FROM block_hashes WHERE source=$1 AND block<$2`, [source, below.toString()]);
+    await db.query(`DELETE FROM log_touches WHERE source=$1 AND block<$2`, [source, below.toString()]);
+  },
+  /** Undoes what router logs from `from` on wrote, except arm state, which is re-read from the router. Safe to run twice. */
+  async undoRouter(from: bigint) {
+    const b = from.toString();
+    await db.query(
+      `WITH gone AS (DELETE FROM owed_logs WHERE block>=$1 RETURNING owner, token, amount),
+            sums AS (SELECT owner, token, SUM(amount) AS a FROM gone WHERE owner IS NOT NULL GROUP BY owner, token)
+       UPDATE owed o SET amount=o.amount - s.a FROM sums s WHERE o.owner=s.owner AND o.token=s.token`,
+      [b],
+    );
+    await db.query(`DELETE FROM owed WHERE amount<=0`);
+    await db.query(`DELETE FROM exit_payouts WHERE block>=$1`, [b]);
+    await db.query(`DELETE FROM exits WHERE block>=$1`, [b]);
+    await db.query(`UPDATE positions SET confirmed=false WHERE armed_block>=$1`, [b]);
+  },
+  /** Undoes what AlarmBook logs from `from` on wrote. */
+  async undoAlarms(from: bigint) {
+    await db.query(`DELETE FROM alarms WHERE block>=$1`, [from.toString()]);
+    await db.query(`DELETE FROM detectors WHERE block>=$1`, [from.toString()]);
+  },
+  /**
+   * Marks the payments of the dropped blocks. One that is read again keeps its credit and never gets a second. Returns
+   * how many credited plan payments sit in the dropped blocks: if a transfer is gone for good, its credit stays.
+   */
+  async undoPayments(from: bigint) {
+    const b = from.toString();
+    await db.query(`DELETE FROM plan_payments WHERE block>=$1 AND NOT applied`, [b]);
+    const credited = await db.query(`UPDATE plan_payments SET rewound=true WHERE block>=$1 AND credited AND NOT rewound RETURNING 1`, [b]);
+    await db.query(`UPDATE plan_payments SET rewound=true WHERE block>=$1 AND NOT credited`, [b]);
+    return credited.length;
+  },
+  /** Records a subject might name: a position, or an owner (an address padded to 32 bytes). */
+  async positionsFor(subject: string): Promise<{ pos_id: string; owner: string; active: boolean }[]> {
+    const owner = /^0x0{24}[0-9a-f]{40}$/.test(subject) ? `0x${subject.slice(26)}` : "";
+    return db.query(`SELECT pos_id, owner, active FROM positions WHERE lower(pos_id)=$1 OR owner=$2`, [subject, owner]);
+  },
+  /** Sets a record to what the router holds: armed (and its keys) or not. Returns whether its active flag changed. */
+  async syncArm(posId: string, armed: boolean, keys?: readonly string[]) {
+    if (!armed) {
+      const gone = await db.query(`UPDATE positions SET active=false WHERE pos_id=$1 AND active RETURNING pos_id`, [posId]);
+      if (gone.length === 0) return false;
+      await db.query(`UPDATE jobs SET done=true WHERE kind='exit' AND NOT done AND payload->>'posId'=$1`, [posId]);
+      return true;
+    }
+    const woke = await db.query(`UPDATE positions SET active=true, confirmed=false WHERE pos_id=$1 AND NOT active RETURNING pos_id`, [posId]);
+    if (keys) {
+      await db.query(`DELETE FROM position_keys WHERE pos_id=$1`, [posId]);
+      for (const k of keys) await db.query(`INSERT INTO position_keys (pos_id, key) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [posId, k]);
+    }
+    return woke.length > 0;
+  },
+  async setEpoch(owner: string, epoch: bigint) {
+    await db.query(`INSERT INTO owner_epochs (owner, epoch) VALUES ($1,$2) ON CONFLICT (owner) DO UPDATE SET epoch=$2`, [owner, epoch.toString()]);
+    await db.query(`UPDATE positions SET active=false WHERE owner=$1 AND epoch<$2 AND active`, [owner, epoch.toString()]);
+  },
+  async owedTokens(owner: string): Promise<string[]> {
+    const rows = await db.query<{ token: string }>(`SELECT token FROM owed WHERE owner=$1 UNION SELECT token FROM owed_logs WHERE owner=$1 AND token IS NOT NULL`, [owner]);
+    return rows.map((x) => x.token);
+  },
+  async setOwed(owner: string, token: string, amount: bigint) {
+    if (amount === 0n) return void (await db.query(`DELETE FROM owed WHERE owner=$1 AND token=$2`, [owner, token]));
+    await db.query(`INSERT INTO owed (owner, token, amount) VALUES ($1,$2,$3) ON CONFLICT (owner, token) DO UPDATE SET amount=$3`, [owner, token, amount.toString()]);
   },
   async enqueue(kind: string, dedupe: string, payload: unknown, runAt: number) {
     await db.query(`INSERT INTO jobs (kind, dedupe, payload, run_at, created_at) VALUES ($1,$2,$3::text::jsonb,$4,$4) ON CONFLICT (dedupe) DO NOTHING`, [kind, dedupe, JSON.stringify(payload), runAt]);
@@ -221,8 +339,8 @@ export const repo = (db: Db) => ({
   async logRetryAlerted(source: string, tx: string, logIndex: number) {
     await db.query(`UPDATE log_retries SET alerted=true WHERE source=$1 AND tx=$2 AND log_index=$3`, [source, tx, logIndex]);
   },
-  async recordAlarm(key: string, firedAt: number, tx: string | null, evidence: string) {
-    await db.query(`INSERT INTO alarms (key, fired_at, tx, evidence) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [key, firedAt, tx, evidence]);
+  async recordAlarm(key: string, firedAt: number, tx: string | null, evidence: string, block?: bigint | null) {
+    await db.query(`INSERT INTO alarms (key, fired_at, tx, evidence, block) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [key, firedAt, tx, evidence, block == null ? null : block.toString()]);
   },
   async recordSnap(target: string, t: number, totalAssets: bigint, sharePrice: bigint) {
     await db.query(`INSERT INTO vault_snaps (target, t, total_assets, share_price) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [target, t, totalAssets.toString(), sharePrice.toString()]);
@@ -296,19 +414,23 @@ export const repo = (db: Db) => ({
   },
   async recordExit(e: { exitId: bigint; posId: string; owner: string; caller: string; alarmKey: string; viaAlarm: boolean; tx: string; block: bigint }) {
     await db.query(
-      `INSERT INTO exits (exit_id, pos_id, owner, caller, alarm_key, via_alarm, tx, block) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+      `INSERT INTO exits (exit_id, pos_id, owner, caller, alarm_key, via_alarm, tx, block) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (exit_id) DO UPDATE SET pos_id=$2, owner=$3, caller=$4, alarm_key=$5, via_alarm=$6, tx=$7, block=$8`,
       [e.exitId.toString(), e.posId, e.owner, e.caller, e.alarmKey, e.viaAlarm, e.tx, e.block.toString()],
     );
   },
-  async recordPayout(p: { exitId: bigint; tx: string; logIndex: number; token: string; amount: bigint; swapped: boolean }) {
+  async recordPayout(p: { exitId: bigint; tx: string; logIndex: number; token: string; amount: bigint; swapped: boolean; block?: bigint | null }) {
     await db.query(
-      `INSERT INTO exit_payouts (exit_id, tx, log_index, token, amount, swapped) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
-      [p.exitId.toString(), p.tx, p.logIndex, p.token, p.amount.toString(), p.swapped],
+      `INSERT INTO exit_payouts (exit_id, tx, log_index, token, amount, swapped, block) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+      [p.exitId.toString(), p.tx, p.logIndex, p.token, p.amount.toString(), p.swapped, p.block == null ? null : p.block.toString()],
     );
   },
   /** Only the first sight of each log changes the balance, so a replay can't double it. */
-  async addOwed(tx: string, logIndex: number, owner: string, token: string, amount: bigint) {
-    const fresh = await db.query(`INSERT INTO owed_logs (tx, log_index) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING tx`, [tx, logIndex]);
+  async addOwed(tx: string, logIndex: number, owner: string, token: string, amount: bigint, block?: bigint | null) {
+    const fresh = await db.query(
+      `INSERT INTO owed_logs (tx, log_index, owner, token, amount, block) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING tx`,
+      [tx, logIndex, owner, token, amount.toString(), block == null ? null : block.toString()],
+    );
     if (fresh.length === 0) return;
     await db.query(`INSERT INTO owed (owner, token, amount) VALUES ($1,$2,$3) ON CONFLICT (owner, token) DO UPDATE SET amount=owed.amount+$3`, [owner, token, amount.toString()]);
   },
@@ -349,8 +471,8 @@ export const repo = (db: Db) => ({
       [k, now],
     );
   },
-  async bump(name: string) {
-    await db.query(`INSERT INTO counters (name, value) VALUES ($1,1) ON CONFLICT (name) DO UPDATE SET value=counters.value+1`, [name]);
+  async bump(name: string, by = 1) {
+    await db.query(`INSERT INTO counters (name, value) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET value=counters.value+$2`, [name, by]);
   },
   async setCounter(name: string, value: bigint) {
     await db.query(`INSERT INTO counters (name, value) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET value=$2`, [name, value.toString()]);

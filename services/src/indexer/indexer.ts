@@ -15,6 +15,8 @@ export interface Log {
   blockNumber: bigint | null;
   transactionHash: Hex | null;
   logIndex: number | null;
+  /** The hash of the block the log came from. Nodes send it with every log. */
+  blockHash?: Hex | null;
 }
 
 /**
@@ -50,10 +52,10 @@ export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent
       });
       break;
     case "Paid":
-      await r.recordPayout({ exitId: a.exitId, tx: log.transactionHash!, logIndex: log.logIndex!, token: lc(a.token as string), amount: a.amount, swapped: a.swapped });
+      await r.recordPayout({ exitId: a.exitId, tx: log.transactionHash!, logIndex: log.logIndex!, token: lc(a.token as string), amount: a.amount, swapped: a.swapped, block: log.blockNumber });
       break;
     case "Owed":
-      await r.addOwed(log.transactionHash!, log.logIndex!, lc(a.owner as string), lc(a.token as string), a.amount);
+      await r.addOwed(log.transactionHash!, log.logIndex!, lc(a.owner as string), lc(a.token as string), a.amount, log.blockNumber);
       break;
     case "OwedClaimed":
       await r.clearOwed(lc(a.owner as string), lc(a.token as string));
@@ -67,7 +69,7 @@ export async function applyPayment(r: Repo, log: Log, now: number) {
   const wallet = lc(ev.args.from);
   const days = daysFor(ev.args.value);
   const fresh = await r.recordPayment({
-    tx: log.transactionHash!, logIndex: log.logIndex!, wallet, amount: ev.args.value, credited: days !== null, at: now,
+    tx: log.transactionHash!, logIndex: log.logIndex!, wallet, amount: ev.args.value, credited: days !== null, at: now, block: log.blockNumber,
   });
   if (fresh) await r.applyPayment(log.transactionHash!, log.logIndex!, wallet, days === null ? null : extendPlan(await r.paidUntil(wallet), days, now));
   return { wallet, days, fresh };
@@ -81,8 +83,8 @@ export async function applyRegistered(db: Db, log: Log): Promise<boolean> {
   if (ev.eventName !== "Registered") return false;
   const a = ev.args as unknown as { key: Hex; kind: number; target: Address; threshold: bigint; window: number; a: Hex; b: Hex };
   await db.query(
-    `INSERT INTO detectors (key, kind, target, threshold, window_s, a, b) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
-    [a.key, a.kind, a.target.toLowerCase(), a.threshold.toString(), a.window, a.a, a.b],
+    `INSERT INTO detectors (key, kind, target, threshold, window_s, a, b, block) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`,
+    [a.key, a.kind, a.target.toLowerCase(), a.threshold.toString(), a.window, a.a, a.b, log.blockNumber == null ? null : log.blockNumber.toString()],
   );
   return true;
 }
@@ -102,6 +104,20 @@ export function decodeFired(log: Log): FiredAlarm | null {
   return { key: a.key, target: a.target, evidence: a.evidence, tx: log.transactionHash };
 }
 
+/** How many recent blocks per cursor have their hash remembered. A reorg deeper than this can't be walked back exactly. */
+export const REORG_WINDOW = 2_000n;
+
+/** What the operator is told when a reorg runs past the remembered window. */
+export interface ReorgInfo {
+  source: string;
+  /** Where the cursor was. */
+  cursor: bigint;
+  /** Where it was rewound to. */
+  rewoundTo: bigint;
+  /** True when no remembered block still matched the chain, so the rewind went to the start of the window. */
+  beyondWindow: boolean;
+}
+
 export interface SyncOptions {
   name: string;
   address: Address | Address[];
@@ -118,6 +134,68 @@ export interface SyncOptions {
   now?: () => number;
   /** Overrides the retry timing, for tests. */
   retry?: Partial<RetryTuning>;
+  /** On a reorg, undoes what the logs of the dropped blocks (from this block on) wrote. Must be safe to run twice. */
+  onRewind?: (from: bigint) => Promise<unknown>;
+  /**
+   * After a rewind and the re-read, gets everything the dropped blocks' logs were about (a position, an owner, a key), to
+   * re-check against the chain at block `at`. If it throws, the list is kept and it is called again on the next pass.
+   */
+  recheck?: (subjects: string[], at: bigint) => Promise<unknown>;
+  /** Called when a reorg ran past the remembered window. It should only queue a message to the operators. */
+  onDeepReorg?: (i: ReorgInfo) => Promise<unknown>;
+  /** Blocks of hashes to remember. Defaults to REORG_WINDOW. */
+  window?: bigint;
+}
+
+type Chain = Pick<PublicClient, "getBlockNumber" | "getLogs"> & Partial<Pick<PublicClient, "getBlock">>;
+
+/** The hash the chain has for a block now, or null if the chain has no such block (it is shorter now). */
+async function chainHash(client: Chain, block: bigint): Promise<string | null> {
+  try {
+    const b = await client.getBlock!({ blockNumber: block });
+    return b?.hash ? b.hash.toLowerCase() : null;
+  } catch (e) {
+    if ((e as Error).name === "BlockNotFoundError") return null;
+    throw e;
+  }
+}
+
+/**
+ * Checks that the newest block the indexer has read is still on the chain. If it isn't, finds the newest remembered block
+ * that is (a block's hash covers everything before it, so a match means all earlier blocks match too, and a binary search
+ * finds it in a few reads) and rewinds the cursor to just after it. Returns where reading should continue.
+ */
+async function checkReorg(client: Chain, r: Repo, opts: SyncOptions, from: bigint): Promise<bigint> {
+  const stored = await r.storedHashes(opts.name, from);
+  const last = stored.at(-1);
+  if (!last || (await chainHash(client, last.block)) === last.hash) return from;
+  let good = -1; // index of the newest block known to match
+  let bad = stored.length - 1; // index of the oldest block known not to
+  while (bad - good > 1) {
+    const mid = (good + bad) >> 1;
+    if ((await chainHash(client, stored[mid]!.block)) === stored[mid]!.hash) good = mid;
+    else bad = mid;
+  }
+  const beyondWindow = good < 0;
+  // Past everything remembered, the safe choice is the start of the window: nothing older is trusted or kept.
+  const windowStart = from - (opts.window ?? REORG_WINDOW);
+  const rewoundTo = beyondWindow ? (windowStart > opts.startBlock ? windowStart : opts.startBlock) : stored[good]!.block + 1n;
+  // Undo first, then move the cursor, then forget. A crash in between repeats the undo, which is safe, and the stale
+  // hashes are ignored once the cursor is behind them.
+  await r.queueRecheck(opts.name, rewoundTo);
+  await opts.onRewind?.(rewoundTo);
+  await r.setCursor(opts.name, rewoundTo);
+  await r.dropFrom(opts.name, beyondWindow ? 0n : rewoundTo);
+  await r.bump("reorgs_handled");
+  console.warn("reorg handled", opts.name, `cursor ${from} -> ${rewoundTo}`, beyondWindow ? "(past the remembered window)" : `(${from - rewoundTo} blocks)`);
+  if (beyondWindow && opts.onDeepReorg) {
+    try {
+      await opts.onDeepReorg({ source: opts.name, cursor: from, rewoundTo, beyondWindow });
+    } catch (e) {
+      console.warn("reorg alert", cleanError(e));
+    }
+  }
+  return rewoundTo;
 }
 
 /**
@@ -128,10 +206,21 @@ export interface SyncOptions {
  * (the same position, owner or key) stay in order, so one waits behind an earlier failed one. A log that keeps failing is
  * reported through `onStuck`. This matters because registering a detector is open to anyone, so one bad log must never
  * stop the indexer, and a pruned or lagging node must never cost an alarm's exits.
+ *
+ * Reorgs: the hash of each block read (every block that had a log, and the end of each range) is kept for the last
+ * `window` blocks. Before reading, the newest of them is compared with the chain. On a mismatch the cursor is rewound to
+ * just after the newest block that still matches, `onRewind` undoes what the dropped blocks wrote, and the range is read
+ * again. Once it has caught up, `recheck` re-reads from the chain everything those blocks touched. Without `getBlock` on
+ * the client nothing is tracked.
  */
-export async function syncLogs(client: Pick<PublicClient, "getBlockNumber" | "getLogs">, r: Repo, opts: SyncOptions) {
+export async function syncLogs(client: Chain, r: Repo, opts: SyncOptions) {
   const now = opts.now ?? (() => Math.floor(Date.now() / 1000));
   const tune: RetryTuning = { baseSec: RETRY_BASE_SEC, maxSec: RETRY_MAX_SEC, stuckAfterSec: STUCK_AFTER_SEC, ...opts.retry };
+  const window = opts.window ?? REORG_WINDOW;
+  const track = client.getBlock !== undefined;
+  // Before anything is retried, so logs parked from blocks that are gone are dropped first.
+  let from = (await r.cursor(opts.name)) ?? opts.startBlock;
+  if (track && from > opts.startBlock) from = await checkReorg(client, r, opts, from);
   await retryParked(r, opts, now, tune);
 
   // With a confirmation depth, the newest blocks are left for the next pass. Nothing before the depth is ever read early.
@@ -139,13 +228,30 @@ export async function syncLogs(client: Pick<PublicClient, "getBlockNumber" | "ge
   const depth = opts.confirmations ?? 0n;
   const tip = head >= depth ? head - depth : -1n;
   const step = opts.step ?? 2_000n;
-  let from = (await r.cursor(opts.name)) ?? opts.startBlock;
   const waiting = new Set((await r.parkedLogs(opts.name)).map((p) => p.subject).filter(Boolean));
+  let anchor = true;
   while (from <= tip) {
     const to = from + step - 1n > tip ? tip : from + step - 1n;
+    // Only recent blocks are remembered. The end hash is read before the logs, so a reorg in between shows up next pass.
+    const remember = track && to + window > tip;
+    const endHash = remember ? await chainHash(client, to) : null;
     const logs = (await client.getLogs({ address: opts.address, fromBlock: from, toBlock: to, ...opts.filter } as never)) as unknown as Log[];
+    const hashes = new Map<bigint, string>();
+    if (endHash) hashes.set(to, endHash);
+    // Nothing older is remembered yet (a first run, or the first pass after this was added), so remember the block just
+    // before the first range. A reorg right after it then rewinds to here, not to the start of the window.
+    if (remember && anchor && from > 0n && !(await r.hasHash(opts.name, from - 1n))) {
+      const h = await chainHash(client, from - 1n);
+      if (h) hashes.set(from - 1n, h);
+    }
+    anchor = false;
     for (const l of logs) {
       const subject = subjectOf(l);
+      if (remember && l.blockNumber != null) {
+        if (subject) await r.touch(opts.name, l.blockNumber, subject);
+        const h = l.blockHash ? l.blockHash.toLowerCase() : hashes.get(l.blockNumber) ?? (await chainHash(client, l.blockNumber));
+        if (h) hashes.set(l.blockNumber, h);
+      }
       if (subject && waiting.has(subject)) {
         await park(r, opts, l, now(), new Error("waiting behind an earlier log about the same thing"), tune);
         continue;
@@ -157,11 +263,70 @@ export async function syncLogs(client: Pick<PublicClient, "getBlockNumber" | "ge
         if (subject) waiting.add(subject);
       }
     }
+    if (hashes.size > 0) await r.saveHashes(opts.name, [...hashes].map(([block, hash]) => ({ block, hash })));
     await r.setCursor(opts.name, to + 1n);
     from = to + 1n;
   }
+  if (track) await r.pruneBlocks(opts.name, from - window);
+  await recheckRewound(r, opts, tip);
   await reportStuck(r, opts, now(), tune);
   return tip;
+}
+
+/** Runs the pending re-check once the indexer has caught up after a rewind. A failure leaves the list for the next pass. */
+async function recheckRewound(r: Repo, opts: SyncOptions, tip: bigint) {
+  const pending = await r.pendingRecheck(opts.name);
+  if (pending.length === 0) return;
+  if (opts.recheck) {
+    try {
+      await opts.recheck(pending, tip);
+    } catch (e) {
+      console.warn("reorg re-check", opts.name, cleanError(e));
+      return;
+    }
+  }
+  await r.clearRecheck(opts.name, pending);
+}
+
+/**
+ * After a rewind, sets the records the dropped router logs were about to what the router holds at block `at`: each
+ * position's armed state and keys, each owner's epoch, and each owed balance. A vanished arm switches off (and its waiting
+ * exit jobs end), a vanished disarm switches the record back on for the usual settled check, a vanished claim restores the balance.
+ */
+export async function recheckRouter(
+  client: Pick<PublicClient, "readContract">,
+  r: Repo,
+  router: Address,
+  subjects: readonly string[],
+  at: bigint,
+): Promise<number> {
+  let changed = 0;
+  const read = (functionName: string, args: unknown[]) => client.readContract({ address: router, abi: routerAbi, functionName, args, blockNumber: at } as never) as Promise<unknown>;
+  const owners = new Set<string>();
+  const done = new Set<string>();
+  for (const subject of subjects) {
+    const s = subject.toLowerCase();
+    if (/^0x0{24}[0-9a-f]{40}$/.test(s)) owners.add(`0x${s.slice(26)}`);
+  }
+  // Epochs first, so a position's own check sees the owner's current one.
+  for (const owner of owners) await r.setEpoch(owner, BigInt((await read("epochOf", [owner])) as bigint));
+  for (const subject of subjects) {
+    for (const p of await r.positionsFor(subject.toLowerCase())) {
+      if (done.has(p.pos_id)) continue;
+      done.add(p.pos_id);
+      const armed = (await read("isArmed", [p.pos_id])) as boolean;
+      const keys = armed ? ((await read("keysOf", [p.pos_id])) as readonly string[]) : undefined;
+      if (await r.syncArm(p.pos_id, armed, keys)) {
+        changed++;
+        if (!armed) await r.bump("arm_reorged");
+        console.warn("reorg re-check changed a position", p.pos_id, armed ? "(armed again)" : "(not armed)");
+      }
+    }
+  }
+  for (const owner of owners) {
+    for (const token of await r.owedTokens(owner)) await r.setOwed(owner, token, BigInt((await read("owed", [owner, token])) as bigint));
+  }
+  return changed;
 }
 
 async function park(r: Repo, opts: SyncOptions, l: Log, at: number, error: unknown, tune: RetryTuning) {

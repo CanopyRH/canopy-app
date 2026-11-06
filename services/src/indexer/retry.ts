@@ -51,3 +51,14 @@ export function stuckLogText(chainId: number, s: StuckLog): string {
     link ? `Transaction: ${link}` : `Transaction: ${s.tx}`,
   ].join("\n");
 }
+
+export interface DeepReorg { source: string; cursor: bigint; rewoundTo: bigint }
+
+/** A reorg ran past the blocks the indexer remembers, so it re-reads from the start of that window. */
+export function deepReorgText(d: DeepReorg): string {
+  return [
+    `Canopy ops: the ${d.source} indexer found a chain reorg deeper than the blocks it remembers (it had read up to block ${d.cursor}).`,
+    `It rewound to block ${d.rewoundTo} and is reading forward again. Arms are re-checked against the router, and plan credits already given are not taken back.`,
+    "Check the chain explorer for a deep reorg or a node on the wrong fork. If the node is the problem, fix it before the next alarm.",
+  ].join("\n");
+}

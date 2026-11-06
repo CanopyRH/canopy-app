@@ -13,8 +13,8 @@ import { scanAll, SCAN_BUDGET_MS, withinMs } from "./detectors/loop";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
-import { stuckLogText, type StuckLog } from "./indexer/retry";
-import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, syncLogs } from "./indexer/indexer";
+import { deepReorgText, stuckLogText, type StuckLog } from "./indexer/retry";
+import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, recheckRouter, syncLogs, type ReorgInfo } from "./indexer/indexer";
 import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, gasFor, onFired, pokeAndQueue, queueNewAlarms, SMALL_CALL_GAS, type AlarmCursor, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
 import { serialSender } from "./keeper/sender";
@@ -127,13 +127,30 @@ const stuckAlert = async (s: StuckLog) => {
   await queueOps(r, `stuck:${s.source}:${s.tx}:${s.logIndex}`, stuckLogText(env.CHAIN_ID, s), now());
 };
 
+/** A reorg deeper than the remembered blocks goes to the operator chat, through the same queue. */
+const reorgAlert = async (i: ReorgInfo) => {
+  if (env.OPS_CHAT_ID === undefined) return void console.error("deep reorg", i.source, `cursor ${i.cursor}`, `rewound to ${i.rewoundTo}`);
+  await queueOps(r, `reorg:${i.source}:${i.cursor}:${i.rewoundTo}`, deepReorgText(i), now());
+};
+
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
-    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onStuck: stuckAlert, onLog: (l) => applyRouterLog(r, l, adminAlert) }));
+    syncLogs(client, r, {
+      name: "router",
+      address: router,
+      startBlock: env.START_BLOCK,
+      onStuck: stuckAlert,
+      onLog: (l) => applyRouterLog(r, l, adminAlert),
+      onRewind: (from) => r.undoRouter(from),
+      recheck: (subjects, at) => recheckRouter(client, r, router, subjects, at),
+      onDeepReorg: reorgAlert,
+    }));
   every(2_000, "alarms", () =>
     syncLogs(client, r, {
       name: "alarms",
       onStuck: stuckAlert,
+      onRewind: (from) => r.undoAlarms(from),
+      onDeepReorg: reorgAlert,
       address: alarmBook,
       startBlock: env.START_BLOCK,
       onLog: async (l) => {
@@ -145,7 +162,7 @@ if (run("indexer") && contracts) {
         const state = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "state", args: [f.key], blockNumber: l.blockNumber ?? undefined });
         const firedAt = Number(state[1]);
         if (firedAt === 0) throw new Error(`no alarm at ${f.tx}`);
-        await r.recordAlarm(f.key, firedAt, f.tx, f.evidence);
+        await r.recordAlarm(f.key, firedAt, f.tx, f.evidence, l.blockNumber);
         if (keeper) await onFired(keeper, f.key, firedAt);
         const kind = await r.detectorKind(f.key);
         // Anyone can arm a key of their own on a real vault, so followers only hear about the vault's own presets.
@@ -174,6 +191,9 @@ if (run("indexer") && contracts) {
       onStuck: stuckAlert,
       // A plan is credited only once its payment is buried a few blocks, so a reorged-away transfer can't buy one.
       confirmations,
+      // A reorg deeper than the depth can drop a credited payment. A transfer that comes back credits nothing more.
+      onRewind: async (from) => void (await r.bump("payments_reorged_after_credit", await r.undoPayments(from))),
+      onDeepReorg: reorgAlert,
       address: env.PLAN_TOKEN as Address,
       startBlock: env.START_BLOCK,
       filter: { event: getAbiItem({ abi: erc20Abi, name: "Transfer" }), args: { to: env.PLAN_PAY_ADDRESS } },
