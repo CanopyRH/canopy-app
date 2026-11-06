@@ -188,6 +188,7 @@ threshold, a missing or empty reading, a DRAIN window under 1,200 seconds, a bad
 exist or whose window is too short).
 
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_register_isIdempotentAndValidates`.
+- [AlarmLevels.t.sol](test/AlarmLevels.t.sol) `test_anyoneCanRegisterALevel_andRegisteringAgainChangesNothing` and `test_aLevelMustBeBetweenZeroAndTenThousandBasisPoints`: the app's five "Vault loss" levels (0.5%, 1%, 2%, 5%, 10%) are ordinary SHARE_DROP detectors anyone can register.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_register_BadDetector_priceBelow`, `test_register_BadDetector_shareDrop`, `test_register_BadDetector_paused`, `test_register_BadDetector_addressChange`, `test_register_BadDetector_drain`, `test_register_BadDetector_quorum`, `test_register_BadDetector_both`, `test_register_existingKeyIsNotRevalidated`.
 
 ### A3. A detector fires only while its on-chain condition holds
@@ -207,6 +208,7 @@ raise it with a one-transaction price spike (flash deposit, donation, withdrawal
 - [ForkCheckpoint.t.sol](test/ForkCheckpoint.t.sol) `test_fork_shareDropCheckpoint_everyLaunchVault`: on all five launch vaults, four spike attempts each, on the live state and after 180 idle days. None leaves the mark above the settled price, and none can fire the alarm.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: for a vault where the attack would work (a naive one that counts donations), the poisoned key can't be armed.
 - [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_theAlarmBookMatchesTheIndependentModel`: after every call the stored mark equals the model's.
+- [AlarmLevels.t.sol](test/AlarmLevels.t.sol) `test_everyLevelFiresAtItsOwnThresholdAndNotBefore`, `test_aCustomLevelFiresAndExitsTheOwnerThatArmedIt`, `test_aLevelThePositionDidNotArmCannotExitIt` and `test_aLevelCannotFireAgainForADay_andAKeeperCannotExitOnYesterdaysFiring`: each level fires at its own threshold, exits only a position that armed it, and refires daily like any SHARE_DROP key. `test_levelKeysAreTheOnesTheAppWorksOut` pins the five keys the browser computes. [levels.test.ts](../web/test/levels.test.ts) applies the going-off rule to every level.
 
 ### A5. DRAIN never trusts one period's readings, and needs a drop seen twice
 
