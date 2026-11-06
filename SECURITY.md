@@ -25,7 +25,9 @@ move to, never by changing the ones in use.
 | Payments | A 2-of-3 payments Safe | Receive plan payments | Anything in any contract | n/a |
 | Keeper | Canopy's keeper key (gas only) | Send exits that a fired alarm allows, paying the owner | Choose who is paid | n/a; anyone can run a keeper |
 
-Every admin change is a public transaction from the admin Safe through the Timelock.
+Every admin change is a public transaction from the admin Safe through the Timelock. The operator chat gets an alert for
+each `AdapterSet`, `FeedSet`, `RouteSet`, `GuardianSet`, `ArmingPaused` and `WatcherSet` event. To pause arming, react to
+an alert nobody expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
 
 ## Risks we accept
 
