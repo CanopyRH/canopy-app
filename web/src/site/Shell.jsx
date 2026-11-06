@@ -5,8 +5,8 @@ import './docs.css';
 import './pages.css';
 
 // The reading pages (docs, whitepaper, roadmap) share this frame, so moving between them feels like one site.
-const PAGES=[{id:'docs',label:'Docs',href:'docs.html'},{id:'whitepaper',label:'Whitepaper',href:'whitepaper.html'},{id:'roadmap',label:'Roadmap',href:'roadmap.html'}];
-const FOOTER=[{label:'Website',href:'./'},{label:'App',href:'app.html'},{label:'Telegram alerts',href:'https://t.me/CanopyAlerts_Bot'},{label:'Source code',href:'https://github.com/CanopyRH/canopy-app'}];
+const PAGES=[{id:'docs',label:'Docs',href:'docs.html'},{id:'whitepaper',label:'Whitepaper',href:'whitepaper.html'},{id:'roadmap',label:'Roadmap',href:'roadmap.html'},{id:'board',label:'Board',href:'board.html'}];
+const FOOTER=[{label:'Website',href:'./'},{label:'App',href:'app.html'},{label:'Armed board',href:'board.html'},{label:'Telegram alerts',href:'https://t.me/CanopyAlerts_Bot'},{label:'Source code',href:'https://github.com/CanopyRH/canopy-app'}];
 
 export function Shell({page,children}) {
   return <div className="docs-page">

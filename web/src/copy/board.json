@@ -1,0 +1,50 @@
+{
+  "eyebrow": "Armed board",
+  "pitch": "armed and watching",
+  "fastest": "Fastest exit",
+  "intro": "The numbers people quote, read from the chain and the Canopy index. They refresh every minute. No wallet addresses are shown, only counts.",
+  "emptyIntro": "Nothing is armed yet. The numbers fill in as people arm their positions.",
+  "stats": {
+    "positions": "Positions armed",
+    "wallets": "Wallets armed",
+    "exits24h": "Exits, last 24 hours",
+    "exits7d": "Exits, last 7 days",
+    "exitsAll": "Exits, all time",
+    "returned": "Value returned to wallets",
+    "median": "Median time to exit",
+    "fastestTime": "Fastest time to exit"
+  },
+  "notes": {
+    "time": "Time from an alarm firing to the exit landing on chain.",
+    "returned": "All time, in dollars.",
+    "noExit": "No exit has landed yet."
+  },
+  "vaults": {
+    "title": "Top vaults by armed value",
+    "name": "Vault",
+    "value": "Armed",
+    "positions": "Positions",
+    "empty": "No vault has armed positions yet."
+  },
+  "latest": {
+    "title": "Latest exits",
+    "vault": "Vault",
+    "alarm": "Alarm",
+    "time": "Time to exit",
+    "amount": "Paid out",
+    "tx": "Transaction",
+    "view": "View",
+    "when": "When",
+    "empty": "No exits yet."
+  },
+  "share": {
+    "button": "Post on X",
+    "hint": "Prefilled with today's numbers."
+  },
+  "status": {
+    "loading": "Loading the numbers.",
+    "failed": "Couldn't load the numbers just now. We will try again in a minute.",
+    "updated": "Updated"
+  },
+  "footnote": "Counts only the vaults Canopy lists. Armed value is each owner's exitable shares times the vault's share price, in dollars of the vault's asset. Canopy is software. It tries to exit when your alarms fire and promises no outcome."
+}
