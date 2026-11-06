@@ -28,6 +28,8 @@ contract Ledger {
     uint256 public badSpender; // pulls out of the router by anything but the swap router, or to anywhere but the swap router
     uint256 public ownerPayouts;
     uint256 public swapPulls;
+    address[] public swapToken; // the legs of the exit in progress: what the swap router pulled, and how much
+    uint256[] public swapIn;
 
     function init(address r, address s) external {
         router = r;
@@ -43,9 +45,23 @@ contract Ledger {
         else ownerPayouts++;
     }
 
-    function noteTransferFrom(address spender, address to) external {
-        if (spender != swapRouter || to != swapRouter) badSpender++;
-        else swapPulls++;
+    function noteTransferFrom(address spender, address to, address token, uint256 amount) external {
+        if (spender != swapRouter || to != swapRouter) {
+            badSpender++;
+        } else {
+            swapPulls++;
+            swapToken.push(token);
+            swapIn.push(amount);
+        }
+    }
+
+    function swapCount() external view returns (uint256) {
+        return swapToken.length;
+    }
+
+    function clearSwaps() external {
+        delete swapToken;
+        delete swapIn;
     }
 }
 
@@ -62,7 +78,7 @@ contract TrackedToken is MockERC20 {
     }
 
     function transferFrom(address f, address t, uint256 a) public override returns (bool) {
-        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t);
+        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t, address(this), a);
         return super.transferFrom(f, t, a);
     }
 }
@@ -80,7 +96,7 @@ contract TrackedVault is MockVault {
     }
 
     function transferFrom(address f, address t, uint256 a) public override returns (bool) {
-        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t);
+        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t, address(this), a);
         return super.transferFrom(f, t, a);
     }
 }
@@ -112,7 +128,7 @@ contract TrackedSelfVault is MockERC20 {
     }
 
     function transferFrom(address f, address t, uint256 a) public override returns (bool) {
-        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t);
+        if (f == ledger.router()) ledger.noteTransferFrom(msg.sender, t, address(this), a);
         return super.transferFrom(f, t, a);
     }
 
@@ -179,6 +195,10 @@ contract RouterHandler {
     bool[NV][NO] internal gArmed;
     uint8[NV][NO] internal gMask;
     uint64[NV][NO] internal gArmedAt;
+    uint16[NV][NO] internal gSlip;
+    // ghost model of the alarms: the time each key last fired, kept here and never read back from AlarmBook.isLive
+    uint64[NK] internal gFiredAt;
+    uint256 internal expiry; // the router's ADMIN_EXPIRY, as the handler expects it
 
     mapping(address => uint256) public donated; // tokens sent straight to the router
     uint256[NT] internal sumOwedSeen;
@@ -189,6 +209,10 @@ contract RouterHandler {
     uint256 public unauthorizedExitByStranger; // a non-owner exit succeeded without an armed, live key
     uint256 public strangerDisarmed; // a non-owner disarm succeeded
     uint256 public claimPaidSomeoneElse; // claimOwed succeeded but the named owner's owed balance did not drop
+    uint256 public alarmModelRefusals; // the model says a non-owner exit is allowed, and the router refused it for alarm reasons
+    uint256 public adminPowerAfterExpiry; // an admin or guardian call succeeded at or after ADMIN_EXPIRY
+    uint256 public swapBelowOracleMin; // a swap paid less than the handler's own oracle minimum
+    uint256 public thirdPartySwapOverSlipCap; // a swap in an exit run by a non-owner paid more than 1% under the oracle
 
     // coverage counters
     uint256 public okArm;
@@ -201,9 +225,13 @@ contract RouterHandler {
     uint256 public okDisarmAll;
     uint256 public pokesFired;
     uint256 public owedBooked;
+    uint256 public adminRevertedAfterExpiry;
+    uint256 public swapsChecked;
+    uint256 public thirdPartySwapsChecked;
 
     constructor() {
         startTime = block.timestamp;
+        expiry = block.timestamp + 365 days;
         admin = address(0xAD);
         guardian = address(0x6A);
         keeper = address(0xB0B);
@@ -220,7 +248,7 @@ contract RouterHandler {
         book = new AlarmBook(admin);
         router = new ExitRouter(
             address(stable), address(0x0E7E), address(swap), address(book), admin, guardian, address(stableFeed), 90_000,
-            block.timestamp + 365 days
+            expiry
         );
         ledger.init(address(router), address(swap));
         adapter = new ERC4626Adapter(address(router));
@@ -351,6 +379,7 @@ contract RouterHandler {
             gArmed[o][v] = true;
             gMask[o][v] = m;
             gArmedAt[o][v] = uint64(block.timestamp);
+            gSlip[o][v] = uint16(slip % 1101);
             okArm++;
         } catch {}
     }
@@ -394,8 +423,14 @@ contract RouterHandler {
 
     /// @dev Short steps, so an alarm stays live (24 h) across several calls; sometimes a long jump past it.
     function warp(uint256 dt) external {
-        if (dt % 3 != 0 || block.timestamp > startTime + 300 days) return;
+        if (dt % 3 != 0 || block.timestamp > startTime + 450 days) return;
         vm.warp(block.timestamp + ((dt >> 8) % 16 == 0 ? _b(dt >> 16, 1 days, 3 days) : _b(dt >> 16, 1, 6 hours)));
+    }
+
+    /// @dev Rare: lands on a second from the expiry itself to 30 days after it, so later calls run with the admin's time over.
+    function jumpPastExpiry(uint256 seed) external {
+        if (seed % 8 != 0 || block.timestamp >= expiry) return;
+        vm.warp(expiry + _b(seed >> 8, 0, 30 days));
     }
 
     function setPaused(uint256 pi, bool p) external {
@@ -406,7 +441,10 @@ contract RouterHandler {
         ledger.setExpected(address(0));
         vm.prank(strangers[ci % 2]);
         try book.poke(keys[ki % NK]) returns (bool fired) {
-            if (fired) pokesFired++;
+            if (fired) {
+                pokesFired++;
+                gFiredAt[ki % NK] = uint64(block.timestamp);
+            }
         } catch {}
     }
 
@@ -462,7 +500,41 @@ contract RouterHandler {
         uint256 i = (ti >> 8) % 2;
         ledger.setExpected(address(0));
         vm.prank(admin);
-        router.setFeed(address(tokens[i + 1]), address(feeds[i]), 3600, 18); // bumps swapConfig
+        try router.setFeed(address(tokens[i + 1]), address(feeds[i]), 3600, 18) { // bumps swapConfig
+            if (block.timestamp >= expiry) adminPowerAfterExpiry++;
+        } catch {
+            if (block.timestamp >= expiry) adminRevertedAfterExpiry++;
+        }
+    }
+
+    /// @dev Once ADMIN_EXPIRY has passed, every admin call and every guardian call must revert. Does nothing before it.
+    function adminCallAfterExpiry(uint256 seed) external {
+        if (block.timestamp < expiry) return;
+        ledger.setExpected(address(0));
+        uint256 which = seed % 6;
+        bool ok;
+        bytes memory path = abi.encodePacked(address(tokens[1]), uint24(500), address(tokens[0]));
+        if (which == 0) {
+            vm.prank(admin);
+            try router.setAdapter(address(adapter), true) { ok = true; } catch {}
+        } else if (which == 1) {
+            vm.prank(admin);
+            try router.setFeed(address(tokens[1]), address(feeds[0]), 3600, 18) { ok = true; } catch {}
+        } else if (which == 2) {
+            vm.prank(admin);
+            try router.setRoute(address(tokens[1]), path) { ok = true; } catch {}
+        } else if (which == 3) {
+            vm.prank(admin);
+            try router.setGuardian(guardian) { ok = true; } catch {}
+        } else if (which == 4) {
+            vm.prank(admin);
+            try router.setArmingPaused(true) { ok = true; } catch {}
+        } else {
+            vm.prank(guardian);
+            try router.setArmingPaused(true) { ok = true; } catch {}
+        }
+        if (ok) adminPowerAfterExpiry++;
+        else adminRevertedAfterExpiry++;
     }
 
     function guardianPause(uint256 mode) external {
@@ -489,16 +561,20 @@ contract RouterHandler {
         bytes32 id = _posId(o, v); // computed first: a prank applies to the very next external call
         uint256[NT] memory before = _snapshotFree();
         uint256 owedBefore = _totalOwed();
+        bool allowed = caller == owners[o] || _modelAllows(o, v, kIdx); // worked out before the call, from the ghost state only
         ledger.setExpected(owners[o]);
+        ledger.clearSwaps();
         vm.prank(caller);
         try router.exit(id, key, amount) {
             if (kind == 0) okOwnerExit++;
             else if (kind == 1) okKeeperExit++;
             else okStrangerExit++;
             if (_totalOwed() > owedBefore) owedBooked++;
-            if (caller != owners[o]) _checkThirdParty(o, v, kIdx);
-        } catch {
+            if (caller != owners[o]) _checkThirdParty(o, v, allowed);
+            _checkSwaps(o, v, caller != owners[o]);
+        } catch (bytes memory err) {
             if (caller != owners[o]) deniedStrangerExit++;
+            if (allowed && caller != owners[o] && _isAuthError(err)) alarmModelRefusals++;
         }
         ledger.setExpected(address(0));
         _checkFree(before);
@@ -535,16 +611,55 @@ contract RouterHandler {
         return NK;
     }
 
-    /// @dev A non-owner exit worked. The model must say: armed, this key armed on it, and the alarm live since arming.
-    function _checkThirdParty(uint256 o, uint256 v, uint256 kIdx) internal {
-        if (!gArmed[o][v]) {
-            disarmedExitByStranger++;
-            return;
+    /// @dev The model of when a non-owner may exit, written from the rules and the ghost state alone (AlarmBook.isLive is
+    /// not used): the position is armed, this key was armed on it, the key fired at or after the arming, and it fired
+    /// no more than 24 hours ago.
+    function _modelAllows(uint256 o, uint256 v, uint256 kIdx) internal view returns (bool) {
+        if (!gArmed[o][v] || kIdx >= NK || ((gMask[o][v] >> kIdx) & 1) == 0) return false;
+        uint256 firedAt = gFiredAt[kIdx];
+        return firedAt != 0 && firedAt >= gArmedAt[o][v] && block.timestamp <= firedAt + 1 days;
+    }
+
+    /// @dev The router's three refusals that are about who may exit: not armed, key not armed, alarm not live.
+    function _isAuthError(bytes memory err) internal pure returns (bool) {
+        if (err.length < 4) return false;
+        bytes4 sel = bytes4(err);
+        return sel == ExitRouter.NotArmed.selector || sel == ExitRouter.NotAuthorized.selector || sel == ExitRouter.AlarmNotLive.selector;
+    }
+
+    /// @dev A non-owner exit worked, so the model must have allowed it. A position the model says is disarmed is counted separately.
+    function _checkThirdParty(uint256 o, uint256 v, bool allowed) internal {
+        if (!gArmed[o][v]) disarmedExitByStranger++;
+        else if (!allowed) unauthorizedExitByStranger++;
+    }
+
+    /// @dev Checks each swap leg of the exit just run against an oracle minimum the handler works out itself from the feeds:
+    /// what the pool paid must not be below fair value less the slippage that applies. That slippage is the position's own
+    /// limit, and for a non-owner exit at most 1%. The 1 unit allowed is the router's rounding down of its own figure.
+    function _checkSwaps(uint256 o, uint256 v, bool thirdParty) internal {
+        uint256 n = ledger.swapCount();
+        for (uint256 s; s < n; ++s) {
+            address tk = ledger.swapToken(s);
+            uint256 amountIn = ledger.swapIn(s);
+            uint256 paid = (amountIn * swap.outPer1e18()) / 1e18; // stable units the pool gave for it
+            uint256 pT;
+            if (tk == address(tokens[1])) pT = uint256(feeds[0].answer());
+            else if (tk == address(tokens[2])) pT = uint256(feeds[1].answer());
+            else {
+                swapBelowOracleMin++; // a swap with no feed behind it
+                continue;
+            }
+            uint256 unit = uint256(stableFeed.answer()) * 1e12 * 10_000; // 18-decimal token, 8-decimal feeds, 6-decimal stable
+            uint256 slip = gSlip[o][v];
+            if (thirdParty && slip > 100) slip = 100;
+            swapsChecked++;
+            if (paid + 1 < (amountIn * pT * (10_000 - slip)) / unit) swapBelowOracleMin++;
+            if (thirdParty) {
+                thirdPartySwapsChecked++;
+                if (paid + 1 < (amountIn * pT * 9_900) / unit) thirdPartySwapOverSlipCap++;
+            }
         }
-        bool keyed = kIdx < NK && ((gMask[o][v] >> kIdx) & 1) == 1;
-        uint256 since = block.timestamp - gArmedAt[o][v];
-        bool live = keyed && book.isLive(keys[kIdx], since < 1 days ? since : 1 days);
-        if (!live) unauthorizedExitByStranger++;
+        ledger.clearSwaps();
     }
 
     function _pickOwed(uint256 seed, address who, MockERC20 t) internal view returns (address, MockERC20) {
@@ -656,6 +771,27 @@ contract RouterInvariants {
         _eq(h.unauthorizedExitByStranger(), 0, "a non-owner exit worked without an armed, live key");
     }
 
+    /// The model of when an alarm may exit someone is the handler's own, and the router agrees with it both ways: it never
+    /// allows an exit the model forbids, and never refuses on alarm grounds an exit the model allows.
+    function invariant_theRouterAgreesWithTheIndependentAlarmModel() public view {
+        _eq(h.alarmModelRefusals(), 0, "the router refused a non-owner exit that the alarm model allows");
+        _eq(h.unauthorizedExitByStranger(), 0, "the router allowed a non-owner exit that the alarm model forbids");
+    }
+
+    // 5. The admin and the guardian have no power once ADMIN_EXPIRY has passed.
+    function invariant_adminAndGuardianCallsRevertAfterExpiry() public view {
+        _eq(h.adminPowerAfterExpiry(), 0, "an admin or guardian call worked after ADMIN_EXPIRY");
+    }
+
+    // 6. A swap never pays below the oracle minimum, and a third party can never push it past 1%.
+    function invariant_aSwapNeverPaysBelowTheOracleMinimum() public view {
+        _eq(h.swapBelowOracleMin(), 0, "a swap paid less than the oracle minimum");
+    }
+
+    function invariant_aThirdPartyExitNeverSwapsBeyondTheOnePercentCap() public view {
+        _eq(h.thirdPartySwapOverSlipCap(), 0, "a third-party exit swapped more than 1% under the oracle");
+    }
+
     function invariant_onlyTheOwnerCanDisarm() public view {
         _eq(h.strangerDisarmed(), 0, "a non-owner disarmed a position");
     }
@@ -713,11 +849,40 @@ contract RouterInvariants {
         h.exitPosition(0, 0, 3, 3, 0);
         _eq(h.router().owed(h.owner(0), address(h.token(6))), 1000e18, "shares booked as owed exactly once");
 
+        // a keeper's swap: the owner allows 10%, the pool pays 0.5% under the oracle, inside the 1% cap
+        _eq(h.swapsChecked(), 1, "one swap checked so far, the owner's");
+        h.swapKnobs(95_000, 257); // rate 0.995, pool working, stablecoin on peg
+        h.arm(1, 1, 1, 1000, 1); // owner 1, vault 1, stable harbour, 10% limit, alarm key 0 (already fired this second)
+        h.exitPosition(1, 1, 1, 0, 0);
+        _eq(h.thirdPartySwapsChecked(), 1, "the keeper's swap was checked against the 1% cap");
+
+        // the model and the router agree on the same-second case, where the alarm fired at the second of the arming
+        _eq(h.alarmModelRefusals(), 0, "no disagreement");
+
         invariant_onlyTheOwnerIsEverPaid();
         invariant_totalOwedIsTheSumOfOwedAndIsBacked();
         invariant_noFreeBalanceBeyondDonations();
         invariant_nobodyElseHoldsAnyToken();
         invariant_disarmedPositionsCantBeExitedByAStranger();
         invariant_aStrangerNeedsAnArmedKeyAndALiveAlarm();
+        invariant_theRouterAgreesWithTheIndependentAlarmModel();
+        invariant_aSwapNeverPaysBelowTheOracleMinimum();
+        invariant_aThirdPartyExitNeverSwapsBeyondTheOnePercentCap();
+    }
+
+    /// @dev Not an invariant. Before the expiry the handler's admin call does nothing; from the expiry second on, every admin and
+    /// guardian call is refused, and the handler counts each refusal.
+    function test_adminCallsRevertFromTheExpirySecondOn() public {
+        h.adminCallAfterExpiry(0);
+        _eq(h.adminRevertedAfterExpiry(), 0, "nothing counted before the expiry");
+        h.jumpPastExpiry(0); // lands on the expiry second itself
+        for (uint256 i; i < 6; ++i) {
+            h.adminCallAfterExpiry(i);
+        }
+        _eq(h.adminRevertedAfterExpiry(), 6, "six admin and guardian calls, six refusals");
+        _eq(h.adminPowerAfterExpiry(), 0, "none worked");
+        h.adminSetFeed(0);
+        _eq(h.adminRevertedAfterExpiry(), 7, "the feed change was refused too");
+        invariant_adminAndGuardianCallsRevertAfterExpiry();
     }
 }

@@ -19,7 +19,7 @@ Timelock and the adapter have a few rules of their own at the end.
 The invariant profile is `[profile.invariant.invariant]` in [foundry.toml](foundry.toml). The suite is
 [RouterInvariant.t.sol](test/RouterInvariant.t.sol): a handler contract arms, disarms, disarms all, pokes alarms,
 exits as the owner, a keeper and strangers, blocks owners from receiving tokens so a payout is booked as owed,
-claims, moves vault liquidity and prices, turns swap knobs, donates tokens to the router and moves time, across three
+claims, moves vault liquidity and prices, turns swap knobs, donates tokens to the router and moves time (sometimes past `ADMIN_EXPIRY`), across three
 owners, four vaults and seven tokens. One of the vaults has its own share token as its asset. `test_handlerReachesTheInterestingStates` in the same file replays a fixed
 sequence to show each of those paths is reachable.
 
@@ -53,7 +53,7 @@ to everyone but its owner.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: a poisoned alarm cannot exit a user who armed later.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_unknownPosition_reverts`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_exit_NotArmed_unknownPositionByStranger`, `test_exit_NotArmed_afterDisarm`, `test_exit_NotArmed_afterDisarmAll`, `test_exit_NotAuthorized_keyNotArmedForThisPosition`, `test_exit_AlarmNotLive_neverFired`, `test_exit_AlarmNotLive_firedBeforeArming`, `test_exit_AlarmNotLive_firedLongAgo`.
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_aStrangerNeedsAnArmedKeyAndALiveAlarm`: in every random sequence, each successful non-owner exit was on a position the model says is armed, with an armed key, with that alarm live since the arming.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_aStrangerNeedsAnArmedKeyAndALiveAlarm` and `invariant_theRouterAgreesWithTheIndependentAlarmModel`: the handler keeps its own model of when an alarm may exit someone (the position is armed, this key was armed on it, the key fired at or after the arming, and no more than 24 hours ago), built from the times it saw each key fire and not from `AlarmBook.isLive`. Every successful non-owner exit must be allowed by the model, and an exit the model allows must never be refused for an alarm reason.
 - [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_disarmedPositionsCantBeExitedByAStranger`: no non-owner exit ever succeeds on a disarmed position.
 
 ### R3. Exits are never gated by a pause, fee, plan check or oracle
@@ -81,13 +81,14 @@ can call them for a position.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_disarm_NotOwner_stranger`, `test_disarm_NotOwner_unknownPosition`.
 - [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_onlyTheOwnerCanDisarm`: no non-owner disarm ever succeeds. `invariant_disarmedPositionsCantBeExitedByAStranger` covers that a revoke sticks.
 
-### R5. Admin can only set adapters, feeds and routes, only until expiry; the guardian can only pause new arming; nobody can upgrade
+### R5. Admin can only set adapters, feeds, routes and the guardian, and pause new arming, only until expiry; the guardian can only pause new arming; nobody can upgrade
 
 The admin (a Timelock) has no power over funds or exits, loses even that power at `ADMIN_EXPIRY`, and disabling an
 adapter never affects a position already armed. The guardian can pause only new arming, and only until expiry.
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_admin_onlyAdminCanConfigure`, `test_expiry_endsAdminAndGuardian`, `test_expiry_pausedRouterAcceptsArmingAgain`, `test_disablingAdapter_doesNotBlockExistingPositions`, `test_guardianCannotBlockExits`, `test_setRoute_mustEndInStable`.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_feedChangeAfterArming_cantReachAnArmedPosition`: a feed change cannot reach a position that is already armed.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_adminAndGuardianCallsRevertAfterExpiry`: the handler jumps past `ADMIN_EXPIRY` and then calls `setAdapter`, `setFeed`, `setRoute`, `setGuardian` and `setArmingPaused` as the admin and the guardian. None ever succeeds. `test_adminCallsRevertFromTheExpirySecondOn` pins the first second.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_setAdapter_NotAdmin`, `test_setFeed_NotAdmin`, `test_setRoute_NotAdmin`, `test_setGuardian_NotAdmin`, `test_adminFunctions_NotAdmin_afterExpiry`, `test_setArmingPaused_NotGuardian_stranger`, `test_setArmingPaused_NotGuardian_afterExpiry`, `test_setGuardian_replacedGuardianLosesThePower`, `test_setFeed_BadFeed_noCode`, `test_setFeed_BadFeed_decimalsAboveMax`, `test_setRoute_BadRoute_tooShort`, `test_setRoute_BadRoute_misalignedLength`, `test_setRoute_BadRoute_startsAtAnotherToken`, `test_setRoute_BadRoute_endsAtAnotherToken`, `test_arm_ArmingIsPaused`.
 - Not upgradable: the contract has no proxy, `delegatecall` or `selfdestruct`, and the admin and guardian are immutable or settable only by the admin. A test cannot prove an absence, so this one is a property of the source. `services/deploy/verify.ts` checks that the live bytecode is exactly this source.
 - Known limit: the admin can set a feed or route that applies to positions armed afterwards, which is listed as an accepted risk in [SECURITY.md](../SECURITY.md).
@@ -129,6 +130,8 @@ only to exits the owner sends. If the pool cannot fill within the cap, the swap 
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_swap_thirdPartyCappedAtOnePercent`: at 5% under the oracle, inside the owner's 10% limit, a keeper exit skips the swap.
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_swap_thirdPartyInsideOnePercent` and `test_swap_userLimitBelowCapStillApplies`: a swap at the cap goes through, and a tighter limit set by the owner still applies.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_aThirdPartyExitNeverSwapsBeyondTheOnePercentCap`: in every random sequence, each swap leg of an exit run by a keeper or stranger was paid at no less than 99% of the oracle value, which the handler works out itself from the feeds.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_aSwapNeverPaysBelowTheOracleMinimum`: the same for every swap, owner exits included, against the oracle value less the slippage the position allows (rounding of 1 unit of the stablecoin is allowed).
 
 ---
 
