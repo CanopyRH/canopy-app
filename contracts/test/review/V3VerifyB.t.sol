@@ -8,12 +8,11 @@ import {MockERC20} from "../Mocks.sol";
 import {RealVault} from "../AlarmAttacks.t.sol";
 import {Whale} from "../AlarmLimits.t.sol";
 
-/// @notice Verification of the DrainNeedsQuorum fix at 466c807 (review on verify-v3b).
-///
-/// V3B-01 (Low). `arm` refuses a bare DRAIN key but never looks inside a BOTH key, so "DRAIN only counts as a part of a
-/// BOTH key paired with a QUORUM key" (SECURITY.md, INVARIANTS.md R9) doesn't hold on chain. A BOTH of two DRAIN keys on
-/// the same vault (here thresholds 25% and 25.01%), or a BOTH of a DRAIN and any non-quorum key, arms fine; the documented
-/// whale dip fires both parts, the BOTH key fires, and a keeper exits the owner with no watcher signature and no loss.
+/// @notice V3B-01, regression. At 466c807 `arm` refused a bare DRAIN key but never looked inside a BOTH key, so a BOTH of
+/// two DRAIN keys on the same vault (thresholds 25% and 25.01%), or of a DRAIN and any non-quorum key, armed fine, and the
+/// documented whale dip fired it: a keeper exited the owner with no watcher signature and no loss. Fixed: `arm` reads a
+/// BOTH key's two parts from AlarmBook's stored detectors and refuses (DrainNeedsQuorum) a DRAIN part whose other part
+/// is not a QUORUM key, and refuses (NestedBoth) any BOTH part.
 contract V3VerifyBTest is Base {
     uint32 internal constant WINDOW = 3600;
 
@@ -46,10 +45,6 @@ contract V3VerifyBTest is Base {
         rv.approve(address(router), type(uint256).max);
     }
 
-    function _arm(bytes32 k) internal returns (bytes32) {
-        vm.prank(OWNER);
-        return router.arm(_params(address(rv), 0, 0, _keys(k)));
-    }
 
     /// Control: the fix refuses the bare DRAIN key.
     function test_V3B_control_bareDrainIsRefused() public {
@@ -58,36 +53,46 @@ contract V3VerifyBTest is Base {
         router.arm(_params(address(rv), 0, 0, _keys(d1)));
     }
 
-    function test_V3B_01_bothOfTwoDrains_exitsWithNoQuorumAndNoLoss() public {
+    /// V3B-01, regression: a BOTH of two DRAIN keys is refused at arming.
+    function test_V3B_01_bothOfTwoDrains_isRefused() public {
         bytes32 both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, d1, d2));
-        bytes32 id = _arm(both); // accepted: the router only checks the BOTH key's own kind
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, both));
+        router.arm(_params(address(rv), 0, 0, _keys(both)));
 
-        // The documented whale limit, applied to both parts: dip and poke, then again a minute later.
+        // The whale's dips still fire both DRAIN parts and the BOTH key, but no position can carry it.
         whale.dip(book, rv, d1, 400e18, true);
         whale.dip(book, rv, d2, 400e18, true);
         vm.warp(block.timestamp + 60);
         assertTrue(whale.dip(book, rv, d1, 400e18, true), "first DRAIN part fires");
         assertTrue(whale.dip(book, rv, d2, 400e18, true), "second DRAIN part fires");
-        assertTrue(book.poke(both), "the BOTH key fires with no watcher involved");
-
-        vm.prank(KEEPER);
-        router.exit(id, both, 0);
-        assertEq(asset.balanceOf(OWNER), 600e18, "exited on a drain that never happened, with no quorum");
-        assertEq(rv.totalAssets(), 400e18, "only the owner's own withdrawal left the vault");
+        assertTrue(book.poke(both), "the BOTH key fires in AlarmBook");
+        assertTrue(!router.isArmed(router.positionId(OWNER, address(adapter), address(rv), 0)), "but nobody is armed on it");
+        assertEq(rv.balanceOf(OWNER), 600e18, "the owner keeps the position");
     }
 
-    /// The same through BOTH(DRAIN, X) for any non-quorum X. Here X is a PAUSED key on a contract whose switch anyone can
-    /// flip (the test's MockPausable), so one pair of whale dips is all it takes.
-    function test_V3B_01_bothOfDrainAndAnAttackerKey_exitsWithNoQuorum() public {
-        bytes32 both = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, d1, pauseKey));
-        bytes32 id = _arm(both);
-        whale.dip(book, rv, d1, 400e18, true);
-        vm.warp(block.timestamp + 60);
-        assertTrue(whale.dip(book, rv, d1, 400e18, true), "DRAIN part fires");
-        _fireAlarm(); // the PAUSED part: any switch the attacker can flip
-        assertTrue(book.poke(both), "BOTH fires");
-        vm.prank(KEEPER);
-        router.exit(id, both, 0);
-        assertEq(asset.balanceOf(OWNER), 600e18, "exited with no quorum");
+    /// The same for BOTH(DRAIN, X) with any non-quorum X, in either order. Here X is a PAUSED key anyone can trip.
+    function test_V3B_01_bothOfDrainAndANonQuorumKey_isRefused_eitherOrder() public {
+        bytes32 b1 = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, d1, pauseKey));
+        bytes32 b2 = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, pauseKey, d1));
+        bytes32[2] memory bs = [b1, b2];
+        for (uint256 i; i < 2; ++i) {
+            vm.prank(OWNER);
+            vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, bs[i]));
+            router.arm(_params(address(rv), 0, 0, _keys(bs[i])));
+        }
+    }
+
+    /// A nested BOTH is refused, even when its inner key is the allowed BOTH(DRAIN, QUORUM), so one level of parts is the
+    /// whole tree the router has to check. The inner key itself, the app's "Vault drain + confirmation" shape, arms.
+    function test_V3B_01_nestedBoth_isRefused() public {
+        bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(rv), 2, 0, 0, 0));
+        bytes32 inner = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, d1, q));
+        bytes32 outer = book.register(_detector(AlarmBook.Kind.BOTH, address(rv), 0, 1 days, inner, pauseKey));
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.NestedBoth.selector, outer));
+        router.arm(_params(address(rv), 0, 0, _keys(outer)));
+        vm.prank(OWNER);
+        router.arm(_params(address(rv), 0, 0, _keys(inner)));
     }
 }

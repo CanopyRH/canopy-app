@@ -320,6 +320,48 @@ contract ExitRouterReverts is Base {
         router.arm(_params(address(vault), RAW, 0, _keys(both)));
     }
 
+    /// A BOTH key that carries a DRAIN part without a QUORUM other part is refused, in either order; BOTH(DRAIN, QUORUM)
+    /// and BOTH of two non-DRAIN keys are accepted.
+    function test_arm_DrainNeedsQuorum_bothWithoutAQuorumPart() public {
+        vault.deposit(OWNER, 100e18);
+        bytes32 drain = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+        bytes32 drain2 = book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 3000, 3600, 0, 0));
+        bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(vault), 2, 0, 0, 0));
+        bytes32[3] memory bad = [
+            book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, drain, pauseKey)),
+            book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, pauseKey, drain)),
+            book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, drain, drain2))
+        ];
+        for (uint256 i; i < 3; ++i) {
+            vm.prank(OWNER);
+            vm.expectRevert(abi.encodeWithSelector(ExitRouter.DrainNeedsQuorum.selector, bad[i]));
+            router.arm(_params(address(vault), RAW, 0, _keys(bad[i])));
+        }
+        bytes32 qFirst = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, q, drain));
+        bytes32 noDrain = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, pauseKey, q));
+        bytes32[] memory ok = new bytes32[](2);
+        ok[0] = qFirst;
+        ok[1] = noDrain;
+        vm.prank(OWNER);
+        router.arm(_params(address(vault), RAW, 0, ok));
+    }
+
+    function test_arm_NestedBoth() public {
+        bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(vault), 2, 0, 0, 0));
+        bytes32 inner = book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, pauseKey, q));
+        bytes32[2] memory nested = [
+            book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, inner, q)),
+            book.register(_detector(AlarmBook.Kind.BOTH, address(vault), 0, 1 days, q, inner))
+        ];
+        for (uint256 i; i < 2; ++i) {
+            vm.prank(OWNER);
+            vm.expectRevert(abi.encodeWithSelector(ExitRouter.NestedBoth.selector, nested[i]));
+            router.arm(_params(address(vault), RAW, 0, _keys(nested[i])));
+        }
+        vm.prank(OWNER);
+        router.arm(_params(address(vault), RAW, 0, _keys(inner)));
+    }
+
     function test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes() public {
         bytes32 q = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
         bytes32[] memory ks = new bytes32[](2);

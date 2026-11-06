@@ -5,6 +5,9 @@ src/ExitRouter.sol	arm: harbour >=	KILLED	KILLED	KILLED
 src/ExitRouter.sol	arm: slip cap >=	KILLED	KILLED	KILLED
 src/ExitRouter.sol	arm: keys cap >=	KILLED	KILLED	KILLED
 src/ExitRouter.sol	arm: bare DRAIN allowed	n/a	n/a	KILLED
+src/ExitRouter.sol	arm: nested BOTH allowed	n/a	n/a	KILLED
+src/ExitRouter.sol	arm: BOTH drain part unchecked	n/a	n/a	KILLED
+src/ExitRouter.sol	arm: BOTH drain part one side only	n/a	n/a	KILLED
 src/ExitRouter.sol	arm: armable check off	KILLED	KILLED	KILLED
 src/ExitRouter.sol	arm: NFT owner check off	KILLED	KILLED	KILLED
 src/ExitRouter.sol	arm: tokenId check off	KILLED	KILLED	KILLED
