@@ -152,9 +152,9 @@ describe("api", () => {
     watchers: [a.address], alarmBook: BOOK, chainId: 8453, now: () => 100, telegram: async () => {}, telegramSecret: "s".repeat(16),
   });
 
-  test("routes are read-only apart from watcher and Telegram posts", () => {
+  test("routes are read-only apart from watcher, Telegram and operator-token posts", () => {
     const routes = app().routes.filter((x) => x.method !== "ALL");
-    expect([...new Set(routes.filter((x) => x.method === "POST").map((x) => x.path))].sort()).toEqual(["/tg/webhook", "/watcher/attest"]);
+    expect([...new Set(routes.filter((x) => x.method === "POST").map((x) => x.path))].sort()).toEqual(["/alarms/review", "/tg/webhook", "/watcher/attest"]);
     expect(routes.every((x) => !/wallet|owner|account|user/i.test(x.path))).toBe(true);
   });
   test("a web app hosted elsewhere can read the API, but can't post to it", async () => {

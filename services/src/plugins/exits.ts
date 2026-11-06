@@ -36,11 +36,10 @@ export function rpcBlockTime(urls: string[] = [process.env.RPC_URL, process.env.
 type Row = Record<string, string | number | boolean | null>;
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
-export function exitsPlugin(blockTime: BlockTime): Plugin {
+/** Stores the time of blocks that have exits but no time yet. Newest first, because those are the ones people look at. */
+export function timeFiller(blockTime: BlockTime): (d: ApiDeps) => Promise<void> {
   let lastFail = -Infinity;
-
-  /** Stores the time of blocks that have exits but no time yet. Newest first, because those are the ones people look at. */
-  async function fillTimes(d: ApiDeps) {
+  return async (d) => {
     if (d.now() - lastFail < RETRY_SEC) return;
     const missing = await d.db.query<{ block: string }>(
       `SELECT DISTINCT e.block FROM exits e LEFT JOIN exit_times t ON t.block=e.block WHERE t.block IS NULL ORDER BY e.block DESC LIMIT ${FILL_PER_REQUEST}`,
@@ -50,7 +49,11 @@ export function exitsPlugin(blockTime: BlockTime): Plugin {
       if (at === null) lastFail = d.now();
       else await d.db.query(`INSERT INTO exit_times (block, at) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [block, at]);
     }
-  }
+  };
+}
+
+export function exitsPlugin(blockTime: BlockTime): Plugin {
+  const fillTimes = timeFiller(blockTime);
 
   async function summary(d: ApiDeps) {
     const total = Number((await d.db.query<{ n: string }>(`SELECT COUNT(*) AS n FROM exits`))[0]?.n ?? 0);
