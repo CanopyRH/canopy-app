@@ -1,0 +1,8 @@
+id	status	severity	lane	location	title	first_seen	last_seen
+offchain-backend|services/src/keeper/liquidity.ts|unbounded-loop-dos	fixed	High	offchain-backend	services/src/keeper/liquidity.ts:26-53	One armed contract hangs the keeper's exit loop	2026-11-05	2026-11-06
+evm|contracts/src/ExitRouter.sol|admin-swap-config	accepted	Medium	evm	contracts/src/ExitRouter.sol:319-336	Admin feed+route can take Stable-harbour exits armed after the change	2026-11-05	2026-11-06
+offchain-backend|services/src/index.ts|indexer-liveness	fixed	Low	offchain-backend	services/src/index.ts:97-120	Telegram alerts inside the indexer delay other alarms' exits	2026-11-05	2026-11-06
+evm|contracts/src/AlarmBook.sol|refire-gap	accepted	Low	evm	contracts/src/AlarmBook.sol:146-152	Position armed during a live alarm waits up to 24h for keepers	2026-11-05	2026-11-06
+ai-agents|services/src/index.ts|unmetered-signing	fixed	Low	ai-agents	services/src/index.ts:225-227	Watchers sign and keeper fires QUORUM keys on any contract	2026-11-05	2026-11-06
+offchain-backend|services/src/index.ts|rpc-key-in-logs	fixed	Low	offchain-backend	services/src/index.ts:44	RPC key in URL path reaches logs	2026-11-05	2026-11-06
+offchain-backend|services/src/keeper/keeper.ts|multicall-gas-griefing	fixed	High	offchain-backend	services/src/keeper/keeper.ts:52-78	One gas-burning key blinds the keeper batch check	2026-11-05	2026-11-06
