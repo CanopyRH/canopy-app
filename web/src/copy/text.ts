@@ -42,6 +42,7 @@ export const COPY = {
   errTooManyKeys: "That's more alarms than one position can hold. Choose fewer. Nothing was sent.",
   errSwapsNeedStable: "Swap settings only work when you choose to be paid in the stablecoin. Nothing was sent.",
   errTooManySwaps: "That's more swaps than one position can hold. Nothing was sent.",
+  errDrainNeedsQuorum: "A vault drain only counts when the watchers confirm it too, so it can't be armed on its own. Nothing was sent.",
   errDuplicateSwap: "Two swaps name the same token. Nothing was sent.",
   errBadSwap: "The contract refused a payout setting. Nothing was sent.",
   armed: "Armed",

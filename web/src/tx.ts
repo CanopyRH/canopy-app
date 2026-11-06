@@ -17,7 +17,7 @@ export const routerAbi = parseAbi([
 export const alarmBookAbi = parseAbi([
   "struct Detector { uint8 kind; address target; uint256 threshold; uint32 window; bytes32 a; bytes32 b; }",
   "function register(Detector d) returns (bytes32)",
-  "function state(bytes32) view returns (bool exists, uint64 firedAt, uint64 snapAt, uint256 baseline, uint256 snap, uint64 episodeAt, uint64 pendingAt)",
+  "function state(bytes32) view returns (bool exists, uint64 firedAt, uint64 snapAt, uint256 baseline, uint256 snap, uint64 episodeAt, uint64 pendingAt, uint256 prevSnap)",
   "function check(bytes32) view returns (bool)",
   "function armable(bytes32) view returns (bool)",
   "function isLive(bytes32, uint256) view returns (bool)",
