@@ -124,6 +124,32 @@ export const ROUTES: RouteDef[] = [
     errors: [{ status: 400, description: "Bad paging.", schema: errorSchema }],
   },
   {
+    method: "get", path: "/alarms/record", tag: "Reads", rateLimited: true,
+    summary: "The public alarm record",
+    description: "Every alarm that fired, newest first: a hard rule or a watcher quorum, the exits that followed, the time to the first one, and the operator's review. An alarm nobody has reviewed is never counted as correct.",
+    query: {
+      limit: { description: "Alarms per page, 1 to 100.", schema: z.number().int().min(1).max(100) },
+      before: { description: "A cursor from `next`: firedAt, a colon, then the key.", schema: z.string().regex(/^\d{1,12}:0x[0-9a-fA-F]{64}$/) },
+      vault: { description: "Only alarms on this vault.", schema: addressSchema },
+      outcome: { description: "Only alarms with this review outcome.", schema: z.string() },
+    },
+    ok: { contentType: "application/json", description: "A summary, the vaults, and a page of alarms with `next`." },
+    errors: [{ status: 400, description: "A malformed query.", schema: errorSchema }],
+  },
+  {
+    method: "get", path: "/board", tag: "Reads", rateLimited: true,
+    summary: "The armed board",
+    description: "What is armed right now: the armed value, positions, wallets, exits and time to exit. Cached for a minute. No owner address is listed.",
+    ok: { contentType: "application/json", description: "The board's numbers." },
+    errors: [{ status: 503, description: "The board could not be worked out and there is no earlier answer.", schema: errorSchema }],
+  },
+  {
+    method: "get", path: "/status", tag: "Reads", rateLimited: true,
+    summary: "Is Canopy working right now",
+    description: "Whether Canopy's services are running and keeping up with the chain. Only fields that are safe to show.",
+    ok: { contentType: "application/json", description: "The status." },
+  },
+  {
     method: "get", path: "/calldata/arm", tag: "Calldata", rateLimited: true,
     summary: "Calldata to arm a vault position",
     description:
@@ -185,6 +211,7 @@ export const INTERNAL_ROUTES: { method: string; path: string; why: string }[] = 
   { method: "GET", path: "/health", why: "Operator health check behind a bearer token." },
   { method: "POST", path: "/watcher/attest", why: "Approved watchers post signed attestations here." },
   { method: "POST", path: "/tg/webhook", why: "Telegram calls this with its secret token." },
+  { method: "POST", path: "/alarms/review", why: "The operator marks an alarm reviewed, behind the health bearer token." },
 ];
 
 const honoToOpenApi = (p: string) => p.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
