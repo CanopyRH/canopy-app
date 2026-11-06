@@ -1,0 +1,1119 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {Base} from "./Base.sol";
+import {ExitRouter} from "../src/ExitRouter.sol";
+import {AlarmBook} from "../src/AlarmBook.sol";
+import {Timelock} from "../src/Timelock.sol";
+import {ERC4626Adapter} from "../src/adapters/ERC4626Adapter.sol";
+import {AdapterBase} from "../src/adapters/AdapterBase.sol";
+import {IExitAdapter} from "../src/interfaces/IExitAdapter.sol";
+import {SafeTransferLib} from "../src/lib/SafeTransferLib.sol";
+import {ReentrancyGuard} from "../src/lib/ReentrancyGuard.sol";
+import {MockERC20, MockVault, MockFeed, ReentrantVault} from "./Mocks.sol";
+
+// Negative tests: one test per revert path of every state-changing external function in contracts/src.
+//
+// Every custom error the contracts can throw is covered below, with two exceptions that no call can reach:
+//   AdapterBase.WrongTarget       is declared and never thrown.
+//   SafeTransferLib.ApproveFailed is declared and never thrown (tryApprove returns false instead).
+//
+// Each failing call is paired with a nearby call that succeeds where that makes the boundary clear, so a
+// test cannot pass just because the setup is broken.
+
+// ------------------------------------------------------------------------------------------ helpers
+
+/// @dev A minimal ERC-721 with per-token approval and operator approval.
+contract MockNft {
+    mapping(uint256 => address) public ownerOf;
+    mapping(uint256 => address) public getApproved;
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    function mint(address to, uint256 id) external {
+        ownerOf[id] = to;
+    }
+
+    function setApprovalForAll(address op, bool ok) external {
+        isApprovedForAll[msg.sender][op] = ok;
+    }
+
+    function transferFrom(address from, address to, uint256 id) external {
+        require(ownerOf[id] == from, "not owner");
+        require(msg.sender == from || isApprovedForAll[from][msg.sender] || getApproved[id] == msg.sender, "not approved");
+        ownerOf[id] = to;
+    }
+}
+
+/// @dev An NFT adapter. `returnNft` decides whether unwind gives the NFT back, `payout` how much stable it mints to the router.
+contract MockNftAdapter is IExitAdapter {
+    MockNft public immutable nft;
+    MockERC20 public immutable stable;
+    bool public returnNft;
+    uint256 public payout;
+
+    constructor(MockNft n, MockERC20 s) {
+        nft = n;
+        stable = s;
+    }
+
+    function set(bool r, uint256 p) external {
+        returnNft = r;
+        payout = p;
+    }
+
+    function positionAsset(address) external view returns (address, bool) {
+        return (address(nft), true);
+    }
+
+    function outputs(address, uint256) external pure returns (address[] memory t) {
+        t = new address[](0);
+    }
+
+    function unwind(address, uint256 id) external {
+        if (returnNft) nft.transferFrom(address(this), msg.sender, id);
+        if (payout > 0) stable.mint(msg.sender, payout);
+    }
+}
+
+/// @dev Adapter that pays native ETH to whoever calls unwind.
+contract MockEthAdapter is IExitAdapter {
+    function positionAsset(address target) external pure returns (address, bool) {
+        return (target, false);
+    }
+
+    function outputs(address, uint256) external pure returns (address[] memory t) {
+        t = new address[](1);
+        t[0] = address(0);
+    }
+
+    function unwind(address, uint256) external {
+        (bool ok,) = msg.sender.call{value: address(this).balance}("");
+        require(ok, "send");
+    }
+
+    receive() external payable {}
+}
+
+/// @dev A position owner that is a contract and refuses ETH until told otherwise.
+contract EthRejector {
+    bool public accept;
+
+    receive() external payable {
+        require(accept, "no eth");
+    }
+
+    function setAccept(bool a) external {
+        accept = a;
+    }
+
+    function run(address to, bytes calldata data) external {
+        (bool ok, bytes memory ret) = to.call(data);
+        if (!ok) {
+            assembly ("memory-safe") {
+                revert(add(ret, 0x20), mload(ret))
+            }
+        }
+    }
+}
+
+/// @dev A smart-contract watcher whose ERC-1271 check always says no.
+contract RefusingWallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
+        return 0xffffffff;
+    }
+}
+
+// ------------------------------------------------------------------------------------------ ExitRouter
+
+contract ExitRouterReverts is Base {
+    uint8 internal constant RAW = 0;
+    uint8 internal constant STABLE = 1;
+    MockNft internal nft;
+    MockNftAdapter internal nftAdapter;
+
+    function setUp() public override {
+        super.setUp();
+        nft = new MockNft();
+        nftAdapter = new MockNftAdapter(nft, stable);
+        vm.prank(ADMIN);
+        router.setAdapter(address(nftAdapter), true);
+        nft.mint(OWNER, 7);
+    }
+
+    function _nftParams() internal view returns (ExitRouter.ArmParams memory) {
+        return ExitRouter.ArmParams({
+            adapter: address(nftAdapter),
+            target: address(nft),
+            tokenId: 7,
+            harbour: RAW,
+            maxSlipBps: 0,
+            termsHash: TERMS,
+            keys: _keys(pauseKey)
+        });
+    }
+
+    function _armNft() internal returns (bytes32 id) {
+        vm.prank(OWNER);
+        nft.setApprovalForAll(address(router), true);
+        vm.prank(OWNER);
+        id = router.arm(_nftParams());
+    }
+
+    // ---------------------------------------------------------------- arm
+
+    function test_arm_ArmingIsPaused() public {
+        vm.prank(GUARD);
+        router.setArmingPaused(true);
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, _keys(pauseKey));
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.ArmingIsPaused.selector);
+        router.arm(p);
+    }
+
+    function test_arm_NotSupported_unlistedAdapter() public {
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, _keys(pauseKey));
+        p.adapter = address(0xDEAD);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NotSupported.selector);
+        router.arm(p);
+    }
+
+    function test_arm_NotSupported_afterAdapterDisabled() public {
+        vm.prank(ADMIN);
+        router.setAdapter(address(adapter), false);
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, _keys(pauseKey));
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NotSupported.selector);
+        router.arm(p);
+    }
+
+    function test_arm_BadHarbour() public {
+        ExitRouter.ArmParams memory p = _params(address(vault), 2, 0, _keys(pauseKey));
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.BadHarbour.selector);
+        router.arm(p);
+        p.harbour = STABLE; // the highest valid value
+        vm.prank(OWNER);
+        router.arm(p);
+    }
+
+    function test_arm_SlipTooHigh() public {
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 1001, _keys(pauseKey));
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.SlipTooHigh.selector);
+        router.arm(p);
+        p.maxSlipBps = 1000; // exactly the cap
+        vm.prank(OWNER);
+        router.arm(p);
+    }
+
+    function test_arm_TooManyKeys() public {
+        bytes32[] memory nine = new bytes32[](9);
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, nine);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.TooManyKeys.selector);
+        router.arm(p);
+        p.keys = new bytes32[](8); // exactly MAX_KEYS
+        vm.prank(OWNER);
+        router.arm(p);
+    }
+
+    function test_arm_NotOwner_nftHeldBySomeoneElse() public {
+        ExitRouter.ArmParams memory p = _nftParams();
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotOwner.selector);
+        router.arm(p);
+        vm.prank(OWNER);
+        router.arm(p); // the real holder can
+    }
+
+    function test_arm_BadTokenId_erc20WithTokenId() public {
+        ExitRouter.ArmParams memory p = _params(address(vault), RAW, 0, _keys(pauseKey));
+        p.tokenId = 1;
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.BadTokenId.selector);
+        router.arm(p);
+    }
+
+    // ---------------------------------------------------------------- disarm
+
+    function test_disarm_NotOwner_stranger() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotOwner.selector);
+        router.disarm(id);
+        assertTrue(router.isArmed(id), "still armed");
+    }
+
+    function test_disarm_NotOwner_unknownPosition() public {
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NotOwner.selector);
+        router.disarm(keccak256("never armed"));
+    }
+
+    // ---------------------------------------------------------------- exit
+
+    function test_exit_NotArmed_unknownPositionByStranger() public {
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(keccak256("never armed"), pauseKey, 0);
+    }
+
+    function test_exit_NotArmed_afterDisarm() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(OWNER);
+        router.disarm(id);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_exit_NotArmed_afterDisarmAll() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.prank(OWNER);
+        router.disarmAll();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotArmed.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_exit_NotAuthorized_keyNotArmedForThisPosition() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        bytes32 other = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
+        _fireAlarm();
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotAuthorized.selector);
+        router.exit(id, other, 0);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.NotAuthorized.selector);
+        router.exit(id, bytes32(0), 0);
+    }
+
+    function test_exit_AlarmNotLive_neverFired() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_exit_AlarmNotLive_firedBeforeArming() public {
+        _fireAlarm();
+        vm.warp(block.timestamp + 1);
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_exit_AlarmNotLive_firedLongAgo() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(KEEPER);
+        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
+        router.exit(id, pauseKey, 0);
+    }
+
+    function test_exit_NothingToExit_ownerHoldsNoShares() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(OWNER);
+        vault.transfer(ATTACKER, 100e18);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NothingToExit.selector);
+        router.exit(id, bytes32(0), 0);
+    }
+
+    function test_exit_NothingToExit_noApproval() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vm.prank(OWNER);
+        vault.approve(address(router), 0);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NothingToExit.selector);
+        router.exit(id, bytes32(0), 0);
+    }
+
+    function test_exit_NothingWithdrawn_vaultHasNoLiquidity() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vault.setLiquid(0);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NothingWithdrawn.selector);
+        router.exit(id, bytes32(0), 0);
+        assertEq(vault.balanceOf(OWNER), 100e18, "shares untouched");
+    }
+
+    function test_exit_TransferFromFailed_adapterRefusesShares() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        vault.setBlocked(address(adapter), true);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(SafeTransferLib.TransferFromFailed.selector, address(vault)));
+        router.exit(id, bytes32(0), 0);
+        assertEq(vault.balanceOf(OWNER), 100e18, "shares untouched");
+    }
+
+    function test_exit_NftNotReturned() public {
+        bytes32 id = _armNft();
+        nftAdapter.set(false, 5e6); // pays, but keeps the NFT
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NftNotReturned.selector);
+        router.exit(id, bytes32(0), 0);
+        assertTrue(nft.ownerOf(7) == OWNER, "NFT rolled back to the owner");
+    }
+
+    function test_exit_NothingWithdrawn_nftReturnedButNothingPaid() public {
+        bytes32 id = _armNft();
+        nftAdapter.set(true, 0);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NothingWithdrawn.selector);
+        router.exit(id, bytes32(0), 0);
+        assertTrue(nft.ownerOf(7) == OWNER, "NFT rolled back to the owner");
+    }
+
+    function test_exit_nftControl_returnedAndPaid() public {
+        bytes32 id = _armNft();
+        nftAdapter.set(true, 5e6);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertTrue(nft.ownerOf(7) == OWNER, "NFT back with the owner");
+        assertEq(stable.balanceOf(OWNER), 5e6, "owner paid");
+    }
+
+    function test_exit_Reentrancy_exitAndClaimInsideAnExit() public {
+        bytes32 victim = _setup(OWNER, vault, 100e18, RAW, 0);
+        _fireAlarm();
+        ReentrantVault rv = new ReentrantVault(stable, address(router));
+        rv.setVictim(victim, pauseKey, OWNER);
+        rv.mint(ATTACKER, 10e18);
+        vm.prank(ATTACKER);
+        rv.approve(address(router), type(uint256).max);
+        vm.prank(ATTACKER);
+        bytes32 id = router.arm(_params(address(rv), RAW, 0, _keys(pauseKey)));
+        vm.prank(ATTACKER);
+        router.exit(id, bytes32(0), 0);
+        assertTrue(rv.exitError() == ReentrancyGuard.Reentrancy.selector, "exit blocked by the guard");
+        assertTrue(rv.claimError() == ReentrancyGuard.Reentrancy.selector, "claimOwed blocked by the guard");
+        assertEq(vault.balanceOf(OWNER), 100e18, "victim untouched");
+    }
+
+    // ---------------------------------------------------------------- claimOwed
+
+    function test_claimOwed_NothingOwed_nothingBooked() public {
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        router.claimOwed(OWNER, address(stable));
+    }
+
+    function test_claimOwed_NothingOwed_wrongOwnerOrToken() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(router.owed(OWNER, address(stable)), 100e6, "booked");
+        stable.setBlocked(OWNER, false);
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        router.claimOwed(ATTACKER, address(stable)); // someone else's name
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        router.claimOwed(OWNER, address(weth)); // a token nothing is owed in
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        router.claimOwed(OWNER, address(0)); // ETH
+    }
+
+    function test_claimOwed_NothingOwed_secondClaimAfterPaying() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        stable.setBlocked(OWNER, false);
+        router.claimOwed(OWNER, address(stable));
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        router.claimOwed(OWNER, address(stable));
+    }
+
+    function test_claimOwed_TransferFailed_ownerStillBlocked() public {
+        bytes32 id = _setup(OWNER, vault, 100e18, RAW, 0);
+        stable.setBlocked(OWNER, true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        vm.expectRevert(abi.encodeWithSelector(SafeTransferLib.TransferFailed.selector, address(stable)));
+        router.claimOwed(OWNER, address(stable));
+        assertEq(router.owed(OWNER, address(stable)), 100e6, "still owed after the failed claim");
+        assertEq(router.totalOwed(address(stable)), 100e6, "total unchanged");
+    }
+
+    function test_claimOwed_NothingOwed_ethOwnerStillRefuses_thenPays() public {
+        // A router with no WETH, so ETH the owner refuses is booked as owed in native ETH.
+        ExitRouter r = new ExitRouter(
+            address(stable), address(0), address(swap), address(book), ADMIN, GUARD, address(stableFeed), 90_000,
+            block.timestamp + EXPIRY_FROM_START
+        );
+        MockEthAdapter ea = new MockEthAdapter();
+        vm.prank(ADMIN);
+        r.setAdapter(address(ea), true);
+        vm.deal(address(ea), 1 ether);
+
+        EthRejector rej = new EthRejector();
+        vault.deposit(address(rej), 10e18);
+        rej.run(address(vault), abi.encodeCall(vault.approve, (address(r), type(uint256).max)));
+        ExitRouter.ArmParams memory p = ExitRouter.ArmParams({
+            adapter: address(ea),
+            target: address(vault),
+            tokenId: 0,
+            harbour: RAW,
+            maxSlipBps: 0,
+            termsHash: TERMS,
+            keys: _keys(pauseKey)
+        });
+        rej.run(address(r), abi.encodeCall(r.arm, (p)));
+        bytes32 id = r.positionId(address(rej), address(ea), address(vault), 0);
+        rej.run(address(r), abi.encodeCall(r.exit, (id, bytes32(0), 0)));
+        assertEq(r.owed(address(rej), address(0)), 1 ether, "ETH booked as owed");
+        assertEq(r.totalOwed(address(0)), 1 ether, "total ETH owed");
+
+        vm.expectRevert(ExitRouter.NothingOwed.selector);
+        r.claimOwed(address(rej), address(0));
+        assertEq(r.owed(address(rej), address(0)), 1 ether, "unchanged by the failed claim");
+
+        rej.setAccept(true);
+        vm.prank(ATTACKER);
+        r.claimOwed(address(rej), address(0));
+        assertEq(address(rej).balance, 1 ether, "owner paid");
+        assertEq(ATTACKER.balance, 0, "caller gets nothing");
+        assertEq(r.totalOwed(address(0)), 0, "cleared");
+    }
+
+    // ---------------------------------------------------------------- admin and guardian
+
+    function test_setAdapter_NotAdmin() public {
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setAdapter(address(1), true);
+        vm.prank(GUARD);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setAdapter(address(1), true);
+    }
+
+    function test_setFeed_NotAdmin() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setFeed(address(1), address(stableFeed), 3600, 18);
+    }
+
+    function test_setRoute_NotAdmin() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setRoute(address(1), "");
+    }
+
+    function test_setGuardian_NotAdmin() public {
+        vm.prank(GUARD);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setGuardian(ATTACKER);
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setGuardian(ATTACKER);
+    }
+
+    function test_adminFunctions_NotAdmin_afterExpiry() public {
+        vm.warp(router.ADMIN_EXPIRY());
+        vm.startPrank(ADMIN);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setAdapter(address(1), true);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setFeed(address(1), address(stableFeed), 3600, 18);
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setRoute(address(1), "");
+        vm.expectRevert(ExitRouter.NotAdmin.selector);
+        router.setGuardian(ATTACKER);
+        vm.stopPrank();
+    }
+
+    function test_setFeed_BadFeed_noCode() public {
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.BadFeed.selector);
+        router.setFeed(address(weth), address(0xFEED), 3600, 18);
+    }
+
+    function test_setFeed_BadFeed_decimalsAboveMax() public {
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.BadFeed.selector);
+        router.setFeed(address(weth), address(stableFeed), 3600, 37);
+        vm.prank(ADMIN);
+        router.setFeed(address(weth), address(stableFeed), 3600, 36); // the highest allowed
+    }
+
+    function test_setFeed_zeroFeedClearsInsteadOfReverting() public {
+        vm.prank(ADMIN);
+        router.setFeed(address(weth), address(0), 0, 0);
+    }
+
+    function _badRoute(bytes memory path) internal {
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.BadRoute.selector);
+        router.setRoute(address(weth), path);
+    }
+
+    function test_setRoute_BadRoute_tooShort() public {
+        _badRoute(abi.encodePacked(address(weth), uint16(500), address(stable))); // 42 bytes
+    }
+
+    function test_setRoute_BadRoute_misalignedLength() public {
+        _badRoute(abi.encodePacked(address(weth), uint24(500), address(stable), uint8(1)));
+    }
+
+    function test_setRoute_BadRoute_startsAtAnotherToken() public {
+        _badRoute(abi.encodePacked(address(stable), uint24(500), address(stable)));
+    }
+
+    function test_setRoute_BadRoute_endsAtAnotherToken() public {
+        _badRoute(abi.encodePacked(address(weth), uint24(500), address(0xBEEF)));
+    }
+
+    function test_setRoute_validAndEmptyPathsAreAccepted() public {
+        vm.startPrank(ADMIN);
+        router.setRoute(address(weth), abi.encodePacked(address(weth), uint24(500), address(stable)));
+        router.setRoute(address(weth), abi.encodePacked(address(weth), uint24(500), address(0xAA), uint24(100), address(stable)));
+        router.setRoute(address(weth), "");
+        vm.stopPrank();
+    }
+
+    function test_setArmingPaused_NotGuardian_stranger() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(true);
+        vm.prank(OWNER);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(false);
+    }
+
+    function test_setArmingPaused_NotGuardian_afterExpiry() public {
+        vm.warp(router.ADMIN_EXPIRY());
+        vm.prank(GUARD);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(true);
+        vm.prank(ADMIN);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(true);
+    }
+
+    function test_setArmingPaused_adminAndGuardianMay() public {
+        vm.prank(ADMIN);
+        router.setArmingPaused(true);
+        vm.prank(GUARD);
+        router.setArmingPaused(false);
+    }
+
+    function test_setGuardian_replacedGuardianLosesThePower() public {
+        vm.prank(ADMIN);
+        router.setGuardian(KEEPER);
+        vm.prank(GUARD);
+        vm.expectRevert(ExitRouter.NotGuardian.selector);
+        router.setArmingPaused(true);
+    }
+
+    // ---------------------------------------------------------------- adapter
+
+    function test_adapter_unwind_OnlyRouter() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(AdapterBase.OnlyRouter.selector);
+        adapter.unwind(address(vault), 1);
+        vm.prank(address(router));
+        adapter.unwind(address(vault), 1); // the router may (it redeems nothing and returns nothing)
+    }
+}
+
+// ------------------------------------------------------------------------------------------ AlarmBook
+
+contract AlarmBookReverts is Base {
+    uint256 internal constant PK_A = 0xA1;
+    uint256 internal constant PK_B = 0xB2;
+    uint256 internal constant PK_OUT = 0xDD; // never made a watcher
+    uint256 internal constant SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+    address internal wA;
+    address internal wB;
+    bytes32 internal quorumKey;
+    bytes32 internal constant EVIDENCE = keccak256("evidence");
+
+    function setUp() public override {
+        super.setUp();
+        wA = vm.addr(PK_A);
+        wB = vm.addr(PK_B);
+        vm.startPrank(ADMIN);
+        book.setWatcher(wA, true);
+        book.setWatcher(wB, true);
+        vm.stopPrank();
+        quorumKey = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
+    }
+
+    function _sig(uint256 pk, bytes32 digest) internal returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    /// @dev Two signers sorted by address, each signing `digest`.
+    function _pair(uint256 p1, uint256 p2, bytes32 digest) internal returns (address[] memory s, bytes[] memory g) {
+        (uint256 lo, uint256 hi) = vm.addr(p1) < vm.addr(p2) ? (p1, p2) : (p2, p1);
+        s = new address[](2);
+        g = new bytes[](2);
+        s[0] = vm.addr(lo);
+        s[1] = vm.addr(hi);
+        g[0] = _sig(lo, digest);
+        g[1] = _sig(hi, digest);
+    }
+
+    function _deadline() internal view returns (uint64) {
+        return uint64(block.timestamp + 600);
+    }
+
+    function _fireQuorum() internal {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    // ---------------------------------------------------------------- setWatcher
+
+    function test_setWatcher_NotAdmin() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(AlarmBook.NotAdmin.selector);
+        book.setWatcher(ATTACKER, true);
+        vm.prank(ATTACKER);
+        vm.expectRevert(AlarmBook.NotAdmin.selector);
+        book.setWatcher(wA, false); // cannot remove one either
+        assertTrue(book.isWatcher(wA), "still a watcher");
+    }
+
+    // ---------------------------------------------------------------- unknown keys
+
+    function test_poke_Unknown() public {
+        vm.expectRevert(AlarmBook.Unknown.selector);
+        book.poke(keccak256("never registered"));
+    }
+
+    function test_checkpoint_Unknown() public {
+        vm.expectRevert(AlarmBook.Unknown.selector);
+        book.checkpoint(keccak256("never registered"));
+    }
+
+    function test_fireByQuorum_Unknown() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, bytes32(0));
+        vm.expectRevert(AlarmBook.Unknown.selector);
+        book.fireByQuorum(keccak256("never registered"), EVIDENCE, dl, s, g);
+    }
+
+    function test_check_unknownKeyIsFalseNotRevert() public view {
+        assertTrue(!book.check(keccak256("never registered")), "false");
+        assertTrue(!book.isLive(keccak256("never registered"), 1 days), "not live");
+    }
+
+    function test_poke_aliveOrUntrippedReturnsFalseInsteadOfReverting() public {
+        assertTrue(!book.poke(pauseKey), "not tripped");
+        pausable.setPaused(true);
+        assertTrue(book.poke(pauseKey), "fires");
+        assertTrue(!book.poke(pauseKey), "already live");
+    }
+
+    // ---------------------------------------------------------------- register
+
+    function _bad(AlarmBook.Kind k, address t, uint256 th, uint32 w, bytes32 a, bytes32 b) internal {
+        AlarmBook.Detector memory d = _detector(k, t, th, w, a, b);
+        bytes32 key = book.keyOf(d);
+        vm.expectRevert(AlarmBook.BadDetector.selector);
+        book.register(d);
+        (bool exists,,,,) = book.state(key);
+        assertTrue(!exists, "nothing stored by a failed register");
+    }
+
+    function test_register_BadDetector_priceBelow() public {
+        MockFeed f = new MockFeed(1e8);
+        _bad(AlarmBook.Kind.PRICE_BELOW, address(f), 0, 3600, 0, 0); // zero threshold
+        _bad(AlarmBook.Kind.PRICE_BELOW, address(f), 1e8, 0, 0, 0); // zero window
+        _bad(AlarmBook.Kind.PRICE_BELOW, address(0xFEED), 1e8, 3600, 0, 0); // no code
+        book.register(_detector(AlarmBook.Kind.PRICE_BELOW, address(f), 1e8, 3600, 0, 0));
+    }
+
+    function test_register_BadDetector_shareDrop() public {
+        _bad(AlarmBook.Kind.SHARE_DROP, address(vault), 0, 0, 0, 0); // zero threshold
+        _bad(AlarmBook.Kind.SHARE_DROP, address(vault), 10_000, 0, 0, 0); // 100% or more
+        _bad(AlarmBook.Kind.SHARE_DROP, address(0xFEED), 50, 0, 0, 0); // no code
+        _bad(AlarmBook.Kind.SHARE_DROP, address(pausable), 50, 0, 0, 0); // has code, not a vault
+        _bad(AlarmBook.Kind.SHARE_DROP, address(new MockVault(stable, 0)), 50, 0, 0, 0); // share price reads 0
+        book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 9_999, 0, 0, 0)); // the highest allowed
+    }
+
+    function test_register_BadDetector_paused() public {
+        _bad(AlarmBook.Kind.PAUSED, address(0xFEED), 0, 0, 0, 0);
+    }
+
+    function test_register_BadDetector_addressChange() public {
+        _bad(AlarmBook.Kind.ADDRESS_CHANGE, address(0xFEED), 0, 0, bytes32(bytes4(0x11223344)), 0); // no code
+        _bad(AlarmBook.Kind.ADDRESS_CHANGE, address(pausable), 0, 0, 0, 0); // no selector given
+        _bad(AlarmBook.Kind.ADDRESS_CHANGE, address(pausable), 0, 0, bytes32(bytes4(0xdeadbeef)), 0); // view reverts
+        // paused() returns a bool, which is a valid address-sized word (0 or 1), so this one registers.
+        book.register(_detector(AlarmBook.Kind.ADDRESS_CHANGE, address(pausable), 0, 0, bytes32(bytes4(keccak256("paused()"))), 0));
+    }
+
+    function test_register_BadDetector_drain() public {
+        _bad(AlarmBook.Kind.DRAIN, address(vault), 0, 3600, 0, 0); // zero threshold
+        _bad(AlarmBook.Kind.DRAIN, address(vault), 10_000, 3600, 0, 0); // 100% or more
+        _bad(AlarmBook.Kind.DRAIN, address(vault), 2500, 0, 0, 0); // zero window
+        _bad(AlarmBook.Kind.DRAIN, address(0xFEED), 2500, 3600, 0, 0); // no code
+        _bad(AlarmBook.Kind.DRAIN, address(pausable), 2500, 3600, 0, 0); // no totalAssets
+        _bad(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0); // empty vault: totalAssets is 0
+        vault.deposit(OWNER, 100e18);
+        book.register(_detector(AlarmBook.Kind.DRAIN, address(vault), 2500, 3600, 0, 0));
+    }
+
+    function test_register_BadDetector_quorum() public {
+        _bad(AlarmBook.Kind.QUORUM, address(1), 0, 0, 0, 0);
+        _bad(AlarmBook.Kind.QUORUM, address(1), 1, 0, 0, 0);
+        _bad(AlarmBook.Kind.QUORUM, address(1), 33, 0, 0, 0);
+        book.register(_detector(AlarmBook.Kind.QUORUM, address(1), 32, 0, 0, 0)); // MAX_QUORUM
+        book.register(_detector(AlarmBook.Kind.QUORUM, address(2), 2, 0, 0, 0));
+    }
+
+    function test_register_BadDetector_both() public {
+        _bad(AlarmBook.Kind.BOTH, address(0), 0, 1 days, keccak256("x"), keccak256("y")); // neither part exists
+        _bad(AlarmBook.Kind.BOTH, address(0), 0, 1 days, pauseKey, keccak256("y")); // b missing
+        _bad(AlarmBook.Kind.BOTH, address(0), 0, 1 days, keccak256("x"), quorumKey); // a missing
+        _bad(AlarmBook.Kind.BOTH, address(0), 0, 1 days, pauseKey, pauseKey); // same part twice
+        _bad(AlarmBook.Kind.BOTH, address(0), 0, 1 days - 1, pauseKey, quorumKey); // window too short
+        book.register(_detector(AlarmBook.Kind.BOTH, address(0), 0, 1 days, pauseKey, quorumKey)); // exactly the minimum
+    }
+
+    function test_register_existingKeyIsNotRevalidated() public {
+        // Registering the same detector again returns its key and never reverts, whatever the target does now.
+        bytes32 again = book.register(_detector(AlarmBook.Kind.PAUSED, address(pausable), 0, 0, 0, 0));
+        assertTrue(again == pauseKey, "same key");
+    }
+
+    // ---------------------------------------------------------------- fireByQuorum
+
+    function test_fireByQuorum_NotQuorumKind() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(pauseKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.NotQuorumKind.selector);
+        book.fireByQuorum(pauseKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_Expired() public {
+        uint64 dl = uint64(block.timestamp - 1);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.Expired.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_deadlineEqualToNowIsStillValid() public {
+        uint64 dl = uint64(block.timestamp);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        assertTrue(book.isLive(quorumKey, 1 days), "fired");
+    }
+
+    function test_fireByQuorum_DeadlineTooFar() public {
+        uint64 dl = uint64(block.timestamp + 1 hours + 1);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.DeadlineTooFar.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        dl = uint64(block.timestamp + 1 hours); // exactly MAX_ATTEST_LIFE
+        (s, g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_AlreadyLive() public {
+        _fireQuorum();
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.AlreadyLive.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        vm.warp(block.timestamp + 1 days - 1);
+        dl = _deadline();
+        (s, g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.AlreadyLive.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        vm.warp(block.timestamp + 1); // REFIRE_AFTER reached
+        dl = _deadline();
+        (s, g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_BadSigners_belowThreshold() public {
+        uint64 dl = _deadline();
+        address[] memory s = new address[](1);
+        bytes[] memory g = new bytes[](1);
+        s[0] = wA;
+        g[0] = _sig(PK_A, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_BadSigners_noSigners() public {
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, _deadline(), new address[](0), new bytes[](0));
+    }
+
+    function test_fireByQuorum_BadSigners_lengthMismatch() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        bytes[] memory one = new bytes[](1);
+        one[0] = g[0];
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, one);
+    }
+
+    function test_fireByQuorum_BadSigners_unsortedOrDuplicate() public {
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, digest);
+        (s[0], s[1]) = (s[1], s[0]); // descending
+        (g[0], g[1]) = (g[1], g[0]);
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        (s, g) = _pair(PK_A, PK_B, digest);
+        s[1] = s[0]; // the same watcher twice
+        g[1] = g[0];
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_BadSigners_zeroAddressFirst() public {
+        // address(0) can never be "above" the starting previous signer of 0.
+        uint64 dl = _deadline();
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        s[0] = address(0);
+        s[1] = wA;
+        g[0] = new bytes(65);
+        g[1] = _sig(PK_A, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(AlarmBook.BadSigners.selector);
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_NotWatcher_neverApproved() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_OUT, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.NotWatcher.selector, vm.addr(PK_OUT)));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_NotWatcher_removed() public {
+        vm.prank(ADMIN);
+        book.setWatcher(wB, false);
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.NotWatcher.selector, wB));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    /// @dev Signer index 0 is checked first, so a bad signature there is the one reported.
+    function _expectBadSig(bytes memory bad, address[] memory s, bytes[] memory g, uint64 dl) internal {
+        g[0] = bad;
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.BadSignature.selector, s[0]));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_BadSignature_signedAnotherDigest() public {
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, digest);
+        uint256 pk0 = s[0] == wA ? PK_A : PK_B;
+        _expectBadSig(_sig(pk0, book.attestDigest(quorumKey, keccak256("other evidence"), dl)), s, g, dl);
+    }
+
+    function test_fireByQuorum_BadSignature_signedByTheOtherWatcher() public {
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, digest);
+        _expectBadSig(g[1], s, g, dl); // signer 1's signature presented for signer 0
+    }
+
+    function test_fireByQuorum_BadSignature_highS() public {
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, digest);
+        uint256 pk0 = s[0] == wA ? PK_A : PK_B;
+        (uint8 v, bytes32 r, bytes32 sv) = vm.sign(pk0, digest);
+        // The mirror signature recovers to the same signer, but malleable signatures are refused.
+        bytes memory flipped = abi.encodePacked(r, bytes32(SECP256K1_N - uint256(sv)), v == 27 ? uint8(28) : uint8(27));
+        _expectBadSig(flipped, s, g, dl);
+    }
+
+    function test_fireByQuorum_BadSignature_wrongLengthOrEmpty() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, book.attestDigest(quorumKey, EVIDENCE, dl));
+        bytes memory good = g[0];
+        _expectBadSig(new bytes(0), s, g, dl);
+        _expectBadSig(new bytes(64), s, g, dl);
+        _expectBadSig(new bytes(66), s, g, dl);
+        g[0] = good;
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g); // the untouched signatures work
+    }
+
+    function test_fireByQuorum_BadSignature_badRecoveryId() public {
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_B, digest);
+        uint256 pk0 = s[0] == wA ? PK_A : PK_B;
+        (, bytes32 r, bytes32 sv) = vm.sign(pk0, digest);
+        _expectBadSig(abi.encodePacked(r, sv, uint8(29)), s, g, dl);
+    }
+
+    function test_fireByQuorum_BadSignature_contractWatcherSaysNo() public {
+        RefusingWallet w = new RefusingWallet();
+        vm.prank(ADMIN);
+        book.setWatcher(address(w), true);
+        uint64 dl = _deadline();
+        bytes32 digest = book.attestDigest(quorumKey, EVIDENCE, dl);
+        address[] memory s = new address[](2);
+        bytes[] memory g = new bytes[](2);
+        if (wA < address(w)) {
+            (s[0], s[1]) = (wA, address(w));
+            (g[0], g[1]) = (_sig(PK_A, digest), new bytes(65));
+        } else {
+            (s[0], s[1]) = (address(w), wA);
+            (g[0], g[1]) = (new bytes(65), _sig(PK_A, digest));
+        }
+        vm.expectRevert(abi.encodeWithSelector(AlarmBook.BadSignature.selector, address(w)));
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+    }
+
+    function test_fireByQuorum_aFailedAttemptLeavesNothingFired() public {
+        uint64 dl = _deadline();
+        (address[] memory s, bytes[] memory g) = _pair(PK_A, PK_OUT, book.attestDigest(quorumKey, EVIDENCE, dl));
+        vm.expectRevert();
+        book.fireByQuorum(quorumKey, EVIDENCE, dl, s, g);
+        assertTrue(!book.isLive(quorumKey, 1 days), "not fired");
+        assertTrue(book.signersOf(quorumKey).length == 0, "no signers recorded");
+    }
+}
+
+// ------------------------------------------------------------------------------------------ Timelock
+
+contract TimelockReverts is Base {
+    Timelock internal lock;
+    ExitRouter internal locked;
+
+    function setUp() public override {
+        super.setUp();
+        lock = new Timelock(ADMIN, 48 hours);
+        locked = new ExitRouter(
+            address(stable), address(weth), address(swap), address(book), address(lock), GUARD, address(stableFeed), 90_000,
+            block.timestamp + EXPIRY_FROM_START
+        );
+    }
+
+    function _data() internal pure returns (bytes memory) {
+        return abi.encodeCall(ExitRouter.setAdapter, (address(0x1234), true));
+    }
+
+    function _schedule() internal returns (bytes32 id) {
+        vm.prank(ADMIN);
+        id = lock.schedule(address(locked), 0, _data(), 0);
+    }
+
+    function test_constructor_DelayTooLong() public {
+        vm.expectRevert(Timelock.DelayTooLong.selector);
+        new Timelock(ADMIN, 30 days + 1);
+        new Timelock(ADMIN, 30 days); // exactly MAX_DELAY
+    }
+
+    function test_schedule_NotProposer() public {
+        vm.prank(ATTACKER);
+        vm.expectRevert(Timelock.NotProposer.selector);
+        lock.schedule(address(locked), 0, _data(), 0);
+    }
+
+    function test_cancel_NotProposer() public {
+        bytes32 id = _schedule();
+        vm.prank(ATTACKER);
+        vm.expectRevert(Timelock.NotProposer.selector);
+        lock.cancel(id);
+        assertTrue(lock.eta(id) != 0, "still scheduled");
+    }
+
+    function test_execute_NotProposer() public {
+        _schedule();
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ATTACKER);
+        vm.expectRevert(Timelock.NotProposer.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_schedule_AlreadyScheduled() public {
+        _schedule();
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.AlreadyScheduled.selector);
+        lock.schedule(address(locked), 0, _data(), 0);
+        vm.prank(ADMIN);
+        lock.schedule(address(locked), 0, _data(), bytes32(uint256(1))); // a new salt is a new change
+    }
+
+    function test_execute_NotReady_neverScheduled() public {
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_execute_NotReady_beforeTheDelay() public {
+        _schedule();
+        vm.warp(block.timestamp + 48 hours - 1);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+        vm.warp(block.timestamp + 1);
+        vm.prank(ADMIN);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_execute_NotReady_afterCancel() public {
+        bytes32 id = _schedule();
+        vm.prank(ADMIN);
+        lock.cancel(id);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_execute_NotReady_secondExecution() public {
+        _schedule();
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ADMIN);
+        lock.execute(address(locked), 0, _data(), 0);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.NotReady.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_execute_Lapsed() public {
+        _schedule();
+        vm.warp(block.timestamp + 48 hours + 14 days + 1);
+        vm.prank(ADMIN);
+        vm.expectRevert(Timelock.Lapsed.selector);
+        lock.execute(address(locked), 0, _data(), 0);
+    }
+
+    function test_execute_lastSecondOfTheGraceWindowStillWorks() public {
+        _schedule();
+        vm.warp(block.timestamp + 48 hours + 14 days);
+        vm.prank(ADMIN);
+        lock.execute(address(locked), 0, _data(), 0);
+        assertTrue(locked.adapterAllowed(address(0x1234)), "applied");
+    }
+
+    function test_execute_CallFailed_carriesTheInnerError() public {
+        bytes memory bad = abi.encodeCall(ExitRouter.setFeed, (address(weth), address(0xFEED), 3600, 18)); // no code
+        vm.prank(ADMIN);
+        lock.schedule(address(locked), 0, bad, 0);
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(ADMIN);
+        vm.expectRevert(abi.encodeWithSelector(Timelock.CallFailed.selector, abi.encodeWithSelector(ExitRouter.BadFeed.selector)));
+        lock.execute(address(locked), 0, bad, 0);
+        bytes32 id = lock.idOf(address(locked), 0, bad, 0);
+        assertTrue(lock.eta(id) != 0, "a failed execution stays scheduled");
+    }
+
+    function test_cancel_unknownIdIsHarmless() public {
+        vm.prank(ADMIN);
+        lock.cancel(keccak256("nothing"));
+    }
+}
