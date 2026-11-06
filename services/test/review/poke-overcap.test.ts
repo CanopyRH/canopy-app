@@ -10,8 +10,8 @@
 // Real AlarmBook bytecode on a local anvil, the keeper's real pokeTripped and gasFor, and the test database.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "bun";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPublicClient, createWalletClient, encodeAbiParameters, encodeFunctionData, http, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -23,6 +23,13 @@ import { repo } from "../../src/store/repo";
 import { freshDb } from "../db";
 
 const ROOT = join(import.meta.dir, "../../..");
+// The repo's pinned tools when present, else the ones on PATH (CI installs Foundry there) or Foundry's own solc cache.
+const pick = (...ps: (string | null | undefined)[]) => ps.find((p): p is string => !!p && existsSync(p));
+const anvilBin = pick(join(ROOT, ".tools/foundry/v1.8.6/anvil"), Bun.which("anvil"));
+const solcBin = pick(join(ROOT, ".tools/solc/solc-0.8.28"), join(homedir(), ".svm/0.8.28/solc-0.8.28"), Bun.which("solc"));
+const bookArt = join(ROOT, "contracts/out/AlarmBook.sol/AlarmBook.json");
+const ready = !!anvilBin && !!solcBin && existsSync(bookArt);
+if (!ready) console.warn(`SKIPPED poke-overcap: ${!anvilBin ? "anvil" : !solcBin ? "solc 0.8.28" : "contracts/out (run forge build)"} was not found`);
 const PORT = 18_545 + Math.floor(Math.random() * 1000);
 const RPC = `http://127.0.0.1:${PORT}`;
 // anvil's first default account: a public test key with no value anywhere.
@@ -45,13 +52,13 @@ contract HeavyVault {
 function compile(): Hex {
   const dir = mkdtempSync(join(tmpdir(), "heavy-"));
   writeFileSync(join(dir, "Heavy.sol"), HEAVY);
-  const out = spawnSync([join(ROOT, ".tools/solc/solc-0.8.28"), "--bin", "--optimize", join(dir, "Heavy.sol")]);
+  const out = spawnSync([solcBin!, "--bin", "--optimize", join(dir, "Heavy.sol")]);
   const bin = /Binary:\s*\n([0-9a-f]+)/.exec(out.stdout.toString())?.[1];
   if (!bin) throw new Error(out.stderr.toString());
   return `0x${bin}`;
 }
 
-const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--port", String(PORT), "--silent", "--gas-limit", "100000000"], { stdout: "ignore", stderr: "ignore" });
+const anvil = ready ? spawn([anvilBin!, "--port", String(PORT), "--silent", "--gas-limit", "100000000"], { stdout: "ignore", stderr: "ignore" }) : null;
 const client = createPublicClient({ chain: foundry, transport: http(RPC), pollingInterval: 50 });
 const wallet = createWalletClient({ chain: foundry, transport: http(RPC), account: dev });
 
@@ -71,10 +78,11 @@ let heavy: Address;
 let key: Hex;
 
 beforeAll(async () => {
+  if (!ready) return;
   for (let i = 0; ; i++) {
     try { await client.getBlockNumber(); break; } catch { if (i > 100) throw new Error("anvil did not start"); await Bun.sleep(100); }
   }
-  const art = JSON.parse(readFileSync(join(ROOT, "contracts/out/AlarmBook.sol/AlarmBook.json"), "utf8"));
+  const art = JSON.parse(readFileSync(bookArt, "utf8"));
   const args = encodeAbiParameters([{ type: "address" }, { type: "address[]" }], [dev.address, []]);
   book = await deploy(`${art.bytecode.object}${args.slice(2)}` as Hex);
   heavy = await deploy(compile());
@@ -85,9 +93,9 @@ beforeAll(async () => {
   await send(heavy, encodeFunctionData({ abi: parseAbi(["function setPrice(uint256)"]), functionName: "setPrice", args: [9n * 10n ** 17n] }));
 }, 60_000);
 
-afterAll(() => anvil.kill());
+afterAll(() => anvil?.kill());
 
-describe("V3-S03: a key whose poke needs a little over 1M gas", () => {
+describe.skipIf(!ready)("V3-S03: a key whose poke needs a little over 1M gas", () => {
   test("on chain: check() reads tripped, the poke costs more than SMALL_CALL_GAS and fits both READ_GAS_FLOOR and POKE_CALL_GAS", async () => {
     const check = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "check", args: [key], gas: 5_000_000n } as never);
     expect(check).toBe(true);
