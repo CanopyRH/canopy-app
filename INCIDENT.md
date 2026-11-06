@@ -6,6 +6,21 @@ roles and who holds them are in [SECURITY.md](SECURITY.md).
 
 The short version: **a pause only stops new arming.** Nobody's money is held by the pause, and nobody is locked in.
 
+## Incident contacts
+
+By role and channel. Names and handles are kept in the team's private notes, never in this repository.
+
+| For | Who | Channel |
+| --- | --- | --- |
+| A vulnerability report from outside the team | The maintainers who watch the public repository's security advisories | [GitHub private vulnerability reporting](https://github.com/CanopyRH/canopy-app/security/advisories/new) on the public repository. Not a public issue. We aim to answer within two days |
+| An alert, or a suspicion, from inside the team | The operators, who read every admin alert and warning | The ops Telegram chat that the services' admin alerts go to (`OPS_CHAT_ID`) |
+| An admin action: allowing or disallowing an adapter, replacing the guardian, approving or removing a watcher | The admin Safe's signers, 2 of 3 | The signers' private channel, then the admin Safe's transaction queue |
+| Pausing or unpausing new arming | The guardian Safe's signers, 2 of 3 | The guardian signers' private channel, then the guardian Safe's transaction queue |
+| Stopping a keeper or a watcher, or a hosting problem | The operators who hold the hosting dashboard | The ops Telegram chat, then the hosting dashboard |
+
+If the ops chat or the signers' channel can't be reached, any one signer who sees an unexpected admin event can start the
+pause in the guardian Safe's queue and ask the others to confirm there.
+
 ## Who can pause, and what a pause does
 
 Only the guardian can pause arming, and the guardian is a **2-of-3 guardian Safe**. Two of its three signers must

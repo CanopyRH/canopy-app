@@ -16,11 +16,11 @@ exit, and R11 the owner's swap legs. Timelock, the adapter and the deploy script
 | Invariant suite | `FOUNDRY_PROFILE=invariant forge test --match-contract RouterInvariant` | 512 runs of 256 calls, 131,072 calls in all. A minute or two. |
 | Mainnet fork suite | `forge test --match-contract '^(ForkTest\|ForkCheckpointTest\|ForkPresetsTest)$' -vv --fork-url https://rpc.mainnet.chain.robinhood.com` | Needs network access. Without a fork URL these tests return early and pass. |
 | Symbolic checks | `FOUNDRY_PROFILE=halmos halmos --root contracts --match-contract RouterSymbolic --solver-timeout-assertion 0` | Halmos 0.1.13. The `halmos` profile in foundry.toml only switches to shanghai and turns off dynamic test linking. Not run by `forge test`. |
-| Mutation campaign | `cp -R contracts <scratch> && FORGE=<forge> python3 -I contracts/test/review/mutation/mutants.py <scratch>/contracts` | 111 hand-written mutants of ExitRouter and AlarmBook; each must make `forge test` fail. Results in `mutants.results.tsv`. Run on a copy: it edits `src/`. |
+| Mutation campaign | `cp -R contracts <scratch> && FORGE=<forge> python3 -I contracts/test/review/mutation/mutants.py <scratch>/contracts` | 122 hand-written mutants (67 of ExitRouter, 55 of AlarmBook). In the last run (`v2_fix` in `mutants.results.tsv`) `forge test` kills 107, 2 are equivalent (no observable difference) and 13 survive, the same 13 the review left alive. Of the 111 that apply to the suite before the V3 fixes, it killed 92, and 98 with the review tests. Run on a copy: it edits `src/`. |
 
 The third internal review's tests live in [test/review/](test/review/) and run with the default suite: the V3 findings
 inverted into regressions (`V3Drain.t.sol`, `V3Arming.t.sol`), the read-floor checks (`V3ReadGas.t.sol`) and
-`MutantKillers.t.sol`, six tests that each kill a mutant the earlier suite let survive.
+`MutantKillers.t.sol`, six tests that each kill a mutant the earlier suite let survive (92 killed before them, 98 after).
 
 The invariant profile is `[profile.invariant.invariant]` in [foundry.toml](foundry.toml). The suite is
 [RouterInvariant.t.sol](test/RouterInvariant.t.sol): a handler contract arms (with the owner's swap legs on the stable

@@ -93,6 +93,16 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   over: if the owner deposits into the same vault again before then, a keeper can exit the new shares on the same
   firing. Disarm it to tidy up.
 
+## Risks accepted on v1 (added after the `v1-deployed` tag)
+
+A tag can't change, so a v1 risk found later is listed here, next to the ones in the file at the tag.
+
+- **A flash deposit at a DRAIN period roll can become v1's reference and fire with no real loss.** v1's AlarmBook
+  `checkpoint` takes the roll sample, so a deposit made just before a roll and withdrawn after it can inflate the
+  reference a DRAIN key measures against, and the key then fires although no real loss happened. The app offers DRAIN only
+  inside BOTH with a watcher quorum, so a false fire alone exits no one. Fixed in v2, where a roll never trusts one
+  reading (see the DRAIN item under "Risks we accept (v2)" for what remains).
+
 ## Audit status
 
 The contracts haven't had an external audit. They have unit, fuzz, invariant and mainnet fork tests, Slither runs in
