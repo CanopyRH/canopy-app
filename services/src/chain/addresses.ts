@@ -25,6 +25,9 @@ const EXPLORERS: Record<number, string> = {
   8453: "https://basescan.org", 84532: "https://sepolia.basescan.org", 4663: "https://robinhoodchain.blockscout.com",
 };
 
+/** How long a plan payment or a new arm should have been in the chain before it is trusted. */
+const CONFIRM_MS = 10_000;
+
 /** What the services need per chain. Robinhood Chain makes about 10 blocks a second, Base one every 2 seconds. */
 export function chainParts(chainId: number) {
   const onRobinhood = chainId === ROBINHOOD.chainId;
@@ -34,6 +37,8 @@ export function chainParts(chainId: number) {
     multicall3: (onRobinhood ? ROBINHOOD.multicall3 : BASE.multicall3) as Address, // same address on Base Sepolia
     // The ops chat hears when the indexer is 40 seconds behind.
     maxLagBlocks: BigInt(40_000 / blockMs),
+    // About 10 seconds of blocks: 100 on Robinhood Chain, 5 on Base. See CONFIRMATIONS.
+    confirmations: BigInt(Math.ceil(CONFIRM_MS / blockMs)),
   };
 }
 

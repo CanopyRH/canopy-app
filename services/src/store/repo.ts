@@ -16,13 +16,34 @@ export const repo = (db: Db) => ({
     epoch: bigint; block: bigint; termsHash: string; keys: readonly string[];
   }) {
     await db.query(
-      `INSERT INTO positions (pos_id, owner, adapter, target, token_id, harbour, max_slip_bps, epoch, active, armed_block, terms_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10)
-       ON CONFLICT (pos_id) DO UPDATE SET harbour=$6, max_slip_bps=$7, epoch=$8, active=true, armed_block=$9, terms_hash=$10`,
+      `INSERT INTO positions (pos_id, owner, adapter, target, token_id, harbour, max_slip_bps, epoch, active, armed_block, terms_hash, confirmed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10,false)
+       ON CONFLICT (pos_id) DO UPDATE SET harbour=$6, max_slip_bps=$7, epoch=$8, active=true, armed_block=$9, terms_hash=$10, confirmed=false`,
       [p.posId, p.owner, p.adapter, p.target, p.tokenId.toString(), p.harbour, p.maxSlipBps, p.epoch.toString(), p.block.toString(), p.termsHash],
     );
     await db.query(`DELETE FROM position_keys WHERE pos_id=$1`, [p.posId]);
     for (const k of p.keys) await db.query(`INSERT INTO position_keys (pos_id, key) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [p.posId, k]);
+  },
+  /** Armed positions not yet checked against the chain, once the block they were armed in is deep enough. */
+  async unconfirmedArms(upTo: bigint, limit = 200) {
+    return db.query<{ pos_id: string; armed_block: string; terms_hash: string }>(
+      `SELECT pos_id, armed_block, terms_hash FROM positions WHERE active AND NOT confirmed AND armed_block<=$1 ORDER BY armed_block LIMIT $2`,
+      [upTo.toString(), limit],
+    );
+  },
+  /** The chain agrees. Matches the exact arm that was checked, so a newer arm of the same position stays unconfirmed. */
+  async confirmArm(posId: string, armedBlock: string, termsHash: string) {
+    await db.query(`UPDATE positions SET confirmed=true WHERE pos_id=$1 AND armed_block=$2 AND terms_hash=$3`, [posId, armedBlock, termsHash]);
+  },
+  /** The chain does not have this arm, so the record goes inactive and its waiting exit jobs end. Returns whether a record changed. */
+  async revokeArm(posId: string, armedBlock: string, termsHash: string) {
+    const gone = await db.query(
+      `UPDATE positions SET active=false WHERE pos_id=$1 AND armed_block=$2 AND terms_hash=$3 AND NOT confirmed RETURNING pos_id`,
+      [posId, armedBlock, termsHash],
+    );
+    if (gone.length === 0) return false;
+    await db.query(`UPDATE jobs SET done=true WHERE kind='exit' AND NOT done AND payload->>'posId'=$1`, [posId]);
+    return true;
   },
   async epochOf(owner: string): Promise<bigint> {
     const r = await db.query<{ epoch: string }>(`SELECT epoch FROM owner_epochs WHERE owner=$1`, [owner]);

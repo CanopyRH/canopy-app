@@ -37,6 +37,9 @@ export const Env = z.object({
   LOOP_SCALE: z.coerce.number().positive().default(1), // shortens loop intervals in local runs
   OPS_CHAT_ID: z.coerce.number().optional(), // Telegram chat for operator warnings
   HEALTH_TOKEN: z.string().min(16).optional(), // bearer token for GET /health; off without one
+  // Blocks a plan payment must be buried under before it is credited, and an arm before it is re-checked on chain. Off means
+  // about 10 seconds of blocks for the chain: 100 on Robinhood Chain (10 blocks a second), 5 on Base (one every 2 seconds).
+  CONFIRMATIONS: z.coerce.bigint().min(0n).max(100_000n).optional(),
   KEEPER_MIN_GAS_WEI: z.coerce.bigint().default(500_000_000_000_000n), // warn below 0.0005 ETH
 }).superRefine((e, c) => {
   if (e.ALERTS_ONLY) return;

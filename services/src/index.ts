@@ -14,7 +14,7 @@ import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
 import { stuckLogText, type StuckLog } from "./indexer/retry";
-import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, decodeFired, syncLogs } from "./indexer/indexer";
+import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, syncLogs } from "./indexer/indexer";
 import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, onFired, pokeAndQueue, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
 import { serialSender, withMargin } from "./keeper/sender";
@@ -39,6 +39,7 @@ const run = (role: string) => env.ROLE === "all" || env.ROLE === role;
 const contracts = !env.ALERTS_ONLY;
 const onRobinhood = env.CHAIN_ID === ROBINHOOD.chainId;
 const parts = chainParts(env.CHAIN_ID);
+const confirmations = env.CONFIRMATIONS ?? parts.confirmations;
 
 /** Runs a loop forever. One failed pass is logged and retried; it never takes the process down. */
 function every(baseMs: number, name: string, fn: () => Promise<unknown>) {
@@ -141,6 +142,8 @@ if (run("indexer") && contracts) {
         }
       },
     }));
+  // Arms are applied at the tip, so exits stay fast. Each is checked against the chain once it is deep enough to be settled.
+  every(5_000, "confirm arms", () => confirmArms(client, r, router, confirmations));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
   every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
   const opsChat = env.OPS_CHAT_ID;
@@ -149,6 +152,8 @@ if (run("indexer") && contracts) {
     syncLogs(client, r, {
       name: "payments",
       onStuck: stuckAlert,
+      // A plan is credited only once its payment is buried a few blocks, so a reorged-away transfer can't buy one.
+      confirmations,
       address: env.PLAN_TOKEN as Address,
       startBlock: env.START_BLOCK,
       filter: { event: getAbiItem({ abi: erc20Abi, name: "Transfer" }), args: { to: env.PLAN_PAY_ADDRESS } },

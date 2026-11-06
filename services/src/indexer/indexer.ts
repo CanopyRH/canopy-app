@@ -112,6 +112,8 @@ export interface SyncOptions {
   onLog: (l: Log) => Promise<void>;
   /** Called once for a log that has been failing for a while. It should only queue a message. */
   onStuck?: (s: StuckLog) => Promise<unknown>;
+  /** Blocks to hold back from the head, so a log is only applied once it is this deep. Defaults to none. */
+  confirmations?: bigint;
   /** Seconds. Defaults to the clock. */
   now?: () => number;
   /** Overrides the retry timing, for tests. */
@@ -132,7 +134,10 @@ export async function syncLogs(client: Pick<PublicClient, "getBlockNumber" | "ge
   const tune: RetryTuning = { baseSec: RETRY_BASE_SEC, maxSec: RETRY_MAX_SEC, stuckAfterSec: STUCK_AFTER_SEC, ...opts.retry };
   await retryParked(r, opts, now, tune);
 
-  const tip = await client.getBlockNumber();
+  // With a confirmation depth, the newest blocks are left for the next pass. Nothing before the depth is ever read early.
+  const head = await client.getBlockNumber();
+  const depth = opts.confirmations ?? 0n;
+  const tip = head >= depth ? head - depth : -1n;
   const step = opts.step ?? 2_000n;
   let from = (await r.cursor(opts.name)) ?? opts.startBlock;
   const waiting = new Set((await r.parkedLogs(opts.name)).map((p) => p.subject).filter(Boolean));
@@ -186,6 +191,39 @@ async function retryParked(r: Repo, opts: SyncOptions, now: () => number, tune: 
       await r.logRetryFailed(opts.name, p.tx, p.log_index, now() + backoffSec(p.attempts + 1, tune.baseSec, tune.maxSec), cleanError(e));
     }
   }
+}
+
+/**
+ * Arms are applied at the chain tip so exits stay fast: a position armed a second ago can be exited the moment its alarm
+ * fires. Once an arm is `depth` blocks deep, this checks it against the router, read at that settled block. A position
+ * the router does not hold as armed (the arm was reorged away, or a replayed log brought back one that was disarmed) is
+ * switched off and its waiting exit jobs end. One the router holds is marked confirmed. A failed read leaves the record
+ * as it is for the next pass. Returns how many records it switched off.
+ */
+export async function confirmArms(
+  client: Pick<PublicClient, "getBlockNumber" | "readContract">,
+  r: Repo,
+  router: Address,
+  depth: bigint,
+): Promise<number> {
+  const head = await client.getBlockNumber();
+  if (head < depth) return 0;
+  const settled = head - depth;
+  let revoked = 0;
+  for (const p of await r.unconfirmedArms(settled)) {
+    try {
+      const armed = await client.readContract({ address: router, abi: routerAbi, functionName: "isArmed", args: [p.pos_id as Hex], blockNumber: settled });
+      if (armed) await r.confirmArm(p.pos_id, p.armed_block, p.terms_hash);
+      else if (await r.revokeArm(p.pos_id, p.armed_block, p.terms_hash)) {
+        revoked++;
+        await r.bump("arm_reorged");
+        console.warn("arm not on chain, record switched off", p.pos_id);
+      }
+    } catch (e) {
+      console.warn("arm check", p.pos_id, cleanError(e));
+    }
+  }
+  return revoked;
 }
 
 /** Tells the operator once about each log that has been failing for a while. */
