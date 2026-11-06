@@ -65,9 +65,14 @@ an alert nobody expected, or stop a keeper or watcher, follow [INCIDENT.md](INCI
 
 ## Audit status
 
-The contracts haven't had an external audit. They have unit, fuzz and mainnet fork tests, and their source is verified
-on Blockscout and Sourcify with an exact match.
+The contracts haven't had an external audit. They have unit, fuzz, invariant and mainnet fork tests, Slither runs in
+CI, and their source is verified on Blockscout and Sourcify with an exact match.
 
-An internal review on 2026-11-05 found two High issues in the keeper service, both now fixed: a vault built to make
-the keeper read forever, and an alarm key built to burn the gas of the alarms checked with it. It found no way for
-anyone to send a user's funds anywhere but the owner.
+Two internal reviews are in [`.audit-grade/`](.audit-grade/):
+
+- **2026-11-05.** Found two High issues in the keeper service, both fixed: a vault built to make the keeper read
+  forever, and an alarm key built to burn the gas of the alarms checked with it.
+- **2026-11-06.** Found two more High issues in the keeper, both fixed: attacker exit jobs that could freeze the queue,
+  and attacker positions that could spend the keeper's gas without a cap.
+
+Neither review found a way for anyone to send a user's funds anywhere but the owner.
