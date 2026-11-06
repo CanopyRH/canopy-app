@@ -96,3 +96,56 @@ jobs:
           version: v1.8.6
       - run: forge test --match-path test/RouterInvariant.t.sol
         working-directory: contracts
+  halmos:
+    # Symbolic checks of ExitRouter (the `check_` functions in contracts/test/review/RouterSymbolic.t.sol), about a minute.
+    # They prove, for every input, that an exit pays only the owner and that a stranger needs a fired, armed key.
+    # See contracts/INVARIANTS.md.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FOUNDRY_SOLC: 0.8.28
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1
+        with:
+          version: v1.8.6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install halmos==0.1.13
+      - run: FOUNDRY_PROFILE=halmos halmos --root contracts --match-contract RouterSymbolic --solver-timeout-assertion 0
+  advisories:
+    # Known advisories in the dependencies the services and the web app are built from. The scan's output is kept as an
+    # artifact. The job fails on a High (CVSS 7.0 and up) or Critical advisory; tools/osv-gate.ts reads the output, because
+    # osv-scanner has no severity threshold of its own.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Scan the lockfiles
+        run: |
+          curl -sSfL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64
+          echo "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          code=0
+          ./osv-scanner scan source --lockfile=services/bun.lock --lockfile=web/bun.lock --format json --output-file osv-results.json || code=$?
+          rm osv-scanner
+          # Exit 1 means advisories were found, which the next steps judge. Anything else is the scan itself failing.
+          test "$code" -le 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: osv-results
+          path: osv-results.json
+          if-no-files-found: warn
+      - name: No High or Critical advisories
+        run: bun tools/osv-gate.ts osv-results.json
