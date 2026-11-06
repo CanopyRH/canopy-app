@@ -8,6 +8,7 @@ export const Env = z.object({
   PUBLIC_URL: z.url(), // this service's own address, for the Telegram webhook
   APP_URL: z.url().optional(), // the web app that bot buttons open; off means PUBLIC_URL
   DATABASE_URL: z.string(),
+  DB_POOL: z.coerce.number().int().min(1).max(50).default(4), // connections per process; 7 services × 4, doubled during a deploy, stays under 100
   CHAIN_ID: z.coerce.number(),
   RPC_URL: z.url(),
   RPC_URL_BACKUP: z.url(),

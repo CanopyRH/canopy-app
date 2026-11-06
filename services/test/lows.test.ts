@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import { registrationOrder, keyOf } from "../src/api/presets";
 import { sameSecret } from "../src/api/secret";
 import { ALERT_TRIES, queueAlert, sendQueuedAlerts } from "../src/bot/queue";
+import { loadEnv } from "../src/env";
 import { scrubUrls } from "../src/log";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
@@ -79,5 +80,20 @@ describe("watcher alarms in scope", () => {
     expect(await quorumScope(r, [LISTED], () => 100, true)(stranger, OTHER)).toBe(false);
     expect(await quorumScope(r, [LISTED], () => 100, false)(stranger, OTHER)).toBe(true);
     expect(await quorumScope(r, [LISTED], () => 10, true)(stranger, OTHER)).toBe(true);
+  });
+});
+
+describe("database pool", () => {
+  const base = { PUBLIC_URL: "https://x.example", DATABASE_URL: "postgres://x", CHAIN_ID: "4663", RPC_URL: "https://a.example", RPC_URL_BACKUP: "https://b.example", TELEGRAM_BOT_TOKEN: "1:a", TELEGRAM_WEBHOOK_SECRET: "s".repeat(16), ALERTS_ONLY: "true" };
+
+  test("defaults small enough that every service, doubled during a deploy, stays under 100 connections", () => {
+    const pool = loadEnv(base).DB_POOL;
+    expect(pool).toBe(4);
+    expect(7 * pool * 2).toBeLessThan(100);
+  });
+
+  test("can be set, but not to zero", () => {
+    expect(loadEnv({ ...base, DB_POOL: "8" }).DB_POOL).toBe(8);
+    expect(() => loadEnv({ ...base, DB_POOL: "0" })).toThrow();
   });
 });

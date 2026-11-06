@@ -29,7 +29,7 @@ const env = loadEnv(process.env);
 const now = () => Math.floor(Date.now() / 1000);
 const transport = fallback([http(env.RPC_URL), http(env.RPC_URL_BACKUP)]);
 const client = createPublicClient({ transport, pollingInterval: 500 });
-const db = postgres(env.DATABASE_URL);
+const db = postgres(env.DATABASE_URL, env.DB_POOL);
 const r = repo(db);
 const router = (env.ROUTER ?? "0x") as Address;
 const alarmBook = (env.ALARM_BOOK ?? "0x") as Address;

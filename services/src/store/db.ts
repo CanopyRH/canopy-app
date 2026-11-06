@@ -22,9 +22,15 @@ export async function migrate(db: Db) {
   await (db.locked ?? db.exec)(SCHEMA);
 }
 
+/**
+ * Connections each process may hold. Every service shares one database, and during a deploy the old and new copy of
+ * each service run side by side, so a small pool keeps a full rollout well under the server's limit (100 by default).
+ */
+export const DEFAULT_POOL = 4;
+
 /** Production database, using Bun's built-in Postgres client. */
-export function postgres(url: string): Db {
-  const sql = new Bun.SQL({ url, max: 10 });
+export function postgres(url: string, max = DEFAULT_POOL): Db {
+  const sql = new Bun.SQL({ url, max });
   return {
     query: (text, params = []) => sql.unsafe(text, params as never[]) as never,
     exec: async (text) => {
