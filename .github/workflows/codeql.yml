@@ -8,6 +8,8 @@ permissions:
   contents: read
 jobs:
   analyze:
+    # Code scanning results upload only to the public repo.
+    if: github.repository == 'CanopyRH/canopy-app'
     runs-on: ubuntu-latest
     permissions:
       contents: read
