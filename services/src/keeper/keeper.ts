@@ -66,6 +66,8 @@ export interface KeeperDeps {
   passBudgetMs?: number;
   /** Keys left out of the shared check until a time. Defaults to one map per process. */
   quarantine?: Map<string, number>;
+  /** How many times in a row each key's poke didn't fire. Defaults to one map per process. */
+  misses?: Map<string, number>;
   /** Current fees, so simulations run at a real gas price. */
   fees?: () => Promise<Fees>;
   /** Overrides UNLISTED_EXIT_GAS. */
@@ -159,11 +161,110 @@ async function checkAlone(d: KeeperDeps, key: Hex): Promise<Check> {
   }
 }
 
+/** Checks keys in shared requests of up to CHECKS_PER_CALL. `threw` means the request itself was refused, not just its checks. */
+async function checkShared(d: KeeperDeps, keys: Hex[]): Promise<{ checks: Check[]; threw: boolean }> {
+  try {
+    const checks = (await d.client.multicall({
+      multicallAddress: d.multicall3,
+      allowFailure: true,
+      batchSize: CHECKS_PER_CALL * 36,
+      contracts: keys.map((key) => ({ address: d.alarmBook, abi: alarmBookAbi, functionName: "check", args: [key] }) as const),
+    })) as Check[];
+    return { checks, threw: false };
+  } catch (error) {
+    return { checks: keys.map(() => ({ status: "failure", error }) as Check), threw: true };
+  }
+}
+
+/** Below this many keys, a group that failed together is checked one key at a time instead of being split again. */
+export const SPLIT_BELOW = 5;
+/** Shared requests one pass may spend looking for the key that sinks a group. Past it, the rest are checked one by one. */
+export const MAX_SPLIT_REQUESTS = 64;
+/** A key whose poke didn't fire is left out this long the first time, twice as long each time after, up to an hour. */
+export const MISS_QUARANTINE_SEC = 60;
+const MISSES = new Map<string, number>();
+
+type Pass = { q: Map<string, number>; now: number; out: Map<Hex, Check>; requests: number };
+
+/** Checks each key alone. Any that fails is left out of the shared check for QUARANTINE_SEC. Returns whether one did. */
+async function settleAlone(d: KeeperDeps, p: Pass, keys: Hex[]) {
+  let found = false;
+  for (const key of keys) {
+    const c = await checkAlone(d, key);
+    p.out.set(key, c);
+    if (c.status === "failure") {
+      p.q.set(key.toLowerCase(), p.now + QUARANTINE_SEC);
+      found = true;
+    }
+  }
+  return found;
+}
+
 /**
- * Pokes every armed key whose on-chain condition has tripped. Returns the keys it poked.
+ * Finds the keys that sink a group of checks that failed together. The group is split in half and each half checked as
+ * one request, recursively, so a burner among thousands of keys costs a few dozen requests. A small group is checked
+ * key by key. If every key answers alone, one of them sinks only a shared request (it can read gasleft() and burn only
+ * a frame deeper), so each is checked in a shared request of its own, and one that fails there is left out too.
+ */
+async function settle(d: KeeperDeps, p: Pass, group: Hex[], threw: boolean) {
+  if (threw || group.length < SPLIT_BELOW || p.requests >= MAX_SPLIT_REQUESTS) {
+    if (await settleAlone(d, p, group)) return;
+    // A node that refuses shared requests outright says nothing about the keys, so nothing is left out for it.
+    if (threw || p.requests >= MAX_SPLIT_REQUESTS) return;
+    for (const key of group) {
+      p.requests++;
+      if ((await checkShared(d, [key])).checks[0]?.status !== "success") p.q.set(key.toLowerCase(), p.now + QUARANTINE_SEC);
+    }
+    return;
+  }
+  const half = Math.ceil(group.length / 2);
+  for (const part of [group.slice(0, half), group.slice(half)]) {
+    p.requests++;
+    const { checks, threw: refused } = await checkShared(d, part);
+    const bad = part.filter((_, i) => checks[i]?.status !== "success");
+    for (const [i, key] of part.entries()) if (checks[i]?.status === "success") p.out.set(key, checks[i]!);
+    // The whole request failed: split it again. Only some checks failed: those keys answer for themselves.
+    if (bad.length === part.length) await settle(d, p, part, refused);
+    else if (bad.length > 0) await settleAlone(d, p, bad);
+  }
+}
+
+/** Leaves a key whose poke didn't fire out of the checks for a while, longer each time it happens again. */
+function missed(d: KeeperDeps, q: Map<string, number>, key: Hex, now: number) {
+  const m = d.misses ?? MISSES;
+  if (m.size > 100_000) m.clear();
+  const n = (m.get(key.toLowerCase()) ?? 0) + 1;
+  m.set(key.toLowerCase(), n);
+  q.set(key.toLowerCase(), now + Math.min(MISS_QUARANTINE_SEC * 2 ** (n - 1), 6 * QUARANTINE_SEC));
+}
+
+/** What a simulated poke returned: whether it fired. Unknown if the node gave nothing to decode. */
+function pokeFires(sim: SimResult): boolean | undefined {
+  try {
+    return decodeFunctionResult({ abi: alarmBookAbi, functionName: "poke", data: sim.data }) as boolean;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether the alarm is live after a poke landed. Unknown if the read fails. */
+async function firedNow(d: KeeperDeps, key: Hex): Promise<boolean | undefined> {
+  try {
+    const live = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "isLive", args: [key, BigInt(ALARM_TTL)] });
+    return typeof live === "boolean" ? live : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Pokes every armed key whose on-chain condition has tripped. Returns the keys it poked and saw fire.
  * Arming is open to anyone, and a key can point at a contract that burns all the gas it is given. In the shared check
- * that would starve the keys after it, so every key that fails there is checked again on its own. A key that fails
- * on its own is left out of the shared check for a while, and the honest keys around it are still poked this pass.
+ * that would starve the keys after it, so the keys of a failed request are searched for the one that sank it, and that
+ * key is left out of the shared check for a while. The honest keys around it are still poked this pass.
+ * The check runs as a read, where a contract can see a zero gas price and answer differently from a real transaction.
+ * So each poke is simulated at real fees first, and the chain is asked afterwards whether it fired. A key that reads as
+ * tripped but doesn't fire is left out for a while too, so it can't cost a transaction every second.
  */
 export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
   const q = d.quarantine ?? QUARANTINE;
@@ -172,28 +273,37 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
   const keys = ((await d.repo.liveKeys(d.paidOnly ? now : undefined)) as Hex[]).filter((k) => !q.has(k.toLowerCase()));
   if (keys.length === 0) return [];
   // One RPC request checks every key, so the cost per second doesn't grow with the number of armed alarms.
-  const shared = (await d.client
-    .multicall({
-      multicallAddress: d.multicall3,
-      allowFailure: true,
-      batchSize: CHECKS_PER_CALL * 36,
-      contracts: keys.map((key) => ({ address: d.alarmBook, abi: alarmBookAbi, functionName: "check", args: [key] }) as const),
-    })
-    .catch(() => keys.map(() => ({ status: "failure", error: new Error("shared check failed") })))) as Check[];
-  const poked: Hex[] = [];
+  const { checks: shared, threw } = await checkShared(d, keys);
+  const p: Pass = { q, now, out: new Map(), requests: 0 };
+  const failed: Hex[] = [];
   for (const [i, key] of keys.entries()) {
+    const c = shared[i];
+    if (c?.status === "success") p.out.set(key, c);
+    else failed.push(key);
+  }
+  if (failed.length > 0) await settle(d, p, failed, threw);
+
+  const poked: Hex[] = [];
+  for (const key of keys) {
     try {
-      let c = shared[i] ?? ({ status: "failure", error: new Error("no result") } as Check);
-      if (c.status === "failure") c = await checkAlone(d, key);
-      if (c.status === "failure") {
-        q.set(key.toLowerCase(), now + QUARANTINE_SEC);
-        throw c.error;
-      }
-      if (!c.result) continue;
+      const c = p.out.get(key) ?? ({ status: "failure", error: new Error("left out after a failed shared check") } as Check);
+      if (c.status === "failure") throw c.error;
+      if (q.has(key.toLowerCase()) || !c.result) continue;
       const call = { to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) };
       const g = await gasFor(d, call, SMALL_CALL_GAS);
       if (!g) throw new Error("poke reverts or needs too much gas in simulation");
+      if (g.sim && pokeFires(g.sim) === false) {
+        missed(d, q, key, now);
+        await d.repo.bump("poke_miss");
+        continue;
+      }
       await d.send({ ...call, gas: g.gas });
+      if ((await firedNow(d, key)) === false) {
+        missed(d, q, key, now);
+        await d.repo.bump("poke_miss");
+        continue;
+      }
+      (d.misses ?? MISSES).delete(key.toLowerCase());
       await d.repo.bump("poke_ok");
       poked.push(key);
     } catch (e) {

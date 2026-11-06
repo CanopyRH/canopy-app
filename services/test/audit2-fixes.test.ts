@@ -1,11 +1,11 @@
-// Audit 2: re-runs of the 2026-11-05 PoCs against the current code, plus one bypass of the H-2 fix.
+// Audit 2: re-runs of the 2026-11-05 PoCs against the current code.
 // Local mocks and the in-process database only. Run: bun test test/audit2-fixes.test.ts
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createPublicClient, encodeFunctionResult, fallback, http, type Address, type Hex } from "viem";
 import { Kind, keyOf } from "../src/api/presets";
 import { queueAlert } from "../src/bot/queue";
 import { erc20Abi } from "../src/chain/abi";
-import { drainExits, pokeTripped, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
+import { drainExits, type ExitJob, type KeeperDeps } from "../src/keeper/keeper";
 import { scrubConsole } from "../src/log";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
@@ -74,72 +74,6 @@ describe("H-1 re-run: a vault whose adapter claims 2^255 markets", () => {
       expect(reads).toBeLessThan(100);
     });
   }
-});
-
-describe("A2-M2 (H-2 bypass): the burner quarantine can be sidestepped by a key that burns only inside the shared check", () => {
-  // The shared check runs as EOA -> Multicall3 -> AlarmBook -> target, a single check as EOA -> AlarmBook -> target. The
-  // extra call frame leaves the target 1/64 less gas, so a target can read gasleft() and burn only when it is in the
-  // shared request. Then the shared request fails every pass, the key passes alone and is never quarantined, and every
-  // live key is re-checked one RPC at a time on every pass.
-  //
-  // The EVM half was checked with a Foundry test against the real AlarmBook at a 50M call cap (not committed, as it needs
-  // a separate Foundry project). The target was:
-  //   contract Selective { uint256 immutable floor; constructor(uint256 f) { floor = f; }
-  //     function paused() external view returns (bool) { if (gasleft() < floor) { while (true) {} } return false; } }
-  // with floor = CAP * 63 / 64 - 400_000. AlarmBook.check(key) called alone with CAP gas returned false; the same key first
-  // in a 250-key Multicall3-style aggregate3 with CAP gas made the whole request fail (0 of 250 checks answered).
-  const OWNER = "0xabababababababababababababababababababab";
-  const key = (i: number) => `0x${i.toString(16).padStart(64, "0")}` as Hex;
-  const SELECTIVE = `0x${"5b".repeat(32)}` as Hex;
-  const PLAIN = `0x${"b2".repeat(32)}` as Hex;
-
-  async function arm(keys: Hex[]) {
-    for (let i = 0; i < keys.length; i += 8) {
-      await r.upsertPosition({ posId: key(10_000 + i), owner: OWNER, adapter: ROUTER, target: X, tokenId: 0n, harbour: 0, maxSlipBps: 0, epoch: 0n, block: 1n, termsHash: "t", keys: keys.slice(i, i + 8) });
-    }
-  }
-
-  function deps(burner: Hex, quarantine: Map<string, number>, counts: { shared: number; alone: number }) {
-    return {
-      repo: r, alarmBook: ROUTER, multicall3: ROUTER, paidOnly: false, now: () => 1000, quarantine,
-      client: {
-        multicall: async ({ contracts }: { contracts: { args: Hex[] }[] }) => {
-          counts.shared++;
-          const sunk = contracts.some(({ args }) => args[0] === burner);
-          return contracts.map(() => (sunk ? { status: "failure", error: new Error("out of gas") } : { status: "success", result: false }));
-        },
-        readContract: async ({ args }: { args: Hex[] }) => {
-          counts.alone++;
-          if (args[0] === PLAIN) throw new Error("out of gas"); // a plain burner fails alone too
-          return false; // the selective one answers false alone, like every honest key that hasn't tripped
-        },
-      },
-      send: async () => TX,
-    } as unknown as KeeperDeps;
-  }
-
-  test("control: a plain burner is quarantined after one pass, and later passes are one shared request", async () => {
-    const honest = Array.from({ length: 300 }, (_, i) => key(i + 1));
-    await arm([...honest, PLAIN]);
-    const q = new Map<string, number>();
-    const counts = { shared: 0, alone: 0 };
-    await pokeTripped(deps(PLAIN, q, counts));
-    expect(counts.alone).toBe(301);
-    counts.alone = 0;
-    await pokeTripped(deps(PLAIN, q, counts));
-    expect(counts.alone).toBe(0);
-  });
-
-  test("a selective burner is never quarantined: every pass costs one RPC per live key", async () => {
-    const honest = Array.from({ length: 300 }, (_, i) => key(i + 1));
-    await arm([...honest, SELECTIVE]);
-    const q = new Map<string, number>();
-    const counts = { shared: 0, alone: 0 };
-    for (let pass = 0; pass < 5; pass++) await pokeTripped(deps(SELECTIVE, q, counts));
-    console.log(`A2-M2: 5 passes, ${counts.shared} shared requests, ${counts.alone} single checks, quarantine size ${q.size}`);
-    expect(q.size).toBe(0);
-    expect(counts.alone).toBe(5 * 301);
-  });
 });
 
 describe("L-2 re-run: the alarm handler only writes a row", () => {
