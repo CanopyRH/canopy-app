@@ -17,3 +17,12 @@
 .motion-stopped .case-card,.motion-stopped .nav-menu{animation:none!important}
 
 .faq-item h3 button:focus-visible{outline:none}.faq-item h3 button:focus-visible .faq-toggle{outline:3px solid #7064cb;outline-offset:4px}
+
+/* Launch contract address under the hero actions (hidden until public/ca.json holds one). */
+.ca-field{display:flex;align-items:center;gap:10px;margin:22px auto 0;width:fit-content;max-width:min(560px,calc(100vw - 32px));box-sizing:border-box;padding:6px 6px 6px 14px;border-radius:999px;background:rgba(255,255,255,.85);border:1px solid rgba(17,17,17,.1);box-shadow:0 6px 24px rgba(17,17,17,.06);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#121212}
+.ca-label{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#6b6f78;flex:none}
+.ca-address{flex:1 1 auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit}
+a.ca-address:hover{text-decoration:underline}
+.ca-copy{display:inline-flex;align-items:center;gap:6px;flex:none;border-radius:999px;padding:7px 12px;background:#121212;color:#fff;font-size:13px;font-weight:500}
+.ca-copy:hover{background:#2b2b31}
+@media (max-width:600px){.ca-copy span{display:none}.ca-copy{padding:8px}}
