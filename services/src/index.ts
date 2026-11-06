@@ -460,6 +460,26 @@ if ((run("api") || run("bot")) && bot) {
     healthToken: env.HEALTH_TOKEN,
     rateLimit: { perMin: env.RATE_LIMIT_PER_MIN, proxyHops: env.TRUSTED_PROXY_HOPS },
     answersPaused,
+    // On-chain, in one multicall per 400 reads. The armed board caches the answer for a minute.
+    exitableShares: async (reads) => {
+      const out: (bigint | null)[] = [];
+      for (let i = 0; i < reads.length; i += 400) {
+        const chunk = reads.slice(i, i + 400);
+        const res = await client.multicall({
+          multicallAddress: parts.multicall3,
+          allowFailure: true,
+          contracts: chunk.flatMap((x) => [
+            { address: x.target, abi: erc20Abi, functionName: "balanceOf", args: [x.owner] },
+            { address: x.target, abi: erc20Abi, functionName: "allowance", args: [x.owner, router] },
+          ]),
+        } as never) as unknown as { status: string; result?: bigint }[];
+        for (let j = 0; j < chunk.length; j++) {
+          const bal = res[2 * j], allow = res[2 * j + 1];
+          out.push(bal?.status === "success" && allow?.status === "success" ? (bal.result! < allow.result! ? bal.result! : allow.result!) : null);
+        }
+      }
+      return out;
+    },
     health: async () => {
       const tip = await client.getBlockNumber();
       const cursor = await r.cursor(routerName);

@@ -42,6 +42,11 @@ export interface ApiDeps {
   rateLimit?: RateLimit;
   /** Whether a vault answers `paused()`. Without it no vault is offered the Paused preset. */
   answersPaused?: (vault: Address) => Promise<boolean>;
+  /**
+   * What each owner can still exit from a vault: the smaller of their share balance and their approval to the router, read
+   * on-chain, one answer per request and null where the read failed. Without it the armed board cannot price anything.
+   */
+  exitableShares?: (reads: { target: Address; owner: Address }[]) => Promise<(bigint | null)[]>;
   /** Feature routes. Defaults to the files in src/plugins/. */
   plugins?: Plugin[];
 }
