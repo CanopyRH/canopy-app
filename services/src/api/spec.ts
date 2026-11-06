@@ -193,6 +193,20 @@ export const ROUTES: RouteDef[] = [
     errors: [noContracts],
   },
   {
+    method: "get", path: "/xray/:file", tag: "Reads", rateLimited: true,
+    summary: "A vault's X-ray card",
+    description:
+      "A card read from the chain: how liquid the vault is now, who can change what, whether withdrawal gates are on, off or locked off, and what is armed on it. " +
+      "`file` is the vault address alone for a share page (HTML), or the address with `.png`, `.svg` or `.json` for the image or the facts. Cached for a few minutes.",
+    params: { file: { description: "A vault address, optionally ending in .png, .svg or .json.", schema: z.string().regex(/^0x[0-9a-fA-F]{40}(\.(png|svg|json))?$/), example: "0xBeEff033F34C046626B8D0A041844C5d1A5409dd.json" } },
+    ok: { contentType: "application/json", description: "The facts, with links to the image and share page (for .json). The other forms answer text/html, image/png or image/svg+xml." },
+    errors: [
+      { status: 400, description: "Not an address.", schema: errorSchema },
+      { status: 404, description: "Not a vault Canopy can read.", schema: errorSchema },
+      { status: 503, description: "The PNG could not be drawn.", schema: errorSchema },
+    ],
+  },
+  {
     method: "get", path: "/openapi.json", tag: "Agents", rateLimited: true,
     summary: "This description",
     description: "The OpenAPI 3.1 description of the public API.",

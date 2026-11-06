@@ -43,7 +43,10 @@ export interface ApiDeps {
   rateLimit?: RateLimit;
   /** Whether a vault answers `paused()`. Without it no vault is offered the Paused preset. */
   answersPaused?: (vault: Address) => Promise<boolean>;
-  /** This API's public address and the website's, for links in share pages. Without them: the address the request came to, and https://canopyrh.com. */
+  /**
+   * This API's public address, for share pages, /openapi.json and /llms.txt, and the website's, for links in share pages.
+   * Without them: the address the request came to, and https://canopyrh.com.
+   */
   publicUrl?: string;
   siteUrl?: string;
   /**
@@ -53,8 +56,6 @@ export interface ApiDeps {
   exitableShares?: (reads: { target: Address; owner: Address }[]) => Promise<(bigint | null)[]>;
   /** Feature routes. Defaults to the files in src/plugins/. */
   plugins?: Plugin[];
-  /** This API's public address, for /openapi.json and /llms.txt. Without it they use the address the request came to. */
-  publicUrl?: string;
   /** The website's address, named in /llms.txt. */
   appUrl?: string;
   /** The contracts and the reads behind /calldata/*. Without it those routes answer 503, as on an alerts-only deployment. */

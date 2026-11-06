@@ -461,7 +461,6 @@ if ((run("api") || run("bot")) && bot) {
     healthToken: env.HEALTH_TOKEN,
     rateLimit: { perMin: env.RATE_LIMIT_PER_MIN, proxyHops: env.TRUSTED_PROXY_HOPS },
     answersPaused,
-    publicUrl: env.PUBLIC_URL,
     appUrl: env.APP_URL,
     calldata:
       contracts && env.ADAPTER_4626
