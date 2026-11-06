@@ -297,8 +297,9 @@ contract AlarmBook is IAlarmBook {
     }
 
     /// @notice Fire `key` if its condition holds and it is not live. For DRAIN the first tripped poke only records
-    /// `pendingAt`, and a later one at least DRAIN_CONFIRM s after it (and within `window`) fires; a poke that reads it
-    /// clear cancels the confirmation. Never reverts on a condition that does not hold.
+    /// `pendingAt`, and a later tripped one at least DRAIN_CONFIRM s after it (and within `window`) fires. A poke that
+    /// reads the vault clear or can't read it leaves the sighting alone, so a flash deposit can't cancel it; a sighting
+    /// lapses only once it is older than `window`. Never reverts on a condition that does not hold.
     /// @param key The key.
     /// @return fired True if this call fired the key.
     function poke(bytes32 key) external returns (bool fired) {
@@ -308,11 +309,7 @@ contract AlarmBook is IAlarmBook {
         Detector memory d = _detectors[key];
         (Reading r,) = _reading(d, s);
         if (d.kind == Kind.DRAIN) {
-            if (r == Reading.CLEAR) {
-                if (s.pendingAt != 0) s.pendingAt = 0;
-                return false;
-            }
-            if (r != Reading.TRIPPED) return false; // unreadable: leave any confirmation as it is
+            if (r != Reading.TRIPPED) return false; // clear or unreadable: the sighting stays until it lapses
             if (!_pendingLive(s, d)) {
                 s.pendingAt = uint64(block.timestamp);
                 emit Pending(key, uint64(block.timestamp));

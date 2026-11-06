@@ -199,17 +199,19 @@ raise it with a one-transaction price spike (flash deposit, donation, withdrawal
 A single high `totalAssets` reading, such as one taken inside a flash deposit, never becomes a reference: the lowest
 sample of a whole period does, and nothing rolls while the detector is tripped, so a drain cannot be reset away. A
 drop fires only when a poke sees it, and a later poke at least 60 seconds after it (and within the window) still sees
-it; a poke that sees the vault whole in between cancels the first sighting. Windows under 1,200 seconds are refused.
+it. A poke that sees the vault whole, or can't read it, never cancels a sighting: a sighting only lapses once it is
+older than the window, so a flash deposit between the two sightings can't hold a real drain off. Windows under 1,200
+seconds are refused.
 
-What stays (documented limits): a whale who dips twice a minute apart, with nobody poking in between, can still fire;
-a flash deposit before the confirming poke can cancel a real drain's first sighting; and low samples taken by
-`checkpoint` lower the next reference. The app offers DRAIN only inside `BOTH` with a watcher quorum.
+What stays (documented limits): a whale who dips twice a minute apart, within the window, can still fire; and low
+samples taken by `checkpoint` lower the next reference. The app offers DRAIN only inside `BOTH` with a watcher quorum.
 
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_flashDeposit_cantRaiseTheBaseline`, `test_flashDeposit_onANewDetector_cantFire`, `test_flashSample_isPulledDownByTheNextHonestSample`, `test_midDrainCheckpoint_cantHideADrain`, `test_midDrainRoll_cantHideADrain`, `test_flashDeposit_cantResetATrippedDrain`, `test_samplesDuringATrippedDrain_cantLowerTheNextBaseline`, `test_quietVault_baselineFollowsRealGrowth`.
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_drain_snapshotCannotResetAfterWindowWhileTripped`, `test_drain_snapshotExpires`, `test_drain_andCheckpointRules`.
-- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_drainIgnoresASingleLowReadingFromAFlashWithdrawal`, `test_drainFiresWhenTheDropIsSeenTwiceAMinuteApart`, `test_drainConfirmationLapsesAfterTheWindow`, `test_drainWindowsUnder1200sAreRefused_andTwoSamplesInOneFlashCantFire` (A2-02 fixed); `test_drainWhaleDippingTwiceAMinuteApartStillFires_documentedLimit` and `test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen` (the documented limits).
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_drainIgnoresASingleLowReadingFromAFlashWithdrawal`, `test_drainFiresWhenTheDropIsSeenTwiceAMinuteApart`, `test_drainConfirmationLapsesAfterTheWindow`, `test_flashDepositBetweenSightingsCantHoldOffARealDrain`, `test_drainWindowsUnder1200sAreRefused_andTwoSamplesInOneFlashCantFire` (A2-02 fixed); `test_drainWhaleDippingTwiceAMinuteApartStillFires_documentedLimit` and `test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen` (the documented limits).
 - [ForkPresets.t.sol](test/ForkPresets.t.sol) `test_fork_flashDepositAndDonationCantFireAnyPreset`: on all five launch vaults, a flash deposit and a donation fire no preset and start no confirmation.
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_pokesFireExactlyWhenTheModelSays` and `invariant_theAlarmBookMatchesTheIndependentModel`: the model's DRAIN sampling, pending time and confirmation match AlarmBook after every call.
+- [AlarmReads.t.sol](test/AlarmReads.t.sol) `test_aDrainConfirmationSurvivesAnUnreadablePoke`.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_pokesFireExactlyWhenTheModelSays` and `invariant_theAlarmBookMatchesTheIndependentModel`: the model's DRAIN sampling, pending time and confirmation match AlarmBook after every call, with the handler's `flashPokeDrain` poking inside flash deposits between sightings.
 
 ### A6. An alarm cannot refire for 24 hours
 

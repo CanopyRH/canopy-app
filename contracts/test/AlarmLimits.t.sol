@@ -40,6 +40,16 @@ contract DoubleSampler {
     }
 }
 
+/// @dev Flash deposit that pokes while the vault looks whole, then takes the deposit back out, all in one transaction.
+contract FlashPoker {
+    function run(AlarmBook book, RealVault v, bytes32 key, uint256 loan) external returns (bool fired) {
+        v.assetToken().approve(address(v), loan);
+        uint256 s = v.deposit(loan, address(this));
+        fired = book.poke(key);
+        v.redeem(s, address(this), address(this));
+    }
+}
+
 /// @dev A smart-contract watcher (ERC-1271) that approves exactly one digest.
 contract Wallet1271 {
     bytes32 public okHash;
@@ -301,7 +311,8 @@ contract AlarmLimitsTest is Base {
     }
 
     /// v1: a depositor holding 40% of the vault withdrew, poked and deposited back in one transaction, and the alarm fired
-    /// with no loss. v2: that poke only starts a confirmation; the next poke, which finds the vault whole, cancels it.
+    /// with no loss. v2: that poke only records a sighting. Pokes that find the vault whole don't fire it, and the
+    /// sighting lapses after the window, so one dip never fires on its own.
     function test_drainIgnoresASingleLowReadingFromAFlashWithdrawal() public {
         (RealVault rv, Whale whale, bytes32 key, MockERC20 asset) = _drainWorld();
         rv.transfer(OWNER, 100e18);
@@ -316,12 +327,38 @@ contract AlarmLimitsTest is Base {
         assertEq(asset.balanceOf(address(whale)), 0, "whale fully redeposited");
         assertTrue(!book.check(key), "nothing to do: the vault reads clear");
 
+        uint64 sighting = _pendingAt(key);
         vm.warp(block.timestamp + 60);
-        assertTrue(!book.poke(key), "the confirming poke finds the vault whole");
-        assertEq(_pendingAt(key), 0, "and cancels the confirmation");
+        assertTrue(!book.poke(key), "the confirming poke finds the vault whole: no fire");
+        assertEq(_pendingAt(key), sighting, "the sighting stays until it lapses");
+        vm.warp(sighting + WINDOW + 1);
+        book.checkpoint(key); // a keeper's routine sample keeps the reference live
+        assertTrue(!book.poke(key), "still whole: no fire");
+        rv.exploitDrain(ATTACKER, 300e18); // a real drop, after the old sighting lapsed
+        assertTrue(!book.poke(key), "the lapsed sighting doesn't count: this only starts a new one");
+        assertEq(_pendingAt(key), block.timestamp, "a new sighting");
         vm.prank(KEEPER);
         vm.expectRevert(ExitRouter.AlarmNotLive.selector);
         router.exit(id, key, 0);
+    }
+
+    /// v2 follow-up: a poke that reads the vault clear must not cancel a sighting. Otherwise anyone could flash-deposit
+    /// and poke just before each confirming poke and hold a real drain off for as long as they paid for it.
+    function test_flashDepositBetweenSightingsCantHoldOffARealDrain() public {
+        (RealVault rv,, bytes32 key, MockERC20 asset) = _drainWorld();
+        rv.exploitDrain(ATTACKER, 500e18); // a real 50% loss
+        assertTrue(!book.poke(key), "first sighting");
+        uint64 sighting = _pendingAt(key);
+        FlashPoker fp = new FlashPoker();
+        asset.mint(address(fp), 1000e18);
+        for (uint256 i; i < 3; ++i) {
+            vm.warp(block.timestamp + 19);
+            assertTrue(!fp.run(book, rv, key, 1000e18), "the flash deposit makes the vault read whole: no fire");
+            assertEq(_pendingAt(key), sighting, "and the sighting survives it");
+        }
+        vm.warp(sighting + 60);
+        assertTrue(book.poke(key), "the keeper's confirming poke fires on time");
+        assertEq(rv.totalAssets(), 500e18, "the flash deposits left nothing behind");
     }
 
     /// A real drain still fires, a minute after it is first seen. A second poke inside the minute does nothing.
@@ -351,7 +388,7 @@ contract AlarmLimitsTest is Base {
         assertTrue(_pendingAt(key) > first, "restarted");
     }
 
-    /// The residual limit, pinned: a whale who dips twice, a minute apart, with nobody poking in between, still fires.
+    /// The residual limit, pinned: a whale who dips twice, a minute apart (and within the window), still fires.
     /// The app offers DRAIN only inside BOTH with a watcher quorum, so this alone exits no one.
     function test_drainWhaleDippingTwiceAMinuteApartStillFires_documentedLimit() public {
         (RealVault rv, Whale whale, bytes32 key,) = _drainWorld();

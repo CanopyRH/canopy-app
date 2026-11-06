@@ -50,7 +50,8 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
   arming; a fire in the same second counts only if it comes after the arming transaction, because a key that fired
   before it can't be armed.
 - **A2-02 (DRAIN).** Windows under 1,200 seconds are refused. A drop fires only when two pokes at least 60 seconds
-  apart both see it, within the window; a poke that sees the vault whole in between cancels the first sighting.
+  apart both see it, within the window. A poke that sees the vault whole in between doesn't cancel the first sighting
+  (it only lapses after the window), so a flash deposit can't hold a real drain off.
 - **A2-04 (watchers).** Approvals wait 2 days, last at most a year, and lapse unless extended.
 - **A2-06 (1-byte token returns).** When a token's transfer returns 1 to 31 bytes, the router checks its own balance:
   tokens that moved are paid, tokens that didn't are booked as owed.
@@ -58,11 +59,10 @@ expected, or stop a keeper or watcher, follow [INCIDENT.md](INCIDENT.md).
 ## Risks we accept (v2)
 
 - **DRAIN still trusts the vault's own readings.** A holder of a quarter or more of a vault can withdraw, poke and
-  redeposit twice, a minute apart, and fire a DRAIN key with no loss. A flash deposit before the confirming poke can
-  cancel a real drain's first sighting, so a drain can be held off for as long as someone pays to repeat that each
-  minute. Low samples taken by `checkpoint` lower the reference, so a real loss can later go unseen. The app offers
-  DRAIN only inside BOTH with a watcher quorum, so a DRAIN fire alone exits no one, and a held-off DRAIN never stops the
-  quorum alarm.
+  redeposit twice, a minute apart and within the window, and fire a DRAIN key with no loss. Because a whole reading
+  never cancels a sighting, an honest poke between the two dips doesn't stop that either. Low samples taken by
+  `checkpoint` lower the reference, so a real loss can later go unseen. The app offers DRAIN only inside BOTH with a
+  watcher quorum, so a DRAIN fire alone exits no one.
 - **A PAUSED detector on a target without the view never fires.** If the view reverts, the key reads "not paused".
   None of the five launch vaults has a `paused()` view, so the "Paused" preset can't fire on them.
 - **No admin delay by default.** The admin can't move funds, change who is paid or touch an armed position's alarms or

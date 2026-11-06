@@ -257,6 +257,7 @@ contract RouterHandler {
     uint256 public armRefusedNotClear;
     uint256 public drainPendings;
     uint256 public drainFires;
+    uint256 public flashPokes;
     uint256 public rebased;
     uint256 public quorumFired;
     uint256 public quorumRefusedInactiveWatcher;
@@ -598,7 +599,7 @@ contract RouterHandler {
         if (!_mLive(k)) {
             if (k == K_DRAIN) {
                 if (!_mTripped(k)) {
-                    gDPending = 0;
+                    // clear: a sighting is never cancelled, it only lapses after the window
                 } else if (!_mPendingLive()) {
                     gDPending = uint64(block.timestamp);
                     drainPendings++;
@@ -635,6 +636,16 @@ contract RouterHandler {
         _poke(K_DRAIN, seed);
         vm.warp(block.timestamp + _b(seed >> 8, 60, 120));
         _poke(K_DRAIN, seed >> 1);
+    }
+
+    /// @dev A flash deposit around a DRAIN poke: vault 0 looks half again as large for that one poke, then goes back.
+    function flashPokeDrain(uint256 seed) external {
+        IVault v = IVault(vaults[0]);
+        uint256 pps = v.assetsPerShare();
+        v.setPrice((pps * 3) / 2);
+        _poke(K_DRAIN, seed);
+        v.setPrice(pps);
+        flashPokes++;
     }
 
     /// @dev Rare: something takes 30% of vault 0's assets, as an exploit would; its share price falls with them.
@@ -1193,7 +1204,11 @@ contract RouterInvariants {
         h.poke(3, 0);
         _eq(h.drainPendings(), 1, "the drop is seen once: pending");
         _eq(h.drainFires(), 0, "not fired yet");
-        vm.warp(block.timestamp + 60);
+        vm.warp(block.timestamp + 30);
+        h.flashPokeDrain(0); // a flash deposit makes the vault read whole for one poke
+        _eq(h.drainFires(), 0, "the flash poke doesn't fire");
+        _eq(h.drainPendings(), 1, "and doesn't cancel or restart the sighting");
+        vm.warp(block.timestamp + 30);
         h.poke(3, 0);
         _eq(h.drainFires(), 1, "confirmed a minute later: fired");
 
