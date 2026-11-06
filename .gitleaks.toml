@@ -1,0 +1,24 @@
+title = "Canopy secret scan"
+
+# The default rules, minus values that are public by design. Each exception is narrow, so a real key still fails.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Token and contract addresses are public."
+regexTarget = "secret"
+regexes = ['''^0x[0-9a-fA-F]{40}$''']
+
+[[allowlists]]
+description = "Foundry's published development keys, used only against local test chains."
+regexTarget = "secret"
+regexes = ['''^0x(ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80|59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d)$''']
+
+[[allowlists]]
+description = "Published Web Push test vectors and on-chain alarm keys in tests."
+paths = ['''^services/test/push\.test\.ts$''', '''^web/test/alerts\.test\.ts$''', '''^web/test/receipt\.test\.ts$''']
+
+[[allowlists]]
+description = "A browser storage key name, not a secret."
+regexTarget = "line"
+regexes = ['''STORAGE_KEY = "canopy''']

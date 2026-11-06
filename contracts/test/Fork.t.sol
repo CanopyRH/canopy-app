@@ -170,10 +170,14 @@ contract ForkTest {
 
     function test_fork_realOwnerExit() public {
         if (block.chainid != 4663) return;
-        address h = holders[3];
-        uint256 shares = IERC20(address(VAULT)).balanceOf(h);
-        uint256 expected = VAULT.convertToAssets(shares);
-        require(expected >= 1_000e6, "holder still holds a real position, so refresh the list if this fails");
+        // Real holders come and go, so this takes whichever listed holder has the largest position today.
+        address h;
+        uint256 expected;
+        for (uint256 i; i < holders.length; ++i) {
+            uint256 v = VAULT.convertToAssets(IERC20(address(VAULT)).balanceOf(holders[i]));
+            if (v > expected) (h, expected) = (holders[i], v);
+        }
+        require(expected >= 1_000e6, "no listed holder still holds a real position, so refresh the list");
         bytes32 id = _arm(h);
         uint256 before = USDG.balanceOf(h);
         vm.prank(h);

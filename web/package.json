@@ -1,6 +1,7 @@
 {
   "name": "canopy-web",
   "private": true,
+  "packageManager": "bun@1.4.4",
   "type": "module",
   "scripts": {
     "build": "bun build src/site/site.jsx src/app/main.tsx --outdir public --target browser --format iife --production --entry-naming [name].[ext] && bun build src/walletconnect/wc.ts --outdir public --target browser --format esm --production --entry-naming [name].[ext]"

@@ -1,6 +1,7 @@
 {
   "name": "canopy-services",
   "private": true,
+  "packageManager": "bun@1.4.4",
   "type": "module",
   "scripts": {
     "test": "bun test",
