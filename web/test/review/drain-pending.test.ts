@@ -9,7 +9,7 @@
 // Real AlarmBook and MockVault bytecode on a local anvil, and the app's own presetStatus/notArmable.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn } from "bun";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPublicClient, createTestClient, createWalletClient, encodeAbiParameters, encodeFunctionData, http, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -23,7 +23,12 @@ const PORT = 19_545 + Math.floor(Math.random() * 1000);
 const RPC = `http://127.0.0.1:${PORT}`;
 // anvil's first default account: a public test key with no value anywhere.
 const dev = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
-const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--port", String(PORT), "--silent"], { stdout: "ignore", stderr: "ignore" });
+// The repo's pinned anvil when present, else the one on PATH (CI installs Foundry there). Skipped, with a reason, without
+// anvil or the built contracts.
+const anvilBin = [join(ROOT, ".tools/foundry/v1.8.6/anvil"), Bun.which("anvil")].find((p): p is string => !!p && existsSync(p));
+const ready = !!anvilBin && existsSync(join(ROOT, "contracts/out/AlarmBook.sol/AlarmBook.json"));
+if (!ready) console.warn(`SKIPPED drain-pending: ${!anvilBin ? "anvil was not found" : "contracts/out is missing (run forge build)"}`);
+const anvil = ready ? spawn([anvilBin!, "--port", String(PORT), "--silent"], { stdout: "ignore", stderr: "ignore" }) : null;
 const client = createPublicClient({ chain: foundry, transport: http(RPC), pollingInterval: 50 });
 const wallet = createWalletClient({ chain: foundry, transport: http(RPC), account: dev });
 const testClient = createTestClient({ chain: foundry, mode: "anvil", transport: http(RPC) });
@@ -55,6 +60,7 @@ let book: Address;
 let vault: Address;
 
 beforeAll(async () => {
+  if (!ready) return;
   for (let i = 0; ; i++) {
     try { await client.getBlockNumber(); break; } catch { if (i > 100) throw new Error("anvil did not start"); await Bun.sleep(100); }
   }
@@ -64,7 +70,7 @@ beforeAll(async () => {
   await send(vault, encodeFunctionData({ abi: mockAbi, functionName: "deposit", args: [dev.address, 1_000n * 10n ** 18n] }));
 }, 60_000);
 
-afterAll(() => anvil.kill());
+afterAll(() => anvil?.kill());
 
 /** What the app reads before it offers a preset, without the contract's own answer (the reviewed code). */
 const plainIo: AlarmIo = {
@@ -79,7 +85,7 @@ const io: AlarmIo = {
   known: (key) => client.readContract({ address: book, abi: bookAbi, functionName: "state", args: [key] }).then((s) => s[0] as boolean),
 };
 
-describe("V3-S05: a pending DRAIN drop blocks the preset that depends on it", () => {
+describe.skipIf(!ready)("V3-S05: a pending DRAIN drop blocks the preset that depends on it", () => {
   test("the drain + confirmation preset is refused during the confirmation minute, and clear again once it has passed", async () => {
     const presets = presetsFor(vault, vault);
     const drainBoth = presets.find((p) => p.requires?.some((r) => r.detector.kind === Kind.DRAIN))!;
