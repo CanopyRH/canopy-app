@@ -9,6 +9,7 @@ import type { Repo } from "../store/repo";
 import { acceptAttestation } from "../watcher/watcher";
 import { PLUGINS, type Plugin } from "../plugins";
 import { sameSecret } from "./secret";
+import type { CalldataChain } from "./calldata";
 import { DEFAULT_RATE_LIMIT, bucketOf, clientIp, rateLimit, type RateLimit } from "./ratelimit";
 
 const AttestBody = z.strictObject({
@@ -49,9 +50,18 @@ export interface ApiDeps {
   exitableShares?: (reads: { target: Address; owner: Address }[]) => Promise<(bigint | null)[]>;
   /** Feature routes. Defaults to the files in src/plugins/. */
   plugins?: Plugin[];
+  /** This API's public address, for /openapi.json and /llms.txt. Without it they use the address the request came to. */
+  publicUrl?: string;
+  /** The website's address, named in /llms.txt. */
+  appUrl?: string;
+  /** The contracts and the reads behind /calldata/*. Without it those routes answer 503, as on an alerts-only deployment. */
+  calldata?: CalldataChain;
 }
 
-/** Read-only API. No route accepts a wallet or a wallet list, and none sets a user cookie. */
+/**
+ * Read-only API. No route accepts a wallet list, none stores a wallet and none sets a user cookie. The one place a single
+ * address is read is /calldata/exit, where the owner's address only works out the position id of that one request.
+ */
 export function createApi(d: ApiDeps) {
   const app = new Hono();
   // The web app is hosted elsewhere, including IPFS. Nothing here is private, and it sends no credentials.

@@ -460,6 +460,25 @@ if ((run("api") || run("bot")) && bot) {
     healthToken: env.HEALTH_TOKEN,
     rateLimit: { perMin: env.RATE_LIMIT_PER_MIN, proxyHops: env.TRUSTED_PROXY_HOPS },
     answersPaused,
+    publicUrl: env.PUBLIC_URL,
+    appUrl: env.APP_URL,
+    calldata:
+      contracts && env.ADAPTER_4626
+        ? {
+            chainId: env.CHAIN_ID,
+            router,
+            adapter: env.ADAPTER_4626 as Address,
+            alarmBook,
+            reads: {
+              keyState: async (key) => {
+                const [known] = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "state", args: [key] });
+                return { known, armable: known ? await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "armable", args: [key] }) : false };
+              },
+              positionId: (owner, vault) => client.readContract({ address: router, abi: routerAbi, functionName: "positionId", args: [owner, env.ADAPTER_4626 as Address, vault, 0n] }),
+              isArmed: (posId) => client.readContract({ address: router, abi: routerAbi, functionName: "isArmed", args: [posId] }),
+            },
+          }
+        : undefined,
     // On-chain, in one multicall per 400 reads. The armed board caches the answer for a minute.
     exitableShares: async (reads) => {
       const out: (bigint | null)[] = [];
