@@ -3,6 +3,7 @@ import { alarmBookAbi, erc20Abi, routerAbi } from "../chain/abi";
 import { daysFor, extendPlan } from "../billing/prepaid";
 import type { Db } from "../store/db";
 import type { Repo } from "../store/repo";
+import { adminEventOf, type AdminEvent } from "./admin";
 
 const lc = (a: string) => a.toLowerCase();
 
@@ -15,8 +16,13 @@ export interface Log {
   logIndex: number | null;
 }
 
-/** Applies one router log. Safe to replay: every write is an upsert. */
-export async function applyRouterLog(r: Repo, log: Log) {
+/**
+ * Applies one router log. Safe to replay: every write is an upsert.
+ * `onAdmin` hears about admin and guardian changes. It should only queue work, so reading logs never waits on a message.
+ */
+export async function applyRouterLog(r: Repo, log: Log, onAdmin?: (e: AdminEvent) => Promise<unknown>) {
+  const admin = onAdmin ? adminEventOf("ExitRouter", log) : null;
+  if (admin) return void (await onAdmin!(admin));
   const ev = decodeEventLog({ abi: routerAbi, data: log.data, topics: log.topics as never, strict: false });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const a = ev.args as unknown as Record<string, any>;
@@ -77,6 +83,14 @@ export async function applyRegistered(db: Db, log: Log): Promise<boolean> {
     `INSERT INTO detectors (key, kind, target, threshold, window_s, a, b) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
     [a.key, a.kind, a.target.toLowerCase(), a.threshold.toString(), a.window, a.a, a.b],
   );
+  return true;
+}
+
+/** Hands an AlarmBook admin event, such as a watcher being allowed or removed, to `onAdmin`. Returns whether the log was one. */
+export async function applyAlarmAdmin(log: Log, onAdmin: (e: AdminEvent) => Promise<unknown>): Promise<boolean> {
+  const admin = adminEventOf("AlarmBook", log);
+  if (!admin) return false;
+  await onAdmin(admin);
   return true;
 }
 

@@ -13,17 +13,34 @@ export function queueAlert(r: Repo, vault: string, text: string, now: number) {
   return r.enqueue("alert", dedupe, { vault, text } satisfies QueuedAlert, now);
 }
 
-/** Sends queued alerts. Runs on its own timer, so the loop that reads alarms never waits on Telegram. */
-export async function sendQueuedAlerts(r: Repo, send: (vault: string, text: string) => Promise<unknown>, now: () => number) {
-  for (const job of await r.dueJobs("alert", now())) {
-    const a = job.payload as QueuedAlert;
+/** Runs the due jobs of one kind. A failed send is retried later, and dropped after `tries`. */
+async function drain(r: Repo, kind: string, tries: number, now: () => number, send: (payload: unknown) => Promise<unknown>) {
+  for (const job of await r.dueJobs(kind, now())) {
     try {
-      await send(a.vault, a.text);
+      await send(job.payload);
       await r.finishJob(job.id);
     } catch (e) {
-      console.warn("alert", (e as Error).message);
-      if (job.attempts + 1 >= ALERT_TRIES) await r.finishJob(job.id);
+      console.warn(kind, (e as Error).message);
+      if (job.attempts + 1 >= tries) await r.finishJob(job.id);
       else await r.retryJob(job.id, now() + ALERT_RETRY_SEC);
     }
   }
+}
+
+/** Sends queued alerts. Runs on its own timer, so the loop that reads alarms never waits on Telegram. */
+export function sendQueuedAlerts(r: Repo, send: (vault: string, text: string) => Promise<unknown>, now: () => number) {
+  return drain(r, "alert", ALERT_TRIES, now, (p) => send((p as QueuedAlert).vault, (p as QueuedAlert).text));
+}
+
+/** Operator warnings get many more tries than follower alerts, about ten minutes' worth. */
+export const OPS_TRIES = 20;
+
+/** Queues one message for the operator chat. The same id is only queued once, so a replayed log warns once. */
+export function queueOps(r: Repo, id: string, text: string, now: number) {
+  return r.enqueue("ops", `ops:${id}`, { text }, now);
+}
+
+/** Sends queued operator messages from their own timer, so the indexer only ever writes a row. */
+export function sendQueuedOps(r: Repo, send: (text: string) => Promise<unknown>, now: () => number) {
+  return drain(r, "ops", OPS_TRIES, now, (p) => send((p as { text: string }).text));
 }

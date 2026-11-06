@@ -6,13 +6,14 @@ import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
 import { appKeyboard, createBot, notifyText } from "./bot/bot";
-import { queueAlert as enqueueAlert, sendQueuedAlerts } from "./bot/queue";
+import { queueAlert as enqueueAlert, queueOps, sendQueuedAlerts, sendQueuedOps } from "./bot/queue";
 import { ALARM_NAMES, alarmAlert, signalLine, watchAlert } from "./copy/alerts";
 import { feedSignal, type Signal } from "./detectors";
 import { scanVault } from "./detectors/scan";
 import { classifierFor } from "./engine/classifier";
 import { loadEnv } from "./env";
-import { applyPayment, applyRegistered, applyRouterLog, decodeFired, syncLogs } from "./indexer/indexer";
+import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
+import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, decodeFired, syncLogs } from "./indexer/indexer";
 import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, onFired, pokeAndQueue, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
 import { serialSender, withMargin } from "./keeper/sender";
@@ -92,15 +93,22 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
     })()
   : null;
 
+/** Admin and guardian changes go to the operator chat. This only queues a row, so the indexer never waits on Telegram. */
+const adminAlert = async (e: AdminEvent) => {
+  if (env.OPS_CHAT_ID === undefined) return void console.warn("admin event", e.event, "(set OPS_CHAT_ID to be told)");
+  await queueOps(r, adminAlertId(e), adminAlertText(env.CHAIN_ID, e), now());
+};
+
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
-    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onLog: (l) => applyRouterLog(r, l) }));
+    syncLogs(client, r, { name: "router", address: router, startBlock: env.START_BLOCK, onLog: (l) => applyRouterLog(r, l, adminAlert) }));
   every(2_000, "alarms", () =>
     syncLogs(client, r, {
       name: "alarms",
       address: alarmBook,
       startBlock: env.START_BLOCK,
       onLog: async (l) => {
+        if (await applyAlarmAdmin(l, adminAlert)) return;
         if (await applyRegistered(db, l)) return;
         const f = decodeFired(l);
         if (!f) return;
@@ -127,6 +135,8 @@ if (run("indexer") && contracts) {
     }));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
   every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  const opsChat = env.OPS_CHAT_ID;
+  if (opsChat !== undefined) every(1_000, "ops alerts", () => sendQueuedOps(r, (text) => bot.api.sendMessage(opsChat, text), now));
   every(30_000, "payments", () =>
     syncLogs(client, r, {
       name: "payments",
