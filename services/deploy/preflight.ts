@@ -2,13 +2,15 @@
  * Read-only check that everything is in place before the mainnet deploy. Sends nothing and prints no secret values.
  * Reminders cover choices that belong to the team. They are printed but never count as failures.
  * Usage: bun deploy/preflight.ts <rpc url> [services env file]
- * Launch chains are Robinhood Chain (4663) and Base (8453). deploy/settings.json picks one.
+ * Launch chains are Robinhood Chain (4663) and Base (8453). The RPC's chain picks the files: deploy/settings.json and
+ * deploy/launch.env for Robinhood Chain, deploy/settings.base.json and deploy/launch.base.env for Base, each falling back to
+ * its .example. SETTINGS_FILE and LAUNCH_ENV_FILE point elsewhere, as the fork rehearsal does.
  */
 import { spawnSync } from "bun";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPublicClient, http, parseAbi, type Address, type PublicClient } from "viem";
-import { CONFIG } from "../../web/src/config";
+import { CHAINS, CONFIG } from "../../web/src/config";
 import type { Settings } from "./plan";
 import type { Check } from "./verify";
 
@@ -149,21 +151,31 @@ const parseEnv = (file: string) => Object.fromEntries(
     .map((x) => [x.slice(0, x.indexOf("=")), x.slice(x.indexOf("=") + 1)]),
 );
 
+/** A chain's settings and deploy env files. Base keeps its own beside Robinhood Chain's. */
+export function launchFiles(chainId: number) {
+  const tag = chainId === 8453 ? ".base" : "";
+  return { settings: `settings${tag}.json`, settingsExample: `settings${tag}.example.json`, deployEnv: `launch${tag}.env`, deployEnvExample: `launch${tag}.env.example` };
+}
+
 if (import.meta.main) {
   const [rpc, serviceFile] = process.argv.slice(2);
   if (!rpc) throw new Error("usage: bun deploy/preflight.ts <rpc url> [services env file]");
   const inDeploy = (f: string) => join(ROOT, "deploy", f);
   const present = (f: string, example: string) => existsSync(inDeploy(f)) ? inDeploy(f) : inDeploy(example);
-  const settings = JSON.parse(readFileSync(present("settings.json", "settings.example.json"), "utf8")) as LaunchSettings;
   const client = createPublicClient({ transport: http(rpc) }) as PublicClient;
   const chainId = await client.getChainId();
-  if (chainId !== settings.chainId) throw new Error(`that RPC is on chain ${chainId}, but settings.json targets ${settings.chainId}`);
+  const files = launchFiles(chainId);
+  const settingsFile = process.env.SETTINGS_FILE ?? present(files.settings, files.settingsExample);
+  const settings = JSON.parse(readFileSync(settingsFile, "utf8")) as LaunchSettings;
+  if (chainId !== settings.chainId) throw new Error(`that RPC is on chain ${chainId}, but the settings target ${settings.chainId}`);
+  // The web app's own network for this chain, so a Base run is compared with the Base vaults, not the first network's.
+  const web = CHAINS.find((c) => c.chainId === chainId) ?? CONFIG;
   const checks = await preflight(client, {
     settings,
-    deployEnv: parseEnv(present("launch.env", "launch.env.example")),
-    webChainId: CONFIG.chainId,
+    deployEnv: parseEnv(process.env.LAUNCH_ENV_FILE ?? present(files.deployEnv, files.deployEnvExample)),
+    webChainId: web.chainId,
     services: serviceFile ? parseEnv(serviceFile) : null,
-    webVaults: CONFIG.vaults.map((v) => v.address as Address),
+    webVaults: web.vaults.map((v) => v.address as Address),
     testConfigInWeb: readFileSync(join(ROOT, "web/src/deployment.json"), "utf8").trim() !== "{}",
     contractsMatchAudit: (c) => spawnSync(["git", "diff", "--quiet", c, "--", "contracts/src"], { cwd: ROOT }).exitCode === 0,
   }, Math.floor(Date.now() / 1000));

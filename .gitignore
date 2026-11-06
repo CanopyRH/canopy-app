@@ -10,6 +10,7 @@ web/public/site.css
 deploy/out/*/services.env
 deploy/base.env
 deploy/settings.json
+deploy/settings.base.json
 deploy/testnet/
 deploy/*.env
 **/.claude/

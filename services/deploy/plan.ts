@@ -94,6 +94,8 @@ export function writePlan(d: Deployment, s: Settings, out: string) {
   writeFileSync(join(out, "services.env"), [
     `CHAIN_ID=${s.chainId}`, `ROUTER=${d.router}`, `ALARM_BOOK=${d.alarmBook}`, `ADAPTER_4626=${d.adapter}`, `START_BLOCK=${d.startBlock}`,
     `PLAN_TOKEN=${s.stable}`, `WATCHERS=${s.watchers.join(",")}`,
+    // The launch vaults get risk cards and the listed-exit lane, and plan payments go to the payments Safe.
+    `CARD_VAULTS=${s.vaults.join(",")}`, ...(s.planPayTo ? [`PLAN_PAY_ADDRESS=${s.planPayTo}`] : []),
     // Railway sends X-Forwarded-For as "caller, edge" (measured), so two entries at the end are the proxies' own. With the
     // default of 1 every caller would share the edge server's address and one rate-limit bucket.
     `# Railway sends "caller, edge" in X-Forwarded-For (measured): two hops.`,

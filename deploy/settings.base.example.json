@@ -7,7 +7,7 @@
   "swapRouter": "0x2626664c2603336E57B271c5C0b26F421741e481",
   "stableFeed": "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B",
   "heartbeat": 90000,
-  "adminExpiry": 0,
+  "adminExpiry": 1825286400,
   "timelockDelay": 0,
   "watchers": [
     "0xWATCHER_1",

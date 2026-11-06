@@ -7,7 +7,7 @@
  *          [--vaults <a,b,...>] [--dry-run] [--mainnet]
  *
  * --key-file holds one private key in hex, and nothing else. It must not be readable by other users. The key is never printed.
- * --vaults defaults to the web app's launch vaults.
+ * --vaults defaults to the vaults in --deployment's settings, and without one to the web app's launch vaults for the RPC's chain.
  * --dry-run reads the chain and lists what would be sent, without sending.
  * Chain 4663 (Robinhood Chain) and Base are refused unless --mainnet is given.
  */
@@ -16,8 +16,23 @@ import { createPublicClient, createWalletClient, encodeFunctionData, getAddress,
 import { privateKeyToAccount } from "viem/accounts";
 import { alarmBookAbi } from "../src/chain/abi";
 import { keyOf, Kind, registrationOrder, type Detector } from "../src/api/presets";
-import { CONFIG } from "../../web/src/config";
+import { CHAINS } from "../../web/src/config";
 import { MAINNETS } from "./plan";
+
+/**
+ * The vaults to register when --vaults is not given: the deployment's own launch vaults, or the web app's for that chain. A
+ * Base AlarmBook must never get Robinhood Chain's list just because that network comes first in the app.
+ */
+export function defaultVaults(chainId: number, deployment?: { settings?: { chainId?: number; vaults?: string[] } }): string[] {
+  const s = deployment?.settings;
+  if (s?.vaults?.length) {
+    if (s.chainId !== undefined && s.chainId !== chainId) throw new Refused(`the deployment is for chain ${s.chainId}, but the RPC is on chain ${chainId}`);
+    return s.vaults;
+  }
+  const web = CHAINS.find((c) => c.chainId === chainId);
+  if (!web) throw new Refused(`the web app has no vaults for chain ${chainId}. Pass --vaults.`);
+  return web.vaults.map((v) => v.address as string);
+}
 
 /** Gas floor for a registration. AlarmBook reads the target with a full 1M gas, and a SHARE_DROP reads twice. */
 export const REGISTER_GAS_FLOOR = 1_600_000n;
@@ -164,14 +179,15 @@ if (import.meta.main) {
     if (!values.rpc || !values["key-file"] || (!values.book && !values.deployment)) {
       throw new Refused("usage: bun deploy/register-presets.ts --rpc <url> --key-file <file> (--book <address> | --deployment <deployment.json>) [--vaults <a,b,...>] [--dry-run] [--mainnet]");
     }
-    const book = (values.book ?? (JSON.parse(readFileSync(values.deployment!, "utf8")) as { alarmBook: string }).alarmBook) as Address;
+    const deployment = values.deployment ? (JSON.parse(readFileSync(values.deployment, "utf8")) as { alarmBook: string; settings?: { chainId?: number; vaults?: string[] } }) : undefined;
+    const book = (values.book ?? deployment!.alarmBook) as Address;
     if (!isAddress(book)) throw new Refused("the AlarmBook address is not valid");
 
-    const vaults = (values.vaults ? values.vaults.split(",") : CONFIG.vaults.map((v) => v.address as string)).map((v) => v.trim());
-    if (!vaults.every((v) => isAddress(v))) throw new Refused("--vaults holds an address that is not valid");
-    const account = privateKeyToAccount(readKeyFile(values["key-file"]));
     const transport = http(values.rpc);
     const client = createPublicClient({ transport }) as PublicClient;
+    const vaults = (values.vaults ? values.vaults.split(",") : defaultVaults(await client.getChainId(), deployment)).map((v) => v.trim());
+    if (!vaults.every((v) => isAddress(v))) throw new Refused("--vaults holds an address that is not valid");
+    const account = privateKeyToAccount(readKeyFile(values["key-file"]));
     const wallet = createWalletClient({ account, transport });
     await registerPresets(
       { client, account: account.address, log: console.log, send: (tx) => wallet.sendTransaction({ ...tx, chain: null } as never) },
