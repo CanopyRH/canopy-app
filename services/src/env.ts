@@ -21,6 +21,7 @@ export const Env = z.object({
   PLAN_TOKEN: addr.optional(),
   KEEPER_PRIVATE_KEY: z.string().optional(), // pays gas only; holds no user funds
   KEEPER_PAID_ONLY: z.stringbool().default(true),
+  KEEPER_UNLISTED_EXIT_GAS: z.coerce.bigint().min(500_000n).max(16_000_000n).default(4_000_000n), // gas cap for an exit from a vault not in CARD_VAULTS
   QUORUM: z.coerce.number().default(2),
   WATCHER_PRIVATE_KEY: z.string().optional(),
   WATCHERS: z.string().default(""), // comma-separated approved watcher addresses

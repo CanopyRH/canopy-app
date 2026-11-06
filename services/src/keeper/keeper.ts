@@ -1,9 +1,10 @@
 import { decodeFunctionResult, encodeFunctionData, type Address, type Hex, type PublicClient } from "viem";
 import { alarmBookAbi, erc20Abi, multicall3Abi, routerAbi, vaultAbi } from "../chain/abi";
-import { Kind } from "../api/presets";
+import { isPreset, Kind } from "../api/presets";
 import { keeperShouldRun } from "../billing/prepaid";
 import type { Repo } from "../store/repo";
 import { deallocateCalls, type PlainCall } from "./liquidity";
+import type { Fees } from "./sender";
 import { judge, sizeExit } from "./simulate";
 
 export const ALARM_TTL = 86_400;
@@ -21,6 +22,29 @@ export const PASS_BUDGET_MS = 90_000;
 /** How long a key whose own check fails stays out of the shared check. */
 export const QUARANTINE_SEC = 600;
 const QUARANTINE = new Map<string, number>();
+/** Comfortably under the 2^24 gas a single transaction may use. A listed vault's exit that needs more can't be sent. */
+export const MAX_TX_GAS = 16_000_000n;
+/**
+ * The most gas an exit from a vault Canopy doesn't list may use. Honest ERC-4626 redeems cost well under 1M even across
+ * many markets; anything far beyond that is a contract spending the keeper's gas. KEEPER_UNLISTED_EXIT_GAS overrides it.
+ */
+export const UNLISTED_EXIT_GAS = 4_000_000n;
+/** The most a poke, checkpoint, owed claim or quorum fire may use. Each is a few reads and a storage write. */
+export const SMALL_CALL_GAS = 1_000_000n;
+/** An unlisted exit refused for gas, or sent without moving the owner's balance, backs off and ends after this many strikes. */
+export const MAX_STRIKES = 5;
+/** Checkpoints per pass beyond the listed vaults' own presets, taken least recently sent first. */
+export const MAX_CHECKPOINTS_PER_PASS = 20;
+/** Owed claims sent per pass. */
+export const MAX_OWED_PER_PASS = 20;
+const CHECKPOINTED = new Map<string, number>();
+
+/** A call with the gas limit it is sent under. Every keeper transaction has one, derived from a simulation. */
+export type GasCall = PlainCall & { gas: bigint };
+
+/** The limit for a call that used `used` gas in simulation: room for a vault that costs more by the time it lands. */
+export const limitFromSim = (used: bigint) => (used * 3n) / 2n + 100_000n;
+const least = (a: bigint, b: bigint) => (a < b ? a : b);
 
 export interface KeeperDeps {
   client: PublicClient;
@@ -30,7 +54,7 @@ export interface KeeperDeps {
   multicall3: Address;
   morpho: Address;
   account: Address;
-  send: (tx: PlainCall) => Promise<Hex>;
+  send: (tx: GasCall) => Promise<Hex>;
   now: () => number;
   /** false for an open-source keeper, which runs every armed position. */
   paidOnly: boolean;
@@ -42,9 +66,14 @@ export interface KeeperDeps {
   passBudgetMs?: number;
   /** Keys left out of the shared check until a time. Defaults to one map per process. */
   quarantine?: Map<string, number>;
+  /** Current fees, so simulations run at a real gas price. */
+  fees?: () => Promise<Fees>;
+  /** Overrides UNLISTED_EXIT_GAS. */
+  unlistedExitGas?: bigint;
 }
 
 const isListed = (d: KeeperDeps, vault: Address) => !d.listed?.size || d.listed.has(vault.toLowerCase());
+const exitGasCap = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? MAX_TX_GAS : (d.unlistedExitGas ?? UNLISTED_EXIT_GAS));
 const prepFor = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? deallocateCalls(d.client, d.morpho, vault, d.account) : Promise.resolve([]));
 
 class OverBudget extends Error {}
@@ -73,7 +102,35 @@ async function withBudget<T>(job: (signal: AbortSignal) => Promise<T>, ms: numbe
 export interface ExitJob { posId: Hex; key: Hex; owner: Address; target: Address; firedAt: number }
 
 type DueJob = { id: string; payload: unknown; attempts: number };
-type SimResult = { status: string; data: Hex; gasUsed: bigint };
+type SimResult = { status: string; data: Hex; gasUsed: bigint; logs?: readonly unknown[] };
+
+/**
+ * Simulates one call at current fees and returns the gas limit to send it under, or null if it would revert or needs
+ * more than `cap`. A node that can't simulate gets `cap` itself, so a send is never left without a limit.
+ */
+export async function gasFor(d: KeeperDeps, call: PlainCall, cap: bigint): Promise<{ gas: bigint; sim?: SimResult } | null> {
+  let sim: SimResult | undefined;
+  try {
+    const fees = d.fees ? await d.fees().catch(() => undefined) : undefined;
+    const out = await d.client.simulateCalls({ account: d.account, calls: [{ to: call.to, data: call.data, ...fees }] });
+    sim = (out.results as readonly SimResult[])[0];
+  } catch {
+    return { gas: cap };
+  }
+  if (!sim || sim.status !== "success") return null;
+  const used = sim.gasUsed ?? 0n;
+  if (used > cap) return null;
+  return { gas: least(limitFromSim(used), cap), sim };
+}
+
+/**
+ * An unlisted exit that was refused for gas, or that was sent and left the owner's exitable balance where it was, backs
+ * off exponentially and ends after MAX_STRIKES. A contract can't make the keeper pay for it every 30 seconds for a day.
+ */
+async function strike(d: KeeperDeps, job: DueJob, why: "exit_gas_refused" | "exit_stalled") {
+  await d.repo.bump(why);
+  if ((await d.repo.strikeJob(job.id, d.now(), 2 * RETRY_SEC, MAX_STRIKES)).done) await d.repo.bump("exit_given_up");
+}
 
 const balanceCall = (token: Address, who: Address) => ({
   to: token,
@@ -133,7 +190,10 @@ export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
         throw c.error;
       }
       if (!c.result) continue;
-      await d.send({ to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) });
+      const call = { to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) };
+      const g = await gasFor(d, call, SMALL_CALL_GAS);
+      if (!g) throw new Error("poke reverts or needs too much gas in simulation");
+      await d.send({ ...call, gas: g.gas });
       await d.repo.bump("poke_ok");
       poked.push(key);
     } catch (e) {
@@ -156,9 +216,25 @@ export async function pokeAndQueue(d: KeeperDeps) {
 /**
  * Rolls SHARE_DROP and DRAIN baselines forward, so those alarms measure against current values.
  * A DRAIN key needs a sample whenever assets fall below its lowest reading, because that sample is what keeps a flash deposit out of the next baseline. Otherwise it costs gas only when a period ends.
+ * Anyone with a plan can arm thousands of these on a contract of their own, so the listed vaults' presets always go, and
+ * at most `max` others per pass, least recently sent first. Each send is simulated first and carries a capped gas limit,
+ * and a SHARE_DROP checkpoint whose simulation moves no baseline isn't sent.
  */
-export async function checkpointKeys(d: KeeperDeps, keys: Hex[]) {
-  for (const key of keys) {
+export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECKPOINTS_PER_PASS) {
+  let first = keys;
+  let rest: Hex[] = [];
+  if (d.listed?.size) {
+    const targets = await d.repo.detectorTargets(keys);
+    const own = (k: Hex) => {
+      const t = targets.get(k.toLowerCase());
+      return t !== undefined && d.listed!.has(t) && isPreset(t as Address, k);
+    };
+    first = keys.filter(own);
+    rest = keys.filter((k) => !own(k)).sort((a, b) => (CHECKPOINTED.get(a.toLowerCase()) ?? 0) - (CHECKPOINTED.get(b.toLowerCase()) ?? 0)).slice(0, max);
+    if (CHECKPOINTED.size > 100_000) CHECKPOINTED.clear();
+  }
+  for (const key of [...first, ...rest]) {
+    CHECKPOINTED.set(key.toLowerCase(), d.now());
     try {
       const det = await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "detector", args: [key] });
       if (det.kind === Kind.DRAIN) {
@@ -166,7 +242,12 @@ export async function checkpointKeys(d: KeeperDeps, keys: Hex[]) {
         const assets = await d.client.readContract({ address: det.target, abi: vaultAbi, functionName: "totalAssets" });
         if (d.now() < Number(snapAt) + det.window / 2 && assets >= low) continue;
       }
-      await d.send({ to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [key] }) });
+      const call = { to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [key] }) };
+      const g = await gasFor(d, call, SMALL_CALL_GAS);
+      if (!g) throw new Error("reverts or needs too much gas in simulation");
+      // SHARE_DROP only ever writes with an event, when the price rose. No event means nothing would change.
+      if (det.kind === Kind.SHARE_DROP && g.sim?.logs && g.sim.logs.length === 0) continue;
+      await d.send({ ...call, gas: g.gas });
     } catch (e) {
       console.warn("checkpoint", key, (e as Error).message);
     }
@@ -196,11 +277,23 @@ export async function gateExit(d: KeeperDeps, j: ExitJob, asset: Address, amount
   const calls = [...reads, ...prep, exitCall, ...reads];
   const { results } = await d.client.simulateCalls({ account: d.account, calls });
   const exitAt = reads.length + prep.length;
-  return gateOne(results as readonly SimResult[], exitAt, 0, exitAt + 1, asset);
+  const sim = results as readonly SimResult[];
+  // What the transaction would use: the deallocations and the exit, not the reads around them.
+  const gas = sim.slice(reads.length, exitAt + 1).reduce((s, r) => s + (r.gasUsed ?? 0n), 0n);
+  return { ...gateOne(sim, exitAt, 0, exitAt + 1, asset), gas };
 }
 
-/** Runs one exit. Returns "done" or "retry". Retries end when the 24h alarm expires. Nothing is sent once `signal` aborts. */
-export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): Promise<"done" | "retry"> {
+/**
+ * What became of one exit: finished, worth another try, refused because it needs more gas than its vault may use, or
+ * sent without moving the owner's exitable balance.
+ */
+export type ExitOutcome = "done" | "retry" | "refused" | "stalled";
+
+/**
+ * Runs one exit. Retries end when the 24h alarm expires. Nothing is sent once `signal` aborts. The transaction carries
+ * a gas limit from its own simulation, and an unlisted vault's exit that needs more than its cap is refused unsent.
+ */
+export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): Promise<ExitOutcome> {
   if (d.now() > j.firedAt + ALARM_TTL) return "done";
   const shares = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] });
   const allowed = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] });
@@ -210,9 +303,12 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
   const asset = await d.client.readContract({ address: j.target, abi: vaultAbi, functionName: "asset" });
   const direct = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, 0n] }) };
   const prep = await prepFor(d, j.target);
+  let used = 0n;
   const amount = await sizeExit(total, async (a) => {
     try {
-      return (await gateExit(d, j, asset, a, prep)).ok;
+      const g = await gateExit(d, j, asset, a, prep);
+      if (g.ok) used = g.gas;
+      return g.ok;
     } catch {
       return false;
     }
@@ -221,33 +317,44 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
     await d.repo.bump("gate_reject");
     return "retry";
   }
+  if (used > exitGasCap(d, j.target)) return "refused";
+  const gas = least(limitFromSim(used), MAX_TX_GAS);
 
   const exitData = encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, amount] });
   signal?.throwIfAborted();
   if (prep.length === 0) {
-    await d.send({ ...direct, data: exitData });
+    await d.send({ ...direct, data: exitData, gas });
   } else {
     const all = [...prep.map((c) => ({ target: c.to, allowFailure: true, callData: c.data })), { target: d.router, allowFailure: false, callData: exitData }];
-    await d.send({ to: d.multicall3, data: encodeFunctionData({ abi: multicall3Abi, functionName: "aggregate3", args: [all] }) });
+    await d.send({ to: d.multicall3, data: encodeFunctionData({ abi: multicall3Abi, functionName: "aggregate3", args: [all] }), gas });
   }
   // A redeem can pay part and hand the rest back without reverting, so only the chain can say this is finished.
   const [left, room] = await Promise.all([
     d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] }),
     d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] }),
   ]);
-  return left === 0n || room === 0n ? "done" : "retry";
+  const after = left < room ? left : room;
+  if (after === 0n) return "done";
+  return after < total ? "retry" : "stalled";
 }
 
-/** Pays out what an owner couldn't receive at exit time, once the token moves again. Anyone may do this, and it only pays the owner. */
-export async function claimOwed(d: KeeperDeps) {
-  for (const o of await d.repo.openOwed()) {
+/**
+ * Pays out what an owner couldn't receive at exit time, once the token moves again. Anyone may do this, and it only pays
+ * the owner. Canopy's keeper does it for owners with a live plan, a few per pass, each under a gas cap: the token is
+ * whatever the vault paid out, so it may be a contract built to burn gas.
+ */
+export async function claimOwed(d: KeeperDeps, max = MAX_OWED_PER_PASS) {
+  for (const o of await d.repo.openOwed(d.paidOnly ? d.now() : undefined, max)) {
     const args = [o.owner as Address, o.token as Address] as const;
     try {
       await d.client.simulateContract({ address: d.router, abi: routerAbi, functionName: "claimOwed", args, account: d.account });
     } catch {
       continue; // Still paused, or already claimed.
     }
-    await d.send({ to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "claimOwed", args }) });
+    const call = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "claimOwed", args }) };
+    const g = await gasFor(d, call, SMALL_CALL_GAS);
+    if (!g) continue;
+    await d.send({ ...call, gas: g.gas });
   }
 }
 
@@ -302,6 +409,10 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
       continue;
     }
     const cost = sim[at + 3]!.gasUsed ?? 0n;
+    if (cost > exitGasCap(d, target)) {
+      await strike(d, x.job, "exit_gas_refused");
+      continue;
+    }
     // Too big to share a transaction with anything, ever: it runs alone, where its own gas limit applies.
     if (prepGas + cost > BUNDLE_GAS) {
       refused.push(x.job);
@@ -322,6 +433,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSign
   const left = await exitable(d, picked.map((x) => x.j));
   for (const [i, x] of picked.entries()) {
     if (left[i] === 0n) await d.repo.finishJob(x.job.id);
+    else if (left[i]! >= x.amount && !isListed(d, target)) await strike(d, x.job, "exit_stalled");
     else await d.repo.retryJob(x.job.id, d.now() + RETRY_SEC);
   }
   return [...skipped, ...refused];
@@ -372,8 +484,11 @@ export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlis
     }
     const j = job.payload as ExitJob;
     try {
-      if ((await withBudget((signal) => runExit(d, j, signal), budget)) === "done") await d.repo.finishJob(job.id);
-      else await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+      const out = await withBudget((signal) => runExit(d, j, signal), budget);
+      if (out === "done") await d.repo.finishJob(job.id);
+      // A listed vault's exit keeps its fast retry whatever happened; only other vaults' exits can earn strikes.
+      else if (out === "retry" || isListed(d, j.target)) await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+      else await strike(d, job, out === "refused" ? "exit_gas_refused" : "exit_stalled");
     } catch (e) {
       console.warn("exit", j.posId, (e as Error).message);
       await d.repo.bump("exit_error");

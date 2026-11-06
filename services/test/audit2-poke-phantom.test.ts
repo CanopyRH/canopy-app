@@ -11,9 +11,8 @@
 // Local mocks and the in-process database only. Run: bun test test/audit2-poke-phantom.test.ts
 import { beforeEach, describe, expect, test } from "bun:test";
 import { decodeFunctionData, type Address, type Hex } from "viem";
-import { Kind } from "../src/api/presets";
 import { alarmBookAbi } from "../src/chain/abi";
-import { checkpointKeys, pokeTripped, type KeeperDeps } from "../src/keeper/keeper";
+import { pokeTripped, type KeeperDeps } from "../src/keeper/keeper";
 import type { Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
 import { freshDb } from "./db";
@@ -74,26 +73,5 @@ describe("A2-M3: a key that trips only in eth_call is poked on every pass, forev
     expect(phantomPokes).toBe(5 * 20);
     expect(quarantine.size).toBe(0);
     expect(honestPokedAt).toBeGreaterThanOrEqual(20 * RECEIPT_MS * 0.9);
-  });
-});
-
-describe("A2-H2b: checkpoint transactions for every attacker SHARE_DROP key, every hour, with no gas cap", () => {
-  test("200 SHARE_DROP keys on one contract: 200 keeper transactions per hourly pass", async () => {
-    const keys = Array.from({ length: 200 }, (_, i) => k("c", i));
-    await arm(keys, "e");
-    for (const key of keys) await db.query(`INSERT INTO detectors (key, kind, target, threshold, window_s, a, b) VALUES ($1,$2,$3,$4,0,'0x','0x')`, [key, Kind.SHARE_DROP, HOSTILE.toLowerCase(), 50]);
-    const sends: { gas?: bigint }[] = [];
-    const d = {
-      repo: r, alarmBook: BOOK, paidOnly: true, now: () => 1000,
-      client: { readContract: async () => ({ kind: Kind.SHARE_DROP, target: HOSTILE, window: 0 }) },
-      send: async (tx: { gas?: bigint }) => {
-        sends.push(tx);
-        return `0x${"11".repeat(32)}` as Hex;
-      },
-    } as unknown as KeeperDeps;
-    await checkpointKeys(d, (await r.liveKeysOfKind(Kind.SHARE_DROP, 1000)) as Hex[]);
-    console.log(`A2-H2b: ${sends.length} checkpoint transactions in one hourly pass, gas limits ${[...new Set(sends.map((s) => String(s.gas)))].join(",")}`);
-    expect(sends).toHaveLength(200);
-    expect(sends.every((s) => s.gas === undefined)).toBe(true);
   });
 });

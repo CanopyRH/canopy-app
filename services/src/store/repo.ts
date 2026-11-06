@@ -167,6 +167,15 @@ export const repo = (db: Db) => ({
   async retryJob(id: string, runAt: number) {
     await db.query(`UPDATE jobs SET attempts=attempts+1, run_at=$2 WHERE id=$1`, [id, runAt]);
   },
+  /** Counts a strike against a job and backs it off: `baseSec` after the first, doubling each time. The `max`th ends it. */
+  async strikeJob(id: string, now: number, baseSec: number, max: number): Promise<{ strikes: number; done: boolean }> {
+    const r = await db.query<{ strikes: number; done: boolean }>(
+      `UPDATE jobs SET attempts=attempts+1, strikes=strikes+1, run_at=$2 + ($3 * power(2, LEAST(strikes, 20)))::bigint, done=(strikes+1 >= $4)
+       WHERE id=$1 RETURNING strikes, done`,
+      [id, now, baseSec, max],
+    );
+    return { strikes: Number(r[0]?.strikes ?? 0), done: r[0]?.done === true };
+  },
   /** Keeps a log the indexer could not apply, so it survives a restart and is retried. A log already on the list stays as it is. */
   async parkLog(p: { source: string; tx: string; logIndex: number; subject: string; block: bigint; log: unknown; now: number; nextAt: number; error: string }) {
     await db.query(
@@ -223,6 +232,17 @@ export const repo = (db: Db) => ({
     const r = await db.query<{ target: string }>(`SELECT target FROM detectors WHERE key=$1`, [key]);
     return r[0]?.target ?? null;
   },
+  /** Each key's detector target, lowercase, keyed by the lowercase key. Keys with no detector row are left out. */
+  async detectorTargets(keys: readonly string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (let i = 0; i < keys.length; i += 500) {
+      const part = keys.slice(i, i + 500).map((k) => k.toLowerCase()).filter((k) => /^0x[0-9a-f]{64}$/.test(k));
+      if (part.length === 0) continue;
+      const rows = await db.query<{ key: string; target: string }>(`SELECT key, target FROM detectors WHERE lower(key) = ANY($1::text[])`, [`{${part.join(",")}}`]);
+      for (const r of rows) out.set(r.key.toLowerCase(), (r.target ?? "").toLowerCase());
+    }
+    return out;
+  },
   async detectorKind(key: string): Promise<number | null> {
     const r = await db.query<{ kind: number }>(`SELECT kind FROM detectors WHERE key=$1`, [key]);
     return r[0] ? Number(r[0].kind) : null;
@@ -248,8 +268,10 @@ export const repo = (db: Db) => ({
   async clearOwed(owner: string, token: string) {
     await db.query(`DELETE FROM owed WHERE owner=$1 AND token=$2`, [owner, token]);
   },
-  async openOwed() {
-    return db.query<{ owner: string; token: string; amount: string }>(`SELECT owner, token, amount FROM owed`);
+  /** Owed balances to claim, in a random order so a capped pass reaches every one in time. With `paidAfter`, only owners with a live plan. */
+  async openOwed(paidAfter?: number, limit = 1_000) {
+    const paid = paidAfter === undefined ? "" : `JOIN plans pl ON pl.wallet=o.owner AND pl.paid_until>${Number(paidAfter)}`;
+    return db.query<{ owner: string; token: string; amount: string }>(`SELECT o.owner, o.token, o.amount FROM owed o ${paid} ORDER BY random() LIMIT $1`, [limit]);
   },
   async recentAlarms(since: number) {
     return db.query<{ key: string; fired_at: string }>(`SELECT key, fired_at FROM alarms WHERE fired_at>$1`, [since]);

@@ -15,9 +15,9 @@ import { loadEnv } from "./env";
 import { adminAlertId, adminAlertText, type AdminEvent } from "./indexer/admin";
 import { stuckLogText, type StuckLog } from "./indexer/retry";
 import { applyAlarmAdmin, applyPayment, applyRegistered, applyRouterLog, confirmArms, decodeFired, syncLogs } from "./indexer/indexer";
-import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, onFired, pokeAndQueue, type KeeperDeps } from "./keeper/keeper";
+import { ALARM_TTL, checkpointKeys, claimOwed, drainExits, gasFor, onFired, pokeAndQueue, SMALL_CALL_GAS, type KeeperDeps } from "./keeper/keeper";
 import { opsProblems } from "./keeper/ops";
-import { serialSender, withMargin } from "./keeper/sender";
+import { serialSender } from "./keeper/sender";
 import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
 import { repo } from "./store/repo";
@@ -81,13 +81,18 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
   ? (() => {
       const account = privateKeyToAccount(env.KEEPER_PRIVATE_KEY as Hex);
       const wallet = createWalletClient({ account, transport });
+      const fees = async () => {
+        const f = await client.estimateFeesPerGas();
+        return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+      };
       const send = serialSender({
         pendingNonce: () => client.getTransactionCount({ address: account.address, blockTag: "pending" }),
-        fees: async () => {
-          const f = await client.estimateFeesPerGas();
-          return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+        fees,
+        // Every keeper path sets a limit from its own simulation. A send without one is a bug, never a reason to estimate.
+        send: async (tx, nonce, fees) => {
+          if (tx.gas === undefined) throw new Error("refusing a keeper transaction with no gas limit");
+          return wallet.sendTransaction({ ...tx, gas: tx.gas, nonce, ...fees, chain: null } as never);
         },
-        send: async (tx, nonce, fees) => wallet.sendTransaction({ ...tx, gas: tx.gas ?? withMargin(await client.estimateGas({ ...tx, account })), nonce, ...fees, chain: null } as never),
         receipt: (hash) => client.getTransactionReceipt({ hash }).catch(() => null),
         sleep: Bun.sleep,
         now: Date.now,
@@ -104,6 +109,8 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
         now,
         paidOnly: env.KEEPER_PAID_ONLY,
         listed: new Set(listed),
+        fees,
+        unlistedExitGas: env.KEEPER_UNLISTED_EXIT_GAS,
       };
     })()
   : null;
@@ -189,7 +196,9 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
     // Firing costs gas, so it's spent only on alarms in scope: a listed vault's preset, or one a position armed.
     if (!(await inScope(key, await r.detectorTarget(key)))) return;
     const live = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "isLive", args: [key, 86_400n] });
-    if (!live) await keeper.send(call);
+    if (live) return;
+    const g = await gasFor(keeper, call, SMALL_CALL_GAS);
+    if (g) await keeper.send({ ...call, gas: g.gas });
   } catch (e) {
     console.error("quorum", (e as Error).message);
   } finally {
