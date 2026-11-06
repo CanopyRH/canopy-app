@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { isAddress, type Address } from "viem";
 import { autoExit, CHAINS, CONFIG, offered, pick, planScope, saveChain, savedChain, type Chain } from "../src/config";
@@ -54,11 +54,16 @@ describe("per-chain config", () => {
       expect(offered(CHAINS)).toEqual([robinhood]);
       return;
     }
-    const d = JSON.parse(readFileSync(join(import.meta.dir, "../../deploy/out/8453/deployment.json"), "utf8")) as { router: string; adapter: string; alarmBook: string; settings: { chainId: number; planPayTo: string; apiUrl: string } };
+    // The deploy record is private (deploy/out isn't in the public repo), so a public checkout only checks the shape above.
+    const record = join(import.meta.dir, "../../deploy/out/8453/deployment.json");
+    if (!existsSync(record)) return;
+    const d = JSON.parse(readFileSync(record, "utf8")) as { router: string; adapter: string; alarmBook: string; settings: { chainId: number; planPayTo: string; apiUrl: string } };
     expect(d.settings.chainId).toBe(8453);
     expect(mainnetBase).toMatchObject({ router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: d.settings.planPayTo });
     expect(mainnetBase.apiUrl).toStartWith("https://");
-    const rehearsal = JSON.parse(readFileSync(join(import.meta.dir, "../../deploy/out/8453-rehearsal/deployment.json"), "utf8")) as { router: string };
+    const rehearsalFile = join(import.meta.dir, "../../deploy/out/8453-rehearsal/deployment.json");
+    if (!existsSync(rehearsalFile)) return;
+    const rehearsal = JSON.parse(readFileSync(rehearsalFile, "utf8")) as { router: string };
     expect((mainnetBase.router as string).toLowerCase()).not.toBe(rehearsal.router.toLowerCase());
   });
 
