@@ -83,7 +83,7 @@ const mock = Bun.serve({
 });
 
 const procs: ReturnType<typeof spawn>[] = [];
-const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--fork-url", FORK, "--port", String(RPC_PORT), "--silent", "--no-rate-limit"], { stdout: "ignore", stderr: "ignore" });
+const anvil = spawn([join(ROOT, ".tools/foundry/v1.8.6/anvil"), "--fork-url", FORK, "--port", String(RPC_PORT), "--silent", "--no-rate-limit", "--block-time", "1"], { stdout: "ignore", stderr: "ignore" });
 procs.push(anvil);
 
 try {
@@ -131,6 +131,8 @@ try {
     CARD_VAULTS: VAULT, WATCHER_PEERS: `http://127.0.0.1:${API_A},http://127.0.0.1:${API_B}`, FEED_URLS: `http://127.0.0.1:${MOCK}/feed`,
     ANTHROPIC_API_KEY: "local", ANTHROPIC_BASE_URL: `http://127.0.0.1:${MOCK}`, TELEGRAM_BOT_TOKEN: "1:local", TELEGRAM_API_ROOT: `http://127.0.0.1:${MOCK}`,
     TELEGRAM_WEBHOOK_SECRET: SECRET, LOOP_SCALE: process.env.STACK_SCALE ?? "0.05", ROLE: "all",
+    // The fork mines a block a second, so a short confirmation depth still exercises the wait. Admin alerts go to the mock Telegram.
+    CONFIRMATIONS: "2", OPS_CHAT_ID: "1",
   };
   const logDir = process.env.TMPDIR ?? "/tmp/";
   const ROLES = ["api", "indexer", "detector", "watcher", "keeper"] as const;
@@ -194,7 +196,7 @@ try {
   const exited = await waitFor("hard exit", async () => (await shares(HOLDER_HARD)) === 0n);
   check("a hard alarm ran the whole path unattended", exited, `${((Date.now() - t0) / 1000).toFixed(1)}s from pause to exit, loops at ${common.LOOP_SCALE}x`);
   check("the owner was paid", (await bal(HOLDER_HARD)) > b1, `${((await bal(HOLDER_HARD)) - b1) / 1_000_000n} ${P.symbol}`);
-  check("the exit job finished", await waitFor("job", async () => (await dbA.query(`SELECT 1 FROM jobs WHERE done`)).length === 1));
+  check("the exit job finished", await waitFor("job", async () => (await dbA.query(`SELECT 1 FROM jobs WHERE kind='exit' AND done`)).length === 1));
   await Bun.sleep(1000);
   check("a key that isn't one of the vault's presets alerts nobody", !telegram.some((m) => m.text.includes("Alarm on")));
   check("the API shows the live alarm", await waitFor("live", async () => ((await (await fetch(`http://127.0.0.1:${API_A}/alarms/live`)).json()) as unknown[]).length === 1));
