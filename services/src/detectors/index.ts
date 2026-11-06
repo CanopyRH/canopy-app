@@ -16,19 +16,23 @@ const BPS = 10_000n;
 
 /**
  * TVL drain velocity. Soft: big honest withdrawals look the same.
- * Measured from the window's median, not its peak, so capital parked across one reading can't fake a drain.
+ * Measured from the window's median, not its peak, so capital parked across one reading can't fake a drain. With a
+ * `longBaseline` (the median of the day before the window), the lower of the two is the usual level, so capital parked
+ * for most of the window and then withdrawn reads as a return to the usual level, not a drain.
  */
 export function drainVelocity(
   samples: { t: number; totalAssets: bigint }[],
   windowSec: number,
   maxDropBps: bigint,
   target: Hex,
+  longBaseline?: bigint | null,
 ): Signal | null {
   if (samples.length < 2) return null;
   const last = samples[samples.length - 1]!;
   const inWin = samples.filter((s) => last.t - s.t <= windowSec);
   const sorted = inWin.map((s) => s.totalAssets).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const usual = sorted[Math.floor(sorted.length / 2)]!;
+  const median = sorted[Math.floor(sorted.length / 2)]!;
+  const usual = longBaseline != null && longBaseline < median ? longBaseline : median;
   if (usual === 0n || last.totalAssets >= usual) return null;
   const drop = ((usual - last.totalAssets) * BPS) / usual;
   return drop > maxDropBps

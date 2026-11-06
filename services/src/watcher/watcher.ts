@@ -30,16 +30,31 @@ export async function ingestFeed(db: Db, classify: Classify, sourceUrl: string, 
 
 const MAX_LABEL_TRIES = 5;
 const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-/** Too common to identify a vault, such as token symbols. */
-const GENERIC = new Set(["usdc", "usd", "usdg", "usdt", "dai", "eth", "weth", "btc", "the", "vault", "vaults", "protocol", "finance", "financial", "labs", "dao", "prime", "high", "yield", "core", "v1", "v2"]);
-/** Every launch vault runs on these, so a report about one concerns them all. */
-const PLATFORMS = new Set(["morpho"]);
+/**
+ * Too common to identify a vault: token symbols, filler words, and the platforms every launch vault runs on. A report
+ * that names only Morpho could be about any market on it, and a watcher alarm is too strong to sign on that alone.
+ */
+const GENERIC = new Set(["usdc", "usd", "usdg", "usdt", "dai", "eth", "weth", "btc", "the", "vault", "vaults", "protocol", "finance", "financial", "labs", "dao", "prime", "high", "yield", "core", "v1", "v2", "morpho", "blue", "metamorpho"]);
 
-/** Vaults a report is about, by name. A wide match only adds soft signals, which still need on-chain evidence. */
-export function matchVaults<T extends { name: string }>(protocol: string, vaults: T[]): T[] {
+/** A vault as the watcher knows it: its card's name and, where known, its address, curator and asset symbol. */
+export interface VaultNames { name: string; target?: string; curator?: string; asset?: string }
+
+/**
+ * Vaults a report is about. It has to name the vault itself: a distinctive word of its name (which is how curators
+ * brand their vaults), its address or its curator's address. A depeg report may instead name the vault's asset, which
+ * a depeg of that asset concerns directly. A report that only names the platform matches nothing.
+ */
+export function matchVaults<T extends VaultNames>(protocol: string, vaults: T[], label?: string): T[] {
   const named = words(protocol);
-  if (named.some((w) => PLATFORMS.has(w))) return vaults;
-  return vaults.filter((v) => words(v.name).some((n) => !GENERIC.has(n) && n.length >= 4 && named.some((w) => w === n || w.startsWith(n))));
+  const text = protocol.toLowerCase();
+  const byAddress = (a?: string) => !!a && /^0x[0-9a-f]{40}$/i.test(a) && text.includes(a.toLowerCase());
+  return vaults.filter(
+    (v) =>
+      words(v.name).some((n) => !GENERIC.has(n) && n.length >= 4 && named.some((w) => w === n || w.startsWith(n))) ||
+      byAddress(v.target) ||
+      byAddress(v.curator) ||
+      (label === "DEPEG_REPORT" && !!v.asset && named.includes(v.asset.toLowerCase())),
+  );
 }
 
 /** Independent watchers must sign identical values, so the deadline comes from a shared 10-minute window. */

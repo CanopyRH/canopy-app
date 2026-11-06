@@ -11,11 +11,15 @@ const scanAbi = parseAbi([
 ]);
 
 const DRAIN_WINDOW = 3600;
+/** The day before the drain window, whose median keeps recent inflows out of the drain baseline. */
+export const DRAIN_BASELINE_SEC = 86_400;
+/** Readings that baseline needs, about half an hour's worth. A vault scanned for less falls back to the window alone. */
+const BASELINE_MIN_SAMPLES = 30;
 const DRAIN_BPS = 2500n;
 const SHARE_DROP_BPS = 50n;
 const HIGH_WINDOW = 30 * 86_400; // One odd reading can't set off alerts forever.
 /** Readings older than every window above, which pruning may delete. */
-export const SNAP_KEEP_SEC = HIGH_WINDOW + 86_400;
+export const SNAP_KEEP_SEC = HIGH_WINDOW + 86_400; // also covers the drain baseline's day
 
 export interface ScanDeps {
   client: Pick<PublicClient, "readContract" | "getCode">;
@@ -50,7 +54,9 @@ export async function scanVault(d: ScanDeps, target: Address): Promise<Signal[]>
   await d.repo.saveAdmins(target, { owner: owner ?? prev?.owner ?? null, curator: curator ?? prev?.curator ?? null });
 
   const hex = target as Hex;
-  const soft = [drainVelocity(await d.repo.snaps(target, now - DRAIN_WINDOW), DRAIN_WINDOW, DRAIN_BPS, hex), ...adminChanges(prev, { owner, curator }, hex, now)].filter((s) => s !== null);
+  const baseline = await d.repo.medianAssets(target, now - DRAIN_WINDOW - DRAIN_BASELINE_SEC, now - DRAIN_WINDOW, BASELINE_MIN_SAMPLES);
+  const drain = drainVelocity(await d.repo.snaps(target, now - DRAIN_WINDOW), DRAIN_WINDOW, DRAIN_BPS, hex, baseline);
+  const soft = [drain, ...adminChanges(prev, { owner, curator }, hex, now)].filter((s) => s !== null);
   for (const s of soft) await d.repo.recordSignal(s);
   const hard = [paused(isPaused === true, hex, now), sharePrice === null ? null : shareDrop(high, sharePrice, SHARE_DROP_BPS, hex, now)].filter((s) => s !== null);
   return [...hard, ...soft];

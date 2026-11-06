@@ -215,6 +215,15 @@ export const repo = (db: Db) => ({
   async recordSnap(target: string, t: number, totalAssets: bigint, sharePrice: bigint) {
     await db.query(`INSERT INTO vault_snaps (target, t, total_assets, share_price) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [target, t, totalAssets.toString(), sharePrice.toString()]);
   },
+  /** The median of a vault's total assets over [from, to), or null with fewer than `minSamples` readings. */
+  async medianAssets(target: string, from: number, to: number, minSamples = 1): Promise<bigint | null> {
+    const r = await db.query<{ m: string | null; n: string }>(
+      `SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY total_assets)::text AS m, COUNT(*)::text AS n FROM vault_snaps WHERE target=$1 AND t>=$2 AND t<$3`,
+      [target, from, to],
+    );
+    const row = r[0];
+    return row?.m != null && Number(row.n) >= minSamples ? BigInt(row.m) : null;
+  },
   /** Deletes vault readings older than `before`. */
   async pruneSnaps(before: number) {
     await db.query(`DELETE FROM vault_snaps WHERE t<$1`, [before]);

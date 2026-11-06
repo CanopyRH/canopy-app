@@ -283,14 +283,15 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
         await ingestFeed(db, classify, url, text, now()).catch((e: Error) => console.warn("feed item", e.message));
       }
     }
-    const keys = await db.query<{ key: Hex; target: Hex; name: string }>(
-      `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`,
+    const keys = await db.query<{ key: Hex; target: Hex; name: string; curator: string; asset: string }>(
+      `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name, COALESCE(c.numbers->>'curator', '') AS curator, COALESCE(c.numbers->>'assetSymbol', '') AS asset
+       FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`,
     );
     // Anyone can register a watcher alarm on any contract, so watchers only sign the ones in scope. Live keys are read once a pass.
     const inScopeNow = await quorumScopeNow(r, listed, now, env.KEEPER_PAID_ONLY);
     const scoped = keys.filter((k) => inScopeNow(k.key, k.target));
     for (const item of await recentReports(db, now() - 3600)) {
-      for (const { key, target } of matchVaults(item.classification.protocol, scoped)) {
+      for (const { key, target } of matchVaults(item.classification.protocol, scoped, item.classification.label)) {
         if (await r.firedSince(key, now() - 86_400)) continue;
         const feed = feedSignal(item.classification, target, now(), item.hash);
         if (!feed) continue;

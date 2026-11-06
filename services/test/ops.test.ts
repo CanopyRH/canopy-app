@@ -654,8 +654,9 @@ describe("watcher resilience", () => {
     expect(names("Gauntlet USDC Prime")).toEqual(["Gauntlet USDC Prime"]);
   });
 
-  test("a report about the platform concerns every vault on it", () => {
-    expect(names("Morpho Blue")).toHaveLength(vaults.length);
+  test("a report that only names the platform concerns no vault: it has to name the vault, curator or asset", () => {
+    expect(names("Morpho Blue")).toEqual([]);
+    expect(names("Morpho Steakhouse")).toEqual(["Steakhouse USDC"]);
   });
 
   test("a high-s signature copy is refused, so it can't shut out the real one", () => {
