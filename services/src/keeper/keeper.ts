@@ -12,6 +12,13 @@ export const RETRY_SEC = 30;
 export const BUNDLE_GAS = 10_000_000n;
 /** Keys per check request. Each check is a few reads, so 250 stay far below a node's gas cap for a read-only call. */
 export const CHECKS_PER_CALL = 250;
+/** How long one exit, or one vault's bundle, may run before the keeper moves on. Contracts anyone can write answer its reads. */
+export const JOB_BUDGET_MS = 45_000;
+/** A job that ran out of time waits this long, so it can't take the budget on every pass. */
+export const SLOW_RETRY_SEC = 300;
+/** How long a key whose own check fails stays out of the shared check. */
+export const QUARANTINE_SEC = 600;
+const QUARANTINE = new Map<string, number>();
 
 export interface KeeperDeps {
   client: PublicClient;
@@ -25,6 +32,27 @@ export interface KeeperDeps {
   now: () => number;
   /** false for an open-source keeper, which runs every armed position. */
   paidOnly: boolean;
+  /** Canopy's listed vaults, lowercase. Their exits run first, and only they get deallocations. Empty or unset means every vault is treated alike. */
+  listed?: ReadonlySet<string>;
+  /** Overrides JOB_BUDGET_MS, for tests. */
+  jobBudgetMs?: number;
+  /** Keys left out of the shared check until a time. Defaults to one map per process. */
+  quarantine?: Map<string, number>;
+}
+
+const isListed = (d: KeeperDeps, vault: Address) => !d.listed?.size || d.listed.has(vault.toLowerCase());
+const prepFor = (d: KeeperDeps, vault: Address) => (isListed(d, vault) ? deallocateCalls(d.client, d.morpho, vault, d.account) : Promise.resolve([]));
+
+class OverBudget extends Error {}
+
+/** Gives up waiting on a job after `ms`. The job itself can't be cancelled, but the keeper moves on to the next one. */
+async function withBudget<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new OverBudget(`over the ${ms} ms budget`)), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface ExitJob { posId: Hex; key: Hex; owner: Address; target: Address; firedAt: number }
@@ -48,23 +76,47 @@ function gateOne(results: readonly SimResult[], exitAt: number, before: number, 
   return judge([bal(before)], [bal(after)], [bal(before + 1)], [bal(after + 1)], [asset]);
 }
 
-/** Pokes every armed key whose on-chain condition has tripped. Returns the keys it poked. */
+type Check = { status: "success"; result: boolean } | { status: "failure"; error: unknown };
+
+/** One key checked in its own read, so the node's gas cap applies to it alone. */
+async function checkAlone(d: KeeperDeps, key: Hex): Promise<Check> {
+  try {
+    return { status: "success", result: await d.client.readContract({ address: d.alarmBook, abi: alarmBookAbi, functionName: "check", args: [key] }) };
+  } catch (error) {
+    return { status: "failure", error };
+  }
+}
+
+/**
+ * Pokes every armed key whose on-chain condition has tripped. Returns the keys it poked.
+ * Arming is open to anyone, and a key can point at a contract that burns all the gas it is given. In the shared check
+ * that would starve the keys after it, so every key that fails there is checked again on its own. A key that fails
+ * on its own is left out of the shared check for a while, and the honest keys around it are still poked this pass.
+ */
 export async function pokeTripped(d: KeeperDeps): Promise<Hex[]> {
-  const keys = (await d.repo.liveKeys(d.paidOnly ? d.now() : undefined)) as Hex[];
+  const q = d.quarantine ?? QUARANTINE;
+  const now = d.now();
+  for (const [k, until] of q) if (until <= now) q.delete(k);
+  const keys = ((await d.repo.liveKeys(d.paidOnly ? now : undefined)) as Hex[]).filter((k) => !q.has(k.toLowerCase()));
   if (keys.length === 0) return [];
   // One RPC request checks every key, so the cost per second doesn't grow with the number of armed alarms.
-  const checks = await d.client.multicall({
-    multicallAddress: d.multicall3,
-    allowFailure: true,
-    batchSize: CHECKS_PER_CALL * 36,
-    contracts: keys.map((key) => ({ address: d.alarmBook, abi: alarmBookAbi, functionName: "check", args: [key] }) as const),
-  });
+  const shared = (await d.client
+    .multicall({
+      multicallAddress: d.multicall3,
+      allowFailure: true,
+      batchSize: CHECKS_PER_CALL * 36,
+      contracts: keys.map((key) => ({ address: d.alarmBook, abi: alarmBookAbi, functionName: "check", args: [key] }) as const),
+    })
+    .catch(() => keys.map(() => ({ status: "failure", error: new Error("shared check failed") })))) as Check[];
   const poked: Hex[] = [];
   for (const [i, key] of keys.entries()) {
-    // Arming is open to anyone, so one key that reverts must not stop the rest.
     try {
-      const c = checks[i]!;
-      if (c.status === "failure") throw c.error;
+      let c = shared[i] ?? ({ status: "failure", error: new Error("no result") } as Check);
+      if (c.status === "failure") c = await checkAlone(d, key);
+      if (c.status === "failure") {
+        q.set(key.toLowerCase(), now + QUARANTINE_SEC);
+        throw c.error;
+      }
       if (!c.result) continue;
       await d.send({ to: d.alarmBook, data: encodeFunctionData({ abi: alarmBookAbi, functionName: "poke", args: [key] }) });
       await d.repo.bump("poke_ok");
@@ -142,7 +194,7 @@ export async function runExit(d: KeeperDeps, j: ExitJob): Promise<"done" | "retr
 
   const asset = await d.client.readContract({ address: j.target, abi: vaultAbi, functionName: "asset" });
   const direct = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, 0n] }) };
-  const prep = await deallocateCalls(d.client, d.morpho, j.target, d.account);
+  const prep = await prepFor(d, j.target);
   const amount = await sizeExit(total, async (a) => {
     try {
       return (await gateExit(d, j, asset, a, prep)).ok;
@@ -212,7 +264,7 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
 
   const target = jobs[0]!.j.target;
   const asset = await d.client.readContract({ address: target, abi: vaultAbi, functionName: "asset" });
-  const prep = await deallocateCalls(d.client, d.morpho, target, d.account);
+  const prep = await prepFor(d, target);
   const exitData = (x: (typeof jobs)[number]) => encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [x.j.posId, x.j.key, x.amount] });
   const reads = (owner: Address) => [owner, d.router, d.account].map((w) => balanceCall(asset, w));
   const STEP = 7; // Three reads, the exit, three reads.
@@ -252,37 +304,44 @@ export async function runBundle(d: KeeperDeps, due: DueJob[]): Promise<DueJob[]>
 
 /**
  * Works through due exit jobs, one transaction per vault when several are due. A failed job waits 30 s and tries again; it
- * never blocks the others.
+ * never blocks the others. Listed vaults go first, and each job has a time budget, so a contract built to stall the
+ * keeper only delays itself.
  */
 export async function drainExits(d: KeeperDeps) {
+  const budget = d.jobBudgetMs ?? JOB_BUDGET_MS;
   const byVault = new Map<string, DueJob[]>();
   for (const job of await d.repo.dueJobs("exit", d.now())) {
     const target = (job.payload as ExitJob).target.toLowerCase();
     byVault.set(target, [...(byVault.get(target) ?? []), job]);
   }
+  const listedFirst = (a: DueJob, b: DueJob) => Number(!isListed(d, (a.payload as ExitJob).target)) - Number(!isListed(d, (b.payload as ExitJob).target));
+  const groups = [...byVault.values()].sort((a, b) => listedFirst(a[0]!, b[0]!));
   const single: DueJob[] = [];
-  for (const group of byVault.values()) {
+  for (const group of groups) {
     if (group.length === 1) {
       single.push(...group);
       continue;
     }
     try {
-      single.push(...(await runBundle(d, group)));
+      single.push(...(await withBudget(runBundle(d, group), budget)));
     } catch (e) {
       console.warn("bundle", (e as Error).message);
       await d.repo.bump("bundle_error");
-      single.push(...group);
+      if (e instanceof OverBudget) {
+        for (const job of group) await d.repo.retryJob(job.id, d.now() + SLOW_RETRY_SEC);
+      } else single.push(...group);
     }
   }
+  single.sort(listedFirst);
   for (const job of single) {
     const j = job.payload as ExitJob;
     try {
-      if ((await runExit(d, j)) === "done") await d.repo.finishJob(job.id);
+      if ((await withBudget(runExit(d, j), budget)) === "done") await d.repo.finishJob(job.id);
       else await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
     } catch (e) {
       console.warn("exit", j.posId, (e as Error).message);
       await d.repo.bump("exit_error");
-      await d.repo.retryJob(job.id, d.now() + RETRY_SEC);
+      await d.repo.retryJob(job.id, d.now() + (e instanceof OverBudget ? SLOW_RETRY_SEC : RETRY_SEC));
     }
   }
 }

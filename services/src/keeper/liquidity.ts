@@ -14,6 +14,12 @@ const PARAMS = [{ type: "address" }, { type: "address" }, { type: "address" }, {
 
 export interface PlainCall { to: Address; data: Hex; gas?: bigint }
 
+/**
+ * Real liquidity adapters list a handful of markets. The count comes from a contract anyone can write, so a larger one
+ * is treated as hostile and the vault gets no deallocation; the plain exit still runs.
+ */
+export const MAX_MARKETS = 32n;
+
 /** The most a vault can pull from one market: its own supply, capped by what borrowers left free. A vault is often a small lender in a big market. */
 export function reachableAssets(totalSupplyAssets: bigint, totalSupplyShares: bigint, totalBorrowAssets: bigint, vaultShares: bigint): bigint {
   if (totalSupplyShares === 0n) return 0n;
@@ -29,6 +35,7 @@ export async function deallocateCalls(client: PublicClient, morpho: Address, vau
     const penalty = await client.readContract({ address: vault, abi: vaultV2Abi, functionName: "forceDeallocatePenalty", args: [adapter] });
     if (penalty !== 0n) return [];
     const n = await client.readContract({ address: adapter, abi: adapterAbi, functionName: "marketIdsLength" });
+    if (n > MAX_MARKETS) return [];
     const calls: PlainCall[] = [];
     for (let i = 0n; i < n; i++) {
       const id = await client.readContract({ address: adapter, abi: adapterAbi, functionName: "marketIds", args: [i] });

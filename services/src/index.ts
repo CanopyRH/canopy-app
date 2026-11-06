@@ -82,6 +82,7 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
         send,
         now,
         paidOnly: env.KEEPER_PAID_ONLY,
+        listed: new Set(listed),
       };
     })()
   : null;
