@@ -150,7 +150,8 @@ only to exits the owner sends. If the pool cannot fill within the cap, the swap 
 Swap legs are allowed only with the stable harbour, at most 4, one per token, each with a feed that has code, a
 staleness limit of 1 second to 2 days, at most 36 token decimals, and a well-formed Uniswap path from the token to the
 stablecoin. They are stored per position, replaced on re-arm, announced by one `SwapLegSet` each, and an exit uses only
-the position's own leg for a token (no leg: raw).
+the position's own leg for a token (no leg: raw), read into memory with the position before the exit's first external
+call, so no callback can change the swaps of an exit in progress.
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_storesLegsAndEmitsOnePerLeg`, `test_reArm_replacesTheLegs`, `test_legOfAnotherPositionIsNeverUsed`, `test_arm_legMustEndInStable`, `test_quoteMinOut_isAPublicViewOverTheLegsInputs`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_arm_SwapsNeedStableHarbour`, `test_arm_TooManySwaps`, `test_arm_DuplicateSwap`, `test_arm_BadFeed_noCode`, `test_arm_BadFeed_heartbeatOutOfRange`, `test_arm_BadFeed_decimalsAboveMax`, `test_arm_BadRoute_empty`, `test_arm_BadRoute_tooShort`, `test_arm_BadRoute_misalignedLength`, `test_arm_BadRoute_startsAtAnotherToken`, `test_arm_BadRoute_endsAtAnotherToken`, `test_arm_validMultiHopPathIsAccepted`.

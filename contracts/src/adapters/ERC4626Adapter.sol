@@ -37,12 +37,12 @@ contract ERC4626Adapter is IExitAdapter, AdapterBase {
     /// @param target The vault.
     /// @param shares The shares the router moved here.
     function unwind(address target, uint256 shares) external onlyRouter {
-        bool done;
+        bool done = false;
         try IERC4626(target).redeem(shares, ROUTER, address(this)) {
             done = true;
         } catch {}
         if (!done) {
-            uint256 m;
+            uint256 m = 0;
             try IERC4626(target).maxRedeem(address(this)) returns (uint256 x) {
                 m = x;
             } catch {}

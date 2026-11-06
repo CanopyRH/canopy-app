@@ -408,7 +408,7 @@ contract AlarmBook is IAlarmBook {
         if (signers.length < d.threshold || signers.length != sigs.length) revert BadSigners();
 
         bytes32 digest = attestDigest(key, evidence, deadline);
-        address prev;
+        address prev = address(0); // signers must be strictly ascending, so the zero address never passes
         for (uint256 i; i < signers.length; ++i) {
             address w = signers[i];
             if (w <= prev) revert BadSigners();

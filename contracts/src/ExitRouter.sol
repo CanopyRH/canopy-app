@@ -384,32 +384,11 @@ contract ExitRouter is ReentrancyGuard {
     function exit(bytes32 posId, bytes32 alarmKey, uint256 amount) external nonReentrant returns (uint256 exitId) {
         Position memory p = positions[posId];
         bool viaAlarm = _authorize(p, posId, alarmKey);
+        // Read before any external call, like the position: nothing a callback writes can change this exit's swaps.
+        SwapLeg[] memory legs = _swaps[posId];
 
         exitId = ++exitCount;
-        uint256 amountOrId = _pull(p, amount);
-
-        address[] memory outs = _outputList(p, amountOrId);
-        uint256[] memory before = new uint256[](outs.length);
-        for (uint256 i; i < outs.length; ++i) {
-            before[i] = _free(outs[i]);
-        }
-        uint256 stableBefore = _free(STABLE);
-
-        IExitAdapter(p.adapter).unwind(p.target, amountOrId);
-
-        if (p.isNft) {
-            if (IERC721(p.asset).ownerOf(p.tokenId) != address(this)) revert NftNotReturned();
-            IERC721(p.asset).transferFrom(address(this), p.owner, p.tokenId);
-        }
-
-        bool delivered = _settle(exitId, posId, p, outs, before, viaAlarm);
-
-        uint256 stableOut = _free(STABLE) - stableBefore;
-        if (stableOut > 0) {
-            _pay(exitId, p.owner, STABLE, stableOut, p.harbour == HARBOUR_STABLE);
-            delivered = true;
-        }
-        if (!delivered) revert NothingWithdrawn();
+        if (!_unwindAndPay(exitId, p, legs, amount, viaAlarm)) revert NothingWithdrawn();
 
         emit Exited(exitId, posId, p.owner, msg.sender, alarmKey, viaAlarm);
     }
@@ -555,6 +534,37 @@ contract ExitRouter is ReentrancyGuard {
         return true;
     }
 
+    /// @dev Pulls the position into its adapter, unwinds it, and pays every output to the owner. Returns whether anything
+    /// was delivered.
+    function _unwindAndPay(uint256 exitId, Position memory p, SwapLeg[] memory legs, uint256 amount, bool viaAlarm)
+        internal
+        returns (bool delivered)
+    {
+        uint256 amountOrId = _pull(p, amount);
+
+        address[] memory outs = _outputList(p, amountOrId);
+        uint256[] memory before = new uint256[](outs.length);
+        for (uint256 i; i < outs.length; ++i) {
+            before[i] = _free(outs[i]);
+        }
+        uint256 stableBefore = _free(STABLE);
+
+        IExitAdapter(p.adapter).unwind(p.target, amountOrId);
+
+        if (p.isNft) {
+            if (IERC721(p.asset).ownerOf(p.tokenId) != address(this)) revert NftNotReturned();
+            IERC721(p.asset).transferFrom(address(this), p.owner, p.tokenId);
+        }
+
+        delivered = _settle(exitId, legs, p, outs, before, viaAlarm);
+
+        uint256 stableOut = _free(STABLE) - stableBefore;
+        if (stableOut > 0) {
+            _pay(exitId, p.owner, STABLE, stableOut, p.harbour == HARBOUR_STABLE);
+            delivered = true;
+        }
+    }
+
     /// @dev The only `from` ever used is the position owner; the only `to` is the owner's chosen adapter.
     function _pull(Position memory p, uint256 amount) internal returns (uint256) {
         if (p.isNft) {
@@ -589,7 +599,7 @@ contract ExitRouter is ReentrancyGuard {
 
     function _settle(
         uint256 exitId,
-        bytes32 posId,
+        SwapLeg[] memory legs,
         Position memory p,
         address[] memory outs,
         uint256[] memory before,
@@ -606,7 +616,7 @@ contract ExitRouter is ReentrancyGuard {
                 _pay(exitId, p.owner, t, d, false); // unredeemed shares back to the owner
                 continue;
             }
-            if (p.harbour == HARBOUR_STABLE && t != address(0) && _swapIfLeg(posId, t, d, slip)) {
+            if (p.harbour == HARBOUR_STABLE && t != address(0) && _swapIfLeg(legs, t, d, slip)) {
                 nowFree = _free(t);
                 d = nowFree > before[i] ? nowFree - before[i] : 0;
             }
@@ -618,8 +628,7 @@ contract ExitRouter is ReentrancyGuard {
     }
 
     /// @dev Runs the owner's swap leg for `token`, if the position has one. No leg: no swap, the raw token is paid.
-    function _swapIfLeg(bytes32 posId, address token, uint256 amount, uint16 slipBps) internal returns (bool) {
-        SwapLeg[] storage legs = _swaps[posId];
+    function _swapIfLeg(SwapLeg[] memory legs, address token, uint256 amount, uint16 slipBps) internal returns (bool) {
         for (uint256 i; i < legs.length; ++i) {
             if (legs[i].token == token) return _trySwap(token, amount, slipBps, legs[i]);
         }
@@ -628,7 +637,7 @@ contract ExitRouter is ReentrancyGuard {
 
     /// @dev Optional leg. Any failure (stale, missing or gas-burning feed, stablecoin off peg, pool below the oracle bound,
     /// token refusing approval) returns false and the raw token is delivered instead.
-    function _trySwap(address token, uint256 amount, uint16 slipBps, SwapLeg storage leg) internal returns (bool swapped) {
+    function _trySwap(address token, uint256 amount, uint16 slipBps, SwapLeg memory leg) internal returns (bool swapped) {
         // An external call, because try can't catch an overflow in the pricing. Capped, so a hostile feed costs bounded gas.
         (bool called, bytes memory ret) = address(this).staticcall{gas: QUOTE_GAS}(
             abi.encodeCall(this.quoteMinOut, (leg.feed, leg.heartbeat, leg.tokenDecimals, amount, slipBps))
@@ -680,13 +689,13 @@ contract ExitRouter is ReentrancyGuard {
 
     /// @dev Reads a feed with at most FEED_READ_GAS per call. Any failure, short answer or stale price is "no price".
     function _price(address feed, uint32 heartbeat) internal view returns (bool ok, uint256 price, uint8 dec) {
-        (bool okR,, uint256[5] memory r,) = CappedCall.read(feed, abi.encodeWithSelector(0xfeaf968c), FEED_READ_GAS, 5);
+        (bool okR, uint256[5] memory r) = CappedCall.readWords(feed, abi.encodeWithSelector(0xfeaf968c), FEED_READ_GAS, 5);
         if (!okR) return (false, 0, 0);
         int256 answer = int256(r[1]);
         uint256 updatedAt = r[3];
         if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) return (false, 0, 0);
         if (block.timestamp - updatedAt > heartbeat) return (false, 0, 0);
-        (bool okD,, uint256[5] memory dd,) = CappedCall.read(feed, abi.encodeWithSelector(0x313ce567), FEED_READ_GAS, 1);
+        (bool okD, uint256[5] memory dd) = CappedCall.readWords(feed, abi.encodeWithSelector(0x313ce567), FEED_READ_GAS, 1);
         if (!okD || dd[0] > 30) return (false, 0, 0);
         return (true, uint256(answer), uint8(dd[0]));
     }

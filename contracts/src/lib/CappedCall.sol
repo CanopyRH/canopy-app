@@ -26,4 +26,18 @@ library CappedCall {
         used = g0 - gasleft();
         ok = succeeded && size >= words * 32;
     }
+
+    /// @dev `read` for callers that only need the answer: ok and the words.
+    function readWords(address target, bytes memory data, uint256 gasCap, uint256 words)
+        internal
+        view
+        returns (bool ok, uint256[5] memory out)
+    {
+        uint256 size;
+        assembly ("memory-safe") {
+            ok := staticcall(gasCap, target, add(data, 0x20), mload(data), out, mul(words, 0x20))
+            size := returndatasize()
+        }
+        ok = ok && size >= words * 32;
+    }
 }
