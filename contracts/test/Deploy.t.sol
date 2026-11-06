@@ -34,6 +34,13 @@ contract DeployTest {
         guardian = address(new ContractAdmin());
     }
 
+    function _watchers() internal pure returns (address[] memory w) {
+        w = new address[](3);
+        w[0] = address(0x3A1);
+        w[1] = address(0x3A2);
+        w[2] = address(0x3A3);
+    }
+
     function _cfg() internal view returns (Deploy.Config memory) {
         return Deploy.Config({
             stable: address(stable),
@@ -45,7 +52,8 @@ contract DeployTest {
             heartbeat: 90_000,
             adminExpiry: block.timestamp + 365 days,
             timelockDelay: 0,
-            allowEoaAdmin: false
+            allowEoaAdmin: false,
+            watchers: _watchers()
         });
     }
 
@@ -54,7 +62,65 @@ contract DeployTest {
         script.validate(c);
         Deploy.Deployed memory d = script.deploy(c);
         script.check(c, d);
-        require(!d.router.adapterAllowed(address(d.adapter)), "adapter starts disabled");
+        require(d.router.adapterAllowed(address(d.adapter)), "adapter allowed from the constructor");
+        require(d.adapter.ROUTER() == address(d.router), "adapter points at the router it was predicted for");
+        for (uint256 i; i < 3; ++i) {
+            require(d.book.isWatcher(c.watchers[i]), "watchers active from deployment");
+        }
+    }
+
+    function test_deployTwiceFromTheSameAccount_predictsEachRouter() public {
+        Deploy.Config memory c = _cfg();
+        Deploy.Deployed memory d1 = script.deploy(c);
+        Deploy.Deployed memory d2 = script.deploy(c);
+        script.check(c, d1);
+        script.check(c, d2);
+        require(address(d1.router) != address(d2.router), "two routers");
+        require(d2.adapter.ROUTER() == address(d2.router), "second adapter wired to the second router");
+    }
+
+    function test_checkCatchesAnAdapterPointingElsewhere() public {
+        Deploy.Config memory c = _cfg();
+        Deploy.Deployed memory d1 = script.deploy(c);
+        Deploy.Deployed memory d2 = script.deploy(c);
+        d1.adapter = d2.adapter;
+        vm.expectRevert(abi.encodeWithSelector(Deploy.WiringFailed.selector, "adapter"));
+        script.check(c, d1);
+    }
+
+    function test_checkCatchesAMissingWatcher() public {
+        Deploy.Config memory c = _cfg();
+        Deploy.Deployed memory d = script.deploy(c);
+        c.watchers[1] = address(0xBAD);
+        vm.expectRevert(abi.encodeWithSelector(Deploy.WiringFailed.selector, "watcher not active"));
+        script.check(c, d);
+    }
+
+    function test_rejectsBadWatcherLists() public {
+        Deploy.Config memory c = _cfg();
+        c.watchers = new address[](1);
+        c.watchers[0] = address(0x3A1);
+        vm.expectRevert(Deploy.BadWatchers.selector);
+        script.validate(c); // fewer than a quorum needs
+        c = _cfg();
+        c.watchers[2] = c.watchers[0];
+        vm.expectRevert(Deploy.BadWatchers.selector);
+        script.validate(c); // a repeat
+        c = _cfg();
+        c.watchers[1] = address(0);
+        vm.expectRevert(Deploy.BadWatchers.selector);
+        script.validate(c); // the zero address
+        c = _cfg();
+        c.watchers[0] = c.proposer;
+        vm.expectRevert(Deploy.BadWatchers.selector);
+        script.validate(c); // an admin as a watcher
+        c = _cfg();
+        c.watchers = new address[](17);
+        for (uint256 i; i < 17; ++i) {
+            c.watchers[i] = address(uint160(0x3B0 + i));
+        }
+        vm.expectRevert(Deploy.BadWatchers.selector);
+        script.validate(c); // more than MAX_WATCHERS
     }
 
     function test_rejectsPersonalWalletAdminByDefault() public {

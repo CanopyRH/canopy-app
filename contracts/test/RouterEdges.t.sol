@@ -5,13 +5,21 @@ import {Base} from "./Base.sol";
 import {ExitRouter} from "../src/ExitRouter.sol";
 import {IExitAdapter} from "../src/interfaces/IExitAdapter.sol";
 import {MockERC20, MockVault, MockFeed} from "./Mocks.sol";
+import {SafeTransferLib} from "../src/lib/SafeTransferLib.sol";
 
-/// @dev A token whose transfer succeeds but returns one byte instead of a 32-byte bool.
+/// @dev A token whose transfer returns one byte instead of a 32-byte bool. While `stuck` is set the transfer moves nothing
+/// but still returns the same byte, so only the balance tells the two apart.
 contract ShortToken is MockERC20 {
+    bool public stuck;
+
     constructor() MockERC20(6) {}
 
+    function setStuck(bool s) external {
+        stuck = s;
+    }
+
     function transfer(address to, uint256 a) public override returns (bool) {
-        _move(msg.sender, to, a);
+        if (!stuck) _move(msg.sender, to, a);
         assembly {
             mstore(0x00, 1)
             return(0x1f, 1)
@@ -51,6 +59,32 @@ contract GasBurnFeed {
     function latestRoundData() external pure returns (uint80, int256, uint256, uint256, uint80) {
         assembly {
             invalid()
+        }
+    }
+}
+
+/// @dev Answers latestRoundData honestly, then burns every unit of gas in decimals().
+contract DecimalsBurnFeed {
+    function decimals() external pure returns (uint8) {
+        assembly {
+            invalid()
+        }
+    }
+
+    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
+        return (1, 1e8, block.timestamp, block.timestamp, 1);
+    }
+}
+
+/// @dev Returns a 60 kB payload from every call, to make a naive caller pay to copy it.
+contract ReturnBombFeed {
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    fallback() external {
+        assembly {
+            return(0, 60000)
         }
     }
 }
@@ -114,68 +148,93 @@ contract Owner {
     }
 }
 
-/// @notice Documented edge behaviour of ExitRouter, pinned as regression tests, plus the ETH and WETH payout paths.
+/// @notice Edge behaviour of ExitRouter. In v1 the first two sections pinned documented problems (A2-06, A2-07); in v2 they
+/// assert the fixes. The ETH and WETH payout paths follow.
 contract RouterEdgesTest is Base {
-    // ------------------------------------------------------------------ tryTransfer reads a 1-byte return as failure
+    // ------------------------------------------------------------------ A2-06: a 1-byte return follows the balance
 
-    function test_oneByteReturnTokenIsPaidAndAlsoBookedAsOwed() public {
-        ShortToken tok = new ShortToken();
+    function _shortWorld() internal returns (ShortToken tok, bytes32 id) {
+        tok = new ShortToken();
         MintVault mv = new MintVault(tok);
         mv.mint(OWNER, 100e6);
         vm.prank(OWNER);
         mv.approve(address(router), type(uint256).max);
         vm.prank(OWNER);
-        bytes32 id = router.arm(_params(address(mv), 0, 0, _keys(pauseKey)));
-
-        vm.prank(OWNER);
-        router.exit(id, bytes32(0), 0);
-
-        assertEq(tok.balanceOf(OWNER), 100e6, "the owner already holds the payout");
-        assertEq(router.owed(OWNER, address(tok)), 100e6, "and it is also booked as owed");
-        assertEq(router.totalOwed(address(tok)), 100e6, "totalOwed counts it");
-        assertEq(tok.balanceOf(address(router)), 0, "with nothing behind it");
-
-        // Every claim for this token reverts, genuine ones included, because safeTransfer reads the same 1 byte as failure.
-        vm.expectRevert();
-        router.claimOwed(OWNER, address(tok));
+        id = router.arm(_params(address(mv), 0, 0, _keys(pauseKey)));
     }
 
-    // ------------------------------------------------------------------ a gas-burning feed makes Stable-harbour exits expensive
+    /// v1: the owner received the tokens and they were also booked as owed, with nothing behind the record.
+    /// v2: the transfer moved the tokens, so it counts as paid and nothing is owed.
+    function test_oneByteReturnToken_thatMovesIsPaidOnce_andNotBookedAsOwed() public {
+        (ShortToken tok, bytes32 id) = _shortWorld();
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(tok.balanceOf(OWNER), 100e6, "the owner holds the payout");
+        assertEq(router.owed(OWNER, address(tok)), 0, "nothing booked as owed");
+        assertEq(router.totalOwed(address(tok)), 0, "totalOwed is zero");
+        assertEq(tok.balanceOf(address(router)), 0, "nothing left in the router");
+    }
 
-    function test_gasBurningFeedMakesAStableHarbourExitCostTwentyTimesTheGas() public {
-        MockERC20 a = new MockERC20(18);
+    /// The same token, when its transfer moves nothing: the payout is booked as owed, backed, and claimable once it moves.
+    function test_oneByteReturnToken_thatDoesntMoveIsBookedAsOwed_andClaimable() public {
+        (ShortToken tok, bytes32 id) = _shortWorld();
+        tok.setStuck(true);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(tok.balanceOf(OWNER), 0, "nothing reached the owner");
+        assertEq(router.owed(OWNER, address(tok)), 100e6, "booked as owed");
+        assertEq(tok.balanceOf(address(router)), 100e6, "and backed");
+        vm.expectRevert(abi.encodeWithSelector(SafeTransferLib.TransferFailed.selector, address(tok)));
+        router.claimOwed(OWNER, address(tok)); // still stuck: the claim fails and changes nothing
+        tok.setStuck(false);
+        vm.prank(KEEPER);
+        router.claimOwed(OWNER, address(tok));
+        assertEq(tok.balanceOf(OWNER), 100e6, "claimed for the owner");
+        assertEq(router.totalOwed(address(tok)), 0, "cleared");
+    }
+
+    // ------------------------------------------------------------------ A2-07: a hostile feed costs bounded gas
+
+    function _burnWorld(address feedA) internal returns (MockERC20 a, bytes32 id1, bytes32 id3) {
+        a = new MockERC20(18);
         MockVault vA = new MockVault(a, 1e18);
         MockVault vB = new MockVault(new MockERC20(18), 1e18);
         swap.setRate(1e6);
-        _feedAndRoute(address(a), address(new GasBurnFeed()));
-        _feedAndRoute(address(vB.assetToken()), address(new MockFeed(1e8)));
-
-        bytes32 id1 = _setup(address(0xA1A1), vA, 1e18, 1, 100);
-        bytes32 id2 = _setup(address(0xA2A2), vA, 1e18, 1, 100);
-        bytes32 id3 = _setup(address(0xA3A3), vB, 1e18, 1, 100);
+        id1 = _setupSwap(address(0xA1A1), vA, 1e18, 100, _legs(_leg(address(a), feedA)));
+        id3 = _setupSwap(
+            address(0xA3A3), vB, 1e18, 100, _legs(_leg(address(vB.assetToken()), address(new MockFeed(1e8))))
+        );
         _fireAlarm();
-
-        // Honest feed: a million gas is plenty.
-        (bool okHonest, uint256 usedHonest) = _exitWithGas(id3, 1_000_000);
-        assertTrue(okHonest, "honest feed exits at 1M gas (about 380k used)");
-
-        // Burning feed: the same exit fails at 1M gas, because the self-staticcall into the feed eats 63/64 of what is left.
-        (bool okLow,) = _exitWithGas(id1, 1_000_000);
-        assertTrue(!okLow, "burner feed: 1M gas is not enough");
-        assertEq(a.balanceOf(address(0xA1A1)), 0, "nothing paid");
-
-        // It works if the sender supplies several million gas.
-        (bool okHigh, uint256 usedHigh) = _exitWithGas(id2, 8_000_000);
-        assertTrue(okHigh, "burner feed: 8M gas works (about 7.8M used)");
-        assertEq(a.balanceOf(address(0xA2A2)), 1e18, "raw token delivered, swap skipped");
-        assertTrue(usedHigh > usedHonest * 20, "the exit burned more than 20 times the honest gas");
     }
 
-    function _feedAndRoute(address token, address feed) internal {
-        vm.startPrank(ADMIN);
-        router.setFeed(token, feed, 3600, 18);
-        router.setRoute(token, abi.encodePacked(token, uint24(500), address(stable)));
-        vm.stopPrank();
+    /// v1: a feed that burns all its gas made a Stable-harbour exit fail at 1M gas and cost over 20 times the honest gas.
+    /// v2: each feed read gets at most FEED_READ_GAS, so the same exit works at 1M gas for a bounded extra cost.
+    function test_gasBurningFeed_costsBoundedGas_andTheRawTokenIsPaid() public {
+        (MockERC20 a, bytes32 id1, bytes32 id3) = _burnWorld(address(new GasBurnFeed()));
+        (bool okHonest, uint256 usedHonest) = _exitWithGas(id3, 1_000_000);
+        assertTrue(okHonest, "honest feed exits at 1M gas");
+        (bool okBurn, uint256 usedBurn) = _exitWithGas(id1, 1_000_000);
+        assertTrue(okBurn, "burner feed: 1M gas is enough");
+        assertEq(a.balanceOf(address(0xA1A1)), 1e18, "raw token delivered, swap skipped");
+        assertTrue(usedBurn < usedHonest + 2 * router.FEED_READ_GAS(), "at most one capped read more than honest");
+    }
+
+    function test_feedBurningGasInDecimals_isCappedToo() public {
+        (MockERC20 a, bytes32 id1, bytes32 id3) = _burnWorld(address(new DecimalsBurnFeed()));
+        (, uint256 usedHonest) = _exitWithGas(id3, 1_000_000);
+        (bool ok, uint256 used) = _exitWithGas(id1, 1_000_000);
+        assertTrue(ok, "exits");
+        assertEq(a.balanceOf(address(0xA1A1)), 1e18, "raw");
+        assertTrue(used < usedHonest + 2 * router.FEED_READ_GAS(), "bounded");
+    }
+
+    function test_returnBombFeed_isNotCopied() public {
+        (MockERC20 a, bytes32 id1, bytes32 id3) = _burnWorld(address(new ReturnBombFeed()));
+        (, uint256 usedHonest) = _exitWithGas(id3, 1_000_000);
+        (bool ok, uint256 used) = _exitWithGas(id1, 1_000_000);
+        assertTrue(ok, "exits");
+        assertEq(a.balanceOf(address(0xA1A1)), 1e18, "raw: the bomb's answer is not a usable price");
+        assertTrue(used < usedHonest + 2 * router.FEED_READ_GAS(), "bounded");
     }
 
     function _exitWithGas(bytes32 id, uint256 g) internal returns (bool ok, uint256 used) {
@@ -190,7 +249,7 @@ contract RouterEdgesTest is Base {
     function _ethWorld(address wethAddr) internal returns (ExitRouter r, EthAdapter ad, MockERC20 share) {
         r = new ExitRouter(
             address(stable), wethAddr, address(swap), address(book), ADMIN, GUARD, address(stableFeed), 90_000,
-            block.timestamp + 365 days
+            block.timestamp + 365 days, new address[](0)
         );
         ad = new EthAdapter(address(r));
         vm.prank(ADMIN);
@@ -207,7 +266,8 @@ contract RouterEdgesTest is Base {
             harbour: 0,
             maxSlipBps: 0,
             termsHash: TERMS,
-            keys: new bytes32[](0)
+            keys: new bytes32[](0),
+            swaps: new ExitRouter.SwapLeg[](0)
         });
     }
 

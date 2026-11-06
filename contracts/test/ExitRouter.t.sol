@@ -21,10 +21,6 @@ contract ExitRouterTest is Base {
         t = new MockERC20(18);
         tFeed = new MockFeed(100e8); // $100
         tVault = new MockVault(t, 1e18); // 1 share = 1 token
-        vm.startPrank(ADMIN);
-        router.setFeed(address(t), address(tFeed), 3600, 18);
-        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(stable)));
-        vm.stopPrank();
     }
 
     // ---------------------------------------------------------------- arming
@@ -67,7 +63,7 @@ contract ExitRouterTest is Base {
     function test_arm_isBoundToCaller() public {
         vm.prank(ATTACKER);
         bytes32 id = router.arm(_params(address(vault), RAW, 0, _keys(pauseKey)));
-        (address owner,,,,,,,,,,,) = router.positions(id);
+        (address owner,,,,,,,,,,) = router.positions(id);
         assertTrue(owner == ATTACKER, "owner is the caller");
         assertTrue(!router.isArmed(router.positionId(OWNER, address(adapter), address(vault), 0)), "victim unarmed");
     }
@@ -174,8 +170,9 @@ contract ExitRouterTest is Base {
 
     // ---------------------------------------------------------------- swap leg
 
+    /// @dev The owner arms the token vault on the stable harbour with a leg for `t`: its feed and a direct pool.
     function _tPosition(uint16 slip) internal returns (bytes32) {
-        return _setup(OWNER, tVault, 1e18, STABLE, slip);
+        return _setupSwap(OWNER, tVault, 1e18, slip, _legs(_leg(address(t), address(tFeed))));
     }
 
     function test_swap_ownerWithinUserLimit() public {
@@ -223,10 +220,8 @@ contract ExitRouterTest is Base {
         assertEq(t.balanceOf(OWNER), 1e18, "raw");
     }
 
-    function test_swap_noRouteDeliversRaw() public {
-        vm.prank(ADMIN);
-        router.setRoute(address(t), "");
-        bytes32 id = _tPosition(1000);
+    function test_swap_noLegDeliversRaw() public {
+        bytes32 id = _setup(OWNER, tVault, 1e18, STABLE, 1000); // stable harbour, but no leg for the token
         swap.setRate(100e6);
         vm.prank(OWNER);
         router.exit(id, bytes32(0), 0);
@@ -261,10 +256,68 @@ contract ExitRouterTest is Base {
         assertEq(t.allowance(address(router), address(swap)), 0, "approval cleared");
     }
 
-    function test_setRoute_mustEndInStable() public {
-        vm.prank(ADMIN);
+    function test_arm_legMustEndInStable() public {
+        ExitRouter.SwapLeg memory l = _leg(address(t), address(tFeed));
+        l.path = abi.encodePacked(address(t), uint24(500), address(weth));
         vm.expectRevert(ExitRouter.BadRoute.selector);
-        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(weth)));
+        router.arm(_swapParams(address(tVault), 100, _keys(pauseKey), _legs(l)));
+    }
+
+    function test_arm_storesLegsAndEmitsOnePerLeg() public {
+        MockERC20 u = new MockERC20(18);
+        ExitRouter.SwapLeg[] memory legs = new ExitRouter.SwapLeg[](2);
+        legs[0] = _leg(address(t), address(tFeed));
+        legs[1] = _leg(address(u), address(stableFeed));
+        legs[1].heartbeat = 2 days;
+        legs[1].tokenDecimals = 6;
+        bytes32 id = router.positionId(OWNER, address(adapter), address(tVault), 0);
+        tVault.deposit(OWNER, 1e18);
+        vm.prank(OWNER);
+        tVault.approve(address(router), type(uint256).max);
+        vm.expectEmit(true, true, false, true);
+        emit ExitRouter.SwapLegSet(id, address(t), address(tFeed), 3600, 18, legs[0].path);
+        vm.expectEmit(true, true, false, true);
+        emit ExitRouter.SwapLegSet(id, address(u), address(stableFeed), 2 days, 6, legs[1].path);
+        vm.prank(OWNER);
+        router.arm(_swapParams(address(tVault), 100, _keys(pauseKey), legs));
+        ExitRouter.SwapLeg[] memory got = router.swapsOf(id);
+        assertEq(got.length, 2, "two legs stored");
+        assertTrue(got[1].token == address(u) && got[1].heartbeat == 2 days && got[1].tokenDecimals == 6, "second leg");
+        assertTrue(keccak256(got[0].path) == keccak256(legs[0].path), "path stored");
+    }
+
+    function test_reArm_replacesTheLegs() public {
+        bytes32 id = _tPosition(1000);
+        assertEq(router.swapsOf(id).length, 1, "one leg");
+        vm.prank(OWNER);
+        router.arm(_params(address(tVault), RAW, 0, _keys(pauseKey))); // re-armed raw, with no legs
+        assertEq(router.swapsOf(id).length, 0, "legs gone");
+        swap.setRate(100e6);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw, the old leg no longer applies");
+    }
+
+    function test_legOfAnotherPositionIsNeverUsed() public {
+        _setupSwap(KEEPER, tVault, 1e18, 1000, _legs(_leg(address(t), address(tFeed)))); // someone else's leg for t
+        bytes32 id = _setup(OWNER, tVault, 1e18, STABLE, 1000); // the owner names none
+        swap.setRate(100e6);
+        vm.prank(OWNER);
+        router.exit(id, bytes32(0), 0);
+        assertEq(t.balanceOf(OWNER), 1e18, "raw");
+        assertEq(stable.balanceOf(OWNER), 0, "no swap");
+    }
+
+    function test_quoteMinOut_isAPublicViewOverTheLegsInputs() public view {
+        (bool ok, uint256 minOut) = router.quoteMinOut(address(tFeed), 3600, 18, 1e18, 100);
+        assertTrue(ok, "priced");
+        assertEq(minOut, 99e6, "$100 less 1%");
+        (ok,) = router.quoteMinOut(address(tFeed), 3600, 18, 1e18, 1001);
+        assertTrue(!ok, "slip above the ceiling");
+        (ok,) = router.quoteMinOut(address(0), 3600, 18, 1e18, 100);
+        assertTrue(!ok, "no feed");
+        (ok,) = router.quoteMinOut(address(tFeed), 3600, 37, 1e18, 100);
+        assertTrue(!ok, "decimals above the ceiling");
     }
 
     // ---------------------------------------------------------------- revocation
@@ -323,7 +376,7 @@ contract ExitRouterTest is Base {
         vm.prank(ATTACKER);
         rv.approve(address(router), type(uint256).max);
         vm.prank(ATTACKER);
-        bytes32 id = router.arm(_params(address(rv), RAW, 0, _keys(pauseKey)));
+        bytes32 id = router.arm(_params(address(rv), RAW, 0, new bytes32[](0))); // pauseKey is live, so not armable now
 
         vm.prank(ATTACKER);
         router.exit(id, bytes32(0), 0); // succeeds, so the attempts below stay recorded
@@ -483,12 +536,7 @@ contract ExitRouterTest is Base {
         vm.prank(ADMIN);
         vm.expectRevert(ExitRouter.NotAdmin.selector);
         router.setGuardian(address(1));
-        vm.prank(ADMIN);
-        vm.expectRevert(ExitRouter.NotAdmin.selector);
-        router.setFeed(address(t), address(tFeed), 1, 18);
-        vm.prank(ADMIN);
-        vm.expectRevert(ExitRouter.NotAdmin.selector);
-        router.setRoute(address(t), "");
+
         vm.prank(GUARD);
         vm.expectRevert(ExitRouter.NotGuardian.selector);
         router.setArmingPaused(true);

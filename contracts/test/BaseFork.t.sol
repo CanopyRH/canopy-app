@@ -52,15 +52,16 @@ contract BaseForkTest {
 
     function setUp() public {
         if (block.chainid != 8453) return;
-        book = new AlarmBook(address(this));
+        address[] memory ws = new address[](2);
+        ws[0] = vm.addr(PK_A);
+        ws[1] = vm.addr(PK_B);
+        book = new AlarmBook(address(this), ws);
         router = new ExitRouter(
             address(USDC), WETH, SWAP, address(book), address(this), address(this), USDC_FEED, 90_000,
-            block.timestamp + 365 days
+            block.timestamp + 365 days, new address[](0)
         );
         adapter = new ERC4626Adapter(address(router));
         router.setAdapter(address(adapter), true);
-        book.setWatcher(vm.addr(PK_A), true);
-        book.setWatcher(vm.addr(PK_B), true);
         key = book.register(
             AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: address(0xBA5E), threshold: 2, window: 0, a: 0, b: 0})
         );
@@ -80,6 +81,12 @@ contract BaseForkTest {
     }
 
     function _arm(address v, address h, uint8 harbour, uint16 slip) internal returns (bytes32 id) {
+        ExitRouter.SwapLeg[] memory legs = new ExitRouter.SwapLeg[](harbour == 1 ? 1 : 0);
+        if (harbour == 1) {
+            legs[0] = ExitRouter.SwapLeg({
+                token: WETH, feed: ETH_FEED, heartbeat: 3600, tokenDecimals: 18, path: abi.encodePacked(WETH, uint24(500), address(USDC))
+            });
+        }
         vm.prank(h);
         IERC20(v).approve(address(router), type(uint256).max);
         vm.prank(h);
@@ -91,7 +98,8 @@ contract BaseForkTest {
                 harbour: harbour,
                 maxSlipBps: slip,
                 termsHash: keccak256("terms-v1"),
-                keys: _keys()
+                keys: _keys(),
+                swaps: legs
             })
         );
     }
@@ -182,13 +190,11 @@ contract BaseForkTest {
     /// @dev Real Uniswap pool and real feed: exits a WETH vault into USDC.
     function test_base_swapOnRealPool() public {
         if (block.chainid != 8453) return;
-        router.setFeed(WETH, ETH_FEED, 3600, 18);
-        router.setRoute(WETH, abi.encodePacked(WETH, uint24(500), address(USDC)));
         address v = address(bytes20(hex"a0e430870c4604ccfc7b38ca7845b1ff653d0ff1"));
         address h = address(bytes20(hex"a9911182421b6bad13d188914d602f7924de840e"));
         uint256 shares = IERC20(v).balanceOf(h);
         uint256 wethOut = IERC4626(v).convertToAssets(shares);
-        (bool ok, uint256 minOut) = router.quoteMinOut(WETH, wethOut, 100);
+        (bool ok, uint256 minOut) = router.quoteMinOut(ETH_FEED, 3600, 18, wethOut, 100);
         require(ok, "quote ok");
         bytes32 id = _arm(v, h, 1, 1000);
         _fire();

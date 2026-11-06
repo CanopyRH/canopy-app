@@ -72,15 +72,22 @@ contract AlarmAttackTest is Base {
     RealVault internal rv;
     FlashAttacker internal fa;
 
+    function _initialWatchers() internal override returns (address[] memory) {
+        return _addrs(vm.addr(PK_A), vm.addr(PK_B));
+    }
+
     function setUp() public override {
         super.setUp();
         asset = new MockERC20(18);
         rv = new RealVault(asset);
         fa = new FlashAttacker();
-        vm.startPrank(ADMIN);
-        book.setWatcher(vm.addr(PK_A), true);
-        book.setWatcher(vm.addr(PK_B), true);
-        vm.stopPrank();
+    }
+
+    /// @dev A DRAIN fire needs the drop seen twice, DRAIN_CONFIRM apart: start the confirmation, wait, fire.
+    function _confirmDrain(bytes32 key) internal returns (bool) {
+        assertTrue(!book.poke(key), "the first poke only starts the confirmation");
+        vm.warp(block.timestamp + book.DRAIN_CONFIRM());
+        return book.poke(key);
     }
 
     function _deposit(address who, uint256 a) internal {
@@ -135,7 +142,7 @@ contract AlarmAttackTest is Base {
 
     function _reallyDrain(bytes32 drain) internal {
         rv.exploitDrain(ATTACKER, 800e18);
-        assertTrue(book.poke(drain), "a real drain fires");
+        assertTrue(_confirmDrain(drain), "a real drain fires");
     }
 
     function test_flashDeposit_cantRaiseTheBaseline() public {
@@ -168,7 +175,7 @@ contract AlarmAttackTest is Base {
         book.checkpoint(key); // a keeper sample, in the same period
         vm.warp(block.timestamp + WINDOW / 2 - 600);
         book.checkpoint(key);
-        (,,,, uint256 snap) = book.state(key);
+        (,,,, uint256 snap,,) = book.state(key);
         assertEq(snap, 1000e18, "the inflated reading never became the baseline");
         assertTrue(!book.check(key), "healthy");
     }
@@ -194,7 +201,7 @@ contract AlarmAttackTest is Base {
         book.checkpoint(key);
         rv.exploitDrain(ATTACKER, 187e18);
         assertEq(rv.totalAssets(), 564e18, "43.6% gone");
-        assertTrue(book.poke(key), "the baseline didn't move, so it fires");
+        assertTrue(_confirmDrain(key), "the baseline didn't move, so it fires");
     }
 
     function test_midDrainRoll_cantHideADrain() public {
@@ -205,7 +212,7 @@ contract AlarmAttackTest is Base {
         rv.exploitDrain(ATTACKER, 249e18);
         book.checkpoint(key); // rolls in the middle of the drain
         rv.exploitDrain(ATTACKER, 187e18);
-        assertTrue(book.poke(key), "the roll took the earlier low, not the drained value");
+        assertTrue(_confirmDrain(key), "the roll took the earlier low, not the drained value");
     }
 
     function test_flashDeposit_cantResetATrippedDrain() public {
@@ -240,7 +247,7 @@ contract AlarmAttackTest is Base {
         _deposit(KEEPER, 1000e18);
         _period(key);
         _period(key);
-        (,,,, uint256 snap) = book.state(key);
+        (,,,, uint256 snap,,) = book.state(key);
         assertEq(snap, 2000e18, "lasting deposits raise the baseline after a full period");
     }
 
@@ -251,7 +258,7 @@ contract AlarmAttackTest is Base {
         _period(drain);
         vm.warp(block.timestamp + 1);
         rv.exploitDrain(ATTACKER, 300e18);
-        assertTrue(book.poke(drain), "an honest large withdrawal fires the drain part");
+        assertTrue(_confirmDrain(drain), "an honest large withdrawal fires the drain part");
         asset.mint(address(rv), 300e18);
 
         vm.warp(block.timestamp + WINDOW + 1); // past the old one-hour window
@@ -286,11 +293,22 @@ contract AlarmAttackTest is Base {
         book.fireByQuorum(key, EVIDENCE, dl, s, g);
     }
 
+    /// @dev v2: a key that fired in the last day can't be armed at all. Once it can be armed again, the old fire still
+    /// doesn't authorize anyone.
     function test_alarmFiredBeforeArming_doesntAuthorizeAThirdParty() public {
         _fireAlarm();
         vm.warp(block.timestamp + 1 hours);
-        bytes32 id = _setup(OWNER, vault, 100e18, 0, 0);
-        vm.warp(block.timestamp + 1);
+        vault.deposit(OWNER, 100e18);
+        vm.prank(OWNER);
+        vault.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.AlarmNotClear.selector, pauseKey));
+        router.arm(_params(address(vault), 0, 0, _keys(pauseKey)));
+
+        pausable.setPaused(false);
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(OWNER);
+        bytes32 id = router.arm(_params(address(vault), 0, 0, _keys(pauseKey)));
         vm.prank(ATTACKER);
         vm.expectRevert(ExitRouter.AlarmNotLive.selector);
         router.exit(id, pauseKey, 0);
@@ -313,11 +331,11 @@ contract AlarmAttackTest is Base {
 
         vm.warp(block.timestamp + 1);
         _deposit(OWNER, 100e18);
-        bytes32 id = _arm(OWNER, _keys(key));
-        vm.warp(block.timestamp + 1);
-        vm.prank(ATTACKER);
-        vm.expectRevert(ExitRouter.AlarmNotLive.selector);
-        router.exit(id, key, 0);
+        vm.prank(OWNER);
+        rv.approve(address(router), type(uint256).max);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(ExitRouter.AlarmNotClear.selector, key));
+        router.arm(_params(address(rv), 0, 0, _keys(key))); // v2: the poisoned key is tripped, so it can't be armed
     }
 
     function test_disarmedOwner_canStillExit_whileArmingIsPaused() public {
@@ -350,80 +368,17 @@ contract AlarmAttackTest is Base {
         router.exit(keccak256("nothing"), bytes32(0), 0);
     }
 
-    function _tokenPosition() internal returns (MockERC20 t, MockVault tv, bytes32 id) {
-        t = new MockERC20(18);
-        tv = new MockVault(t, 1e18);
-        tv.deposit(OWNER, 100e18);
-        vm.prank(OWNER);
-        tv.approve(address(router), type(uint256).max);
-        vm.prank(OWNER);
-        id = router.arm(_params(address(tv), 1, 100, _keys(pauseKey)));
-    }
-
-    function test_feedChangeAfterArming_cantReachAnArmedPosition() public {
-        (MockERC20 t, MockVault tv, bytes32 id) = _tokenPosition();
-        MockFeed low = new MockFeed(1e3);
-        vm.startPrank(ADMIN);
-        router.setFeed(address(t), address(low), type(uint32).max, 18);
-        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(0xE71), uint24(500), address(stable)));
-        vm.stopPrank();
-        swap.setRate(1e3);
-        vm.warp(block.timestamp + 1);
-        _fireAlarm();
-        vm.prank(KEEPER);
-        router.exit(id, pauseKey, 0);
-        assertEq(t.balanceOf(OWNER), 100e18, "the raw token, not the hostile swap");
-        assertEq(stable.balanceOf(OWNER), 0, "nothing swapped");
-        assertEq(tv.balanceOf(OWNER), 0, "out");
-    }
-
-    function _onlyFeed() internal {
-        vm.prank(ADMIN);
-        router.setFeed(address(0x1), address(stableFeed), 3600, 18);
-    }
-
-    function _onlyRoute() internal {
-        vm.prank(ADMIN);
-        router.setRoute(address(0x1), "");
-    }
-
-    function test_aFeedChangeAlone_turnsOffSwapsUntilReArm() public {
-        MockERC20 t = _swappable();
-        _onlyFeed();
-        _exitSwappable();
-        assertEq(t.balanceOf(OWNER), 100e18, "raw");
-    }
-
-    function test_aRouteChangeAlone_turnsOffSwapsUntilReArm() public {
-        MockERC20 t = _swappable();
-        _onlyRoute();
-        _exitSwappable();
-        assertEq(t.balanceOf(OWNER), 100e18, "raw");
-    }
-
-    function test_withNoChange_theSwapRuns() public {
-        MockERC20 t = _swappable();
-        _exitSwappable();
-        assertEq(t.balanceOf(OWNER), 0, "swapped");
-    }
+    // ------------------------------------------------------------------ swap legs belong to the owner (M-1, A2-07)
 
     bytes32 internal swapPos;
 
-    /// @dev A position armed for the stablecoin harbour after a working feed and route are in place.
-    function _swappable() internal returns (MockERC20 t) {
+    /// @dev A position armed on the stable harbour with the owner's own leg for a fresh token.
+    function _swappable(address feed) internal returns (MockERC20 t) {
         t = new MockERC20(18);
         MockVault tv = new MockVault(t, 1e18);
-        vm.startPrank(ADMIN);
-        router.setFeed(address(t), address(stableFeed), 3600, 18);
-        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(stable)));
-        vm.stopPrank();
         stableFeed.set(1e8, block.timestamp);
         swap.setRate(1e6);
-        tv.deposit(OWNER, 100e18);
-        vm.prank(OWNER);
-        tv.approve(address(router), type(uint256).max);
-        vm.prank(OWNER);
-        swapPos = router.arm(_params(address(tv), 1, 100, _keys(pauseKey)));
+        swapPos = _setupSwap(OWNER, tv, 100e18, 100, _legs(_leg(address(t), feed)));
     }
 
     function _exitSwappable() internal {
@@ -433,18 +388,34 @@ contract AlarmAttackTest is Base {
         router.exit(swapPos, pauseKey, 0);
     }
 
-    function test_badFeed_deliversRaw_forNoCodeAndOverflow() public {
+    function test_withTheOwnersLeg_theSwapRuns() public {
+        MockERC20 t = _swappable(address(stableFeed));
+        _exitSwappable();
+        assertEq(t.balanceOf(OWNER), 0, "swapped");
+        assertEq(stable.balanceOf(OWNER), 100e6, "at the oracle price");
+    }
+
+    function test_aStaleLegFeed_deliversRaw() public {
+        MockFeed f = new MockFeed(1e8);
+        MockERC20 t = _swappable(address(f));
+        f.set(1e8, block.timestamp - 3601);
+        _exitSwappable();
+        assertEq(t.balanceOf(OWNER), 100e18, "raw");
+    }
+
+    function test_badFeed_rejectedAtArm_andOverflowDeliversRaw() public {
         MockERC20 t = new MockERC20(18);
         MockVault tv = new MockVault(t, 1e18);
-        vm.startPrank(ADMIN);
-        router.setRoute(address(t), abi.encodePacked(address(t), uint24(500), address(stable)));
+        ExitRouter.SwapLeg memory l = _leg(address(t), address(0xDEAD));
         vm.expectRevert(ExitRouter.BadFeed.selector);
-        router.setFeed(address(t), address(0xDEAD), 3600, 18);
+        router.arm(_swapParams(address(tv), 100, _keys(pauseKey), _legs(l)));
+        l.feed = address(stableFeed);
+        l.tokenDecimals = 37;
         vm.expectRevert(ExitRouter.BadFeed.selector);
-        router.setFeed(address(t), address(stableFeed), 3600, 37);
-        router.setFeed(address(t), address(new MockFeed(type(int256).max)), 3600, 18);
-        vm.stopPrank();
-        bytes32 id = _setup(OWNER, tv, 1e18, 1, 100);
+        router.arm(_swapParams(address(tv), 100, _keys(pauseKey), _legs(l)));
+        l.tokenDecimals = 18;
+        l.feed = address(new MockFeed(type(int256).max)); // a price whose arithmetic overflows
+        bytes32 id = _setupSwap(OWNER, tv, 1e18, 100, _legs(l));
         vm.prank(OWNER);
         router.exit(id, bytes32(0), 0);
         assertEq(t.balanceOf(OWNER), 1e18, "raw delivery, not a revert");

@@ -17,16 +17,15 @@ contract AlarmBookTest is Base {
     bytes32 internal quorumKey;
     bytes32 internal constant EVIDENCE = keccak256("evidence");
 
+    function _initialWatchers() internal override returns (address[] memory) {
+        return _addrs(vm.addr(PK_A), vm.addr(PK_B), vm.addr(PK_C));
+    }
+
     function setUp() public override {
         super.setUp();
         wA = vm.addr(PK_A);
         wB = vm.addr(PK_B);
         wC = vm.addr(PK_C);
-        vm.startPrank(ADMIN);
-        book.setWatcher(wA, true);
-        book.setWatcher(wB, true);
-        book.setWatcher(wC, true);
-        vm.stopPrank();
         quorumKey = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
     }
 
@@ -113,7 +112,9 @@ contract AlarmBookTest is Base {
         vm.warp(block.timestamp + 1800);
         book.checkpoint(k);
         assertTrue(book.check(k), "snapshot does not refresh while tripped");
-        assertTrue(book.poke(k), "fired");
+        assertTrue(!book.poke(k), "the first tripped poke only starts the confirmation");
+        vm.warp(block.timestamp + 60);
+        assertTrue(book.poke(k), "fired when seen again a minute later");
     }
 
     function test_drain_snapshotExpires() public {
@@ -230,7 +231,7 @@ contract AlarmBookTest is Base {
 
     function test_quorum_removedWatcherFails() public {
         vm.prank(ADMIN);
-        book.setWatcher(wB, false);
+        book.setWatcher(wB, 0);
         uint64 dl = uint64(block.timestamp + 600);
         bytes32 d = book.attestDigest(quorumKey, EVIDENCE, dl);
         (address[] memory s, bytes[] memory g) = _sorted2(PK_A, PK_B, d);
@@ -268,7 +269,7 @@ contract AlarmBookTest is Base {
     function test_setWatcher_onlyAdmin() public {
         vm.prank(ATTACKER);
         vm.expectRevert(AlarmBook.NotAdmin.selector);
-        book.setWatcher(ATTACKER, true);
+        book.setWatcher(ATTACKER, uint64(block.timestamp + 1 days));
     }
 
     function test_quorumAlarm_endToEndExit() public {
@@ -296,7 +297,7 @@ contract TimelockTest is Base {
         lock = new Timelock(ADMIN, 48 hours);
         locked = new ExitRouter(
             address(stable), address(weth), address(swap), address(book), address(lock), GUARD,
-            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START
+            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START, new address[](0)
         );
     }
 
@@ -314,7 +315,7 @@ contract TimelockTest is Base {
         Timelock now0 = new Timelock(ADMIN, 0);
         ExitRouter r = new ExitRouter(
             address(stable), address(weth), address(swap), address(book), address(now0), GUARD,
-            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START
+            address(stableFeed), 90_000, block.timestamp + EXPIRY_FROM_START, new address[](0)
         );
         vm.prank(ADMIN);
         now0.schedule(address(r), 0, _data(), 0);

@@ -14,17 +14,28 @@ import {AdapterBase} from "./AdapterBase.sol";
 contract ERC4626Adapter is IExitAdapter, AdapterBase {
     using SafeTransferLib for address;
 
+    /// @param router The ExitRouter this adapter acts for.
     constructor(address router) AdapterBase(router) {}
 
+    /// @notice The router pulls the vault's own shares.
+    /// @param target The vault.
+    /// @return asset The vault (its share token).
+    /// @return isNft Always false.
     function positionAsset(address target) external pure returns (address asset, bool isNft) {
         return (target, false);
     }
 
+    /// @notice The vault's underlying asset is the only output.
+    /// @param target The vault.
+    /// @return tokens The vault's asset.
     function outputs(address target, uint256) external view returns (address[] memory tokens) {
         tokens = new address[](1);
         tokens[0] = IERC4626(target).asset();
     }
 
+    /// @notice Redeem `shares` held by this adapter to the router, and send back any shares left unredeemed. Router only.
+    /// @param target The vault.
+    /// @param shares The shares the router moved here.
     function unwind(address target, uint256 shares) external onlyRouter {
         bool done;
         try IERC4626(target).redeem(shares, ROUTER, address(this)) {

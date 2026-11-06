@@ -5,17 +5,26 @@ pragma solidity 0.8.28;
 /// @dev `tryTransfer` never reverts and copies at most 32 bytes of return data, so a token
 /// that reverts or returns a huge payload cannot block an in-kind exit.
 library SafeTransferLib {
+    /// @notice A transfer out failed.
+    /// @param token The token.
     error TransferFailed(address token);
+    /// @notice A transferFrom failed.
+    /// @param token The token.
     error TransferFromFailed(address token);
-    error ApproveFailed(address token);
 
     function safeTransfer(address token, address to, uint256 amount) internal {
         if (!tryTransfer(token, to, amount)) revert TransferFailed(token);
     }
 
+    /// @dev Success is: the call did not revert, and it returned nothing or a 32-byte true. A token that returns 1 to 31
+    /// bytes gives no clear answer, so for it the outcome follows this contract's own balance: the transfer counts as
+    /// done only if the balance fell by at least `amount`. That way tokens that moved are never also booked as owed, and
+    /// tokens that didn't move are.
     function tryTransfer(address token, address to, uint256 amount) internal returns (bool success) {
         if (token.code.length == 0) return false;
+        uint256 before = balanceOf(token, address(this));
         bytes memory data = abi.encodeWithSelector(0xa9059cbb, to, amount);
+        bool ambiguous;
         assembly ("memory-safe") {
             let ok := call(gas(), token, 0, add(data, 0x20), mload(data), 0x00, 0x20)
             switch ok
@@ -23,8 +32,16 @@ library SafeTransferLib {
             default {
                 switch returndatasize()
                 case 0 { success := 1 }
-                default { success := and(gt(returndatasize(), 0x1f), eq(mload(0x00), 1)) }
+                default {
+                    switch gt(returndatasize(), 0x1f)
+                    case 1 { success := eq(mload(0x00), 1) }
+                    default { ambiguous := 1 }
+                }
             }
+        }
+        if (ambiguous) {
+            uint256 afterBal = balanceOf(token, address(this));
+            success = afterBal <= before && before - afterBal >= amount;
         }
     }
 

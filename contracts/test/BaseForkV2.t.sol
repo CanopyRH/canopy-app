@@ -140,15 +140,16 @@ contract BaseForkV2Test {
 
     function setUp() public {
         if (block.chainid != 8453) return;
-        book = new AlarmBook(address(this));
+        address[] memory ws = new address[](2);
+        ws[0] = vm.addr(PK_A);
+        ws[1] = vm.addr(PK_B);
+        book = new AlarmBook(address(this), ws);
         router = new ExitRouter(
             address(USDC), WETH, SWAP, address(book), address(this), address(this), USDC_FEED, 90_000,
-            block.timestamp + 365 days
+            block.timestamp + 365 days, new address[](0)
         );
         adapter = new ERC4626Adapter(address(router));
         router.setAdapter(address(adapter), true);
-        book.setWatcher(vm.addr(PK_A), true);
-        book.setWatcher(vm.addr(PK_B), true);
         key = book.register(
             AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: address(0xBA5E), threshold: 2, window: 0, a: 0, b: 0})
         );
@@ -171,7 +172,8 @@ contract BaseForkV2Test {
                 harbour: 0,
                 maxSlipBps: 0,
                 termsHash: keccak256("terms-v1"),
-                keys: _keys()
+                keys: _keys(),
+                swaps: new ExitRouter.SwapLeg[](0)
             })
         );
     }

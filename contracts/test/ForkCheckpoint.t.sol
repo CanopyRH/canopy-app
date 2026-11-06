@@ -96,7 +96,7 @@ contract ForkCheckpointTest {
 
     function setUp() public {
         if (block.chainid != 4663) return;
-        book = new AlarmBook(address(this));
+        book = new AlarmBook(address(this), new address[](0));
     }
 
     // ------------------------------------------------------------------ the test
@@ -132,7 +132,7 @@ contract ForkCheckpointTest {
     }
 
     function _mark(bytes32 key) internal view returns (uint256 b) {
-        (,,, b,) = book.state(key);
+        (,,, b,,,) = book.state(key);
     }
 
     function _attempt(address v, uint256 attempt, bool aged) internal returns (Result memory r) {

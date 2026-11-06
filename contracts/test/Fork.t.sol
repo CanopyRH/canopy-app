@@ -5,6 +5,38 @@ import {ExitRouter} from "../src/ExitRouter.sol";
 import {AlarmBook} from "../src/AlarmBook.sol";
 import {ERC4626Adapter} from "../src/adapters/ERC4626Adapter.sol";
 import {IERC20, IERC4626} from "../src/interfaces/IExternal.sol";
+import {Deploy} from "../script/Deploy.s.sol";
+
+/// @dev Stands in for a multisig: Deploy refuses admins without code on mainnet.
+contract ForkAdmin {}
+
+/// @notice Deploys v2 on the fork exactly as script/Deploy.s.sol does on mainnet, with its validate and check.
+library ForkDeploy {
+    address internal constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
+    address internal constant WETH = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;
+    address internal constant SWAP = 0xCaf681a66D020601342297493863E78C959E5cb2;
+    address internal constant FEED = 0x8bEeE3503F6860D5dac4cE26b5eEe92982951c2e;
+
+    function run(address[] memory watchers) internal returns (Deploy.Deployed memory d) {
+        Deploy dep = new Deploy();
+        Deploy.Config memory c = Deploy.Config({
+            stable: USDG,
+            weth: WETH,
+            swapRouter: SWAP,
+            stableFeed: FEED,
+            proposer: address(new ForkAdmin()),
+            guardian: address(new ForkAdmin()),
+            heartbeat: 90_000,
+            adminExpiry: block.timestamp + 365 days,
+            timelockDelay: 0,
+            allowEoaAdmin: false,
+            watchers: watchers
+        });
+        dep.validate(c);
+        d = dep.deploy(c);
+        dep.check(c, d);
+    }
+}
 
 interface ForkVm {
     function prank(address) external;
@@ -81,15 +113,13 @@ contract ForkTest {
 
     function setUp() public {
         if (block.chainid != 4663) return;
-        book = new AlarmBook(address(this));
-        router = new ExitRouter(
-            address(USDG), WETH, SWAP, address(book), address(this), address(this), FEED, 90_000,
-            block.timestamp + 365 days
-        );
-        adapter = new ERC4626Adapter(address(router));
-        router.setAdapter(address(adapter), true);
-        book.setWatcher(vm.addr(PK_A), true);
-        book.setWatcher(vm.addr(PK_B), true);
+        address[] memory ws = new address[](2);
+        ws[0] = vm.addr(PK_A);
+        ws[1] = vm.addr(PK_B);
+        Deploy.Deployed memory d = ForkDeploy.run(ws);
+        book = d.book;
+        router = d.router;
+        adapter = d.adapter;
         key = book.register(
             AlarmBook.Detector({kind: AlarmBook.Kind.QUORUM, target: address(VAULT), threshold: 2, window: 0, a: 0, b: 0})
         );
@@ -112,7 +142,8 @@ contract ForkTest {
                 harbour: 0,
                 maxSlipBps: 0,
                 termsHash: keccak256("terms-v1"),
-                keys: _keys()
+                keys: _keys(),
+                swaps: new ExitRouter.SwapLeg[](0)
             })
         );
     }
@@ -356,7 +387,7 @@ contract ForkTest {
             bytes32 id = router.arm(
                 ExitRouter.ArmParams({
                     adapter: address(adapter), target: v, tokenId: 0, harbour: 0, maxSlipBps: 0,
-                    termsHash: keccak256("terms-v1"), keys: ks
+                    termsHash: keccak256("terms-v1"), keys: ks, swaps: new ExitRouter.SwapLeg[](0)
                 })
             );
             bytes32 saved = key;

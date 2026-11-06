@@ -5,6 +5,7 @@ pragma solidity 0.8.28;
 abstract contract ReentrancyGuard {
     uint256 private _status; // 0/1 = not entered, 2 = entered
 
+    /// @notice A guarded function was entered again before it returned.
     error Reentrancy();
 
     modifier nonReentrant() {

@@ -15,6 +15,12 @@ interface Vm {
     function expectRevert(bytes calldata) external;
     function expectRevert() external;
     function addr(uint256) external returns (address);
+    function expectEmit() external;
+    function expectEmit(bool, bool, bool, bool) external;
+    function getNonce(address) external view returns (uint64);
+    function computeCreateAddress(address, uint256) external pure returns (address);
+    function etch(address, bytes calldata) external;
+    function chainId(uint256) external;
     function sign(uint256, bytes32) external returns (uint8, bytes32, bytes32);
     function assume(bool) external;
     function deal(address, uint256) external;
@@ -50,7 +56,7 @@ abstract contract Base {
         weth = new MockERC20(18);
         stableFeed = new MockFeed(1e8);
         swap = new MockSwapRouter(stable);
-        book = new AlarmBook(ADMIN);
+        book = new AlarmBook(ADMIN, _initialWatchers());
         router = new ExitRouter(
             address(stable),
             address(weth),
@@ -60,7 +66,8 @@ abstract contract Base {
             GUARD,
             address(stableFeed),
             90_000,
-            block.timestamp + EXPIRY_FROM_START
+            block.timestamp + EXPIRY_FROM_START,
+            new address[](0)
         );
         adapter = new ERC4626Adapter(address(router));
         vm.prank(ADMIN);
@@ -68,6 +75,46 @@ abstract contract Base {
         vault = new MockVault(stable, 1e6); // 1 share = 1 USD
         pausable = new MockPausable();
         pauseKey = book.register(_detector(AlarmBook.Kind.PAUSED, address(pausable), 0, 0, 0, 0));
+    }
+
+    /// @dev Watchers active from the AlarmBook's deployment. None by default.
+    function _initialWatchers() internal virtual returns (address[] memory) {
+        return new address[](0);
+    }
+
+    function _addrs(address a, address b) internal pure returns (address[] memory r) {
+        r = new address[](2);
+        r[0] = a;
+        r[1] = b;
+    }
+
+    function _addrs(address a, address b, address c) internal pure returns (address[] memory r) {
+        r = new address[](3);
+        r[0] = a;
+        r[1] = b;
+        r[2] = c;
+    }
+
+    /// @dev A one-year watcher approval, as the admin, that becomes active after the two-day delay.
+    function _approveWatcher(address w) internal {
+        vm.prank(ADMIN);
+        book.setWatcher(w, uint64(block.timestamp + 365 days));
+    }
+
+    /// @dev A one-hop swap leg for `token`, priced by `feed`, through a 0.05% pool straight to the stablecoin.
+    function _leg(address token, address feed) internal view returns (ExitRouter.SwapLeg memory) {
+        return ExitRouter.SwapLeg({
+            token: token,
+            feed: feed,
+            heartbeat: 3600,
+            tokenDecimals: 18,
+            path: abi.encodePacked(token, uint24(500), address(stable))
+        });
+    }
+
+    function _legs(ExitRouter.SwapLeg memory l) internal pure returns (ExitRouter.SwapLeg[] memory a) {
+        a = new ExitRouter.SwapLeg[](1);
+        a[0] = l;
     }
 
     function _detector(AlarmBook.Kind k, address t, uint256 th, uint32 w, bytes32 a, bytes32 b)
@@ -95,8 +142,30 @@ abstract contract Base {
             harbour: harbour,
             maxSlipBps: slip,
             termsHash: TERMS,
-            keys: keys
+            keys: keys,
+            swaps: new ExitRouter.SwapLeg[](0)
         });
+    }
+
+    function _swapParams(address target, uint16 slip, bytes32[] memory keys, ExitRouter.SwapLeg[] memory swaps)
+        internal
+        view
+        returns (ExitRouter.ArmParams memory p)
+    {
+        p = _params(target, 1, slip, keys);
+        p.swaps = swaps;
+    }
+
+    /// @dev Deposits `shares`, approves the router and arms on the stable harbour with the given swap legs and pauseKey.
+    function _setupSwap(address who, MockVault v, uint256 shares, uint16 slip, ExitRouter.SwapLeg[] memory swaps)
+        internal
+        returns (bytes32 posId)
+    {
+        v.deposit(who, shares);
+        vm.prank(who);
+        v.approve(address(router), type(uint256).max);
+        vm.prank(who);
+        posId = router.arm(_swapParams(address(v), slip, _keys(pauseKey), swaps));
     }
 
     /// @dev Deposits `shares`, approves the router and arms with pauseKey.
