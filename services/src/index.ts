@@ -41,6 +41,11 @@ const onRobinhood = env.CHAIN_ID === ROBINHOOD.chainId;
 const parts = chainParts(env.CHAIN_ID);
 const confirmations = env.CONFIRMATIONS ?? parts.confirmations;
 
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+let stopped = false;
+/** The web server, when this process runs the api or bot role. */
+export let server: ReturnType<typeof Bun.serve> | undefined;
+
 /** Runs a loop forever. One failed pass is logged and retried; it never takes the process down. */
 function every(baseMs: number, name: string, fn: () => Promise<unknown>) {
   const ms = baseMs * env.LOOP_SCALE;
@@ -50,9 +55,17 @@ function every(baseMs: number, name: string, fn: () => Promise<unknown>) {
     } catch (e) {
       console.error(name, (e as Error).message);
     }
-    setTimeout(tick, ms);
+    if (!stopped) timers.set(name, setTimeout(tick, ms));
   };
   void tick();
+}
+
+/** Ends every loop and the web server. Only tests call this: a running service is stopped by its host. */
+export function stop() {
+  stopped = true;
+  for (const t of timers.values()) clearTimeout(t);
+  timers.clear();
+  server?.stop(true);
 }
 
 await migrate(db);
@@ -307,6 +320,6 @@ if (run("api") || run("bot")) {
       return { chainId: env.CHAIN_ID, tip: tip.toString(), lagBlocks: cursor === null ? null : Number(tip > cursor ? tip - cursor : 0n), watchersApproved: watchers.length, ...(await r.health(now())) };
     },
   });
-  Bun.serve({ port: env.PORT, fetch: app.fetch });
+  server = Bun.serve({ port: env.PORT, fetch: app.fetch });
   if (env.BOT_MODE === "polling") void bot.start();
 }
