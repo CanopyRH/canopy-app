@@ -8,6 +8,8 @@ import { network, type Net, type Position, type PresetView, type Signer } from "
 import { ensureChain, friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
 import { loadWalletConnect, phoneOptions } from "../walletconnect/load";
 import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
+import { linkStep, parseDeepLink, type DeepLink } from "../deeplink";
+import { LINK_COPY } from "../copy/exitlink";
 import ExitPreview from "./ExitPreview";
 import { receiptLink } from "../receipt";
 import WalletsPanel from "./wallets/WalletsPanel";
@@ -166,15 +168,33 @@ function ChainSwitch({ chains, active, disabled, onPick }: { chains: Chain[]; ac
   return <div className="cd-chain-switch" role="group" aria-label={COPY.network}>{chains.map((c) => <button key={c.key} type="button" aria-pressed={c.key === active.key} className={c.key === active.key ? "is-active" : ""} disabled={disabled} onClick={() => onPick(c)}>{c.chainName}</button>)}</div>;
 }
 
+/** A vault's risk card on its own, for the bot's "Open risk card" button. It needs no wallet. It reads through the active network. */
+function RiskModal({ net, vault, name, onClose }: { net: Net; vault: Address; name: string; onClose: () => void }) {
+  const [risk, setRisk] = useState<string | null | undefined>(undefined);
+  useEffect(() => void net.riskCard(vault).then(setRisk), [net, vault]);
+  return <Modal title={LINK_COPY.riskTitle(name)} eyebrow={net.chain.chainName} onClose={onClose}><div className="cd-dialog-content"><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre><div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={onClose}>{LINK_COPY.close}</button></div></div></Modal>;
+}
+
+/** The Exit Now confirmation a bot link opens. Nothing is sent until the person taps the button and signs in their own wallet. */
+function ExitConfirm({ name, busy, note, onKeep, onExit }: { name: string; busy: boolean; note: Note | null; onKeep: () => void; onExit: () => void }) {
+  return <Modal title={LINK_COPY.exitTitle(name)} eyebrow="YOUR EXIT" onClose={onKeep}><div className="cd-dialog-content">
+    <p className="cd-confirm-copy">{LINK_COPY.exitBody}</p>
+    {note && <p className={`cd-dialog-status ${note.error ? "is-error" : ""}`} role="status">{note.text}</p>}
+    <div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={onKeep}>{LINK_COPY.exitKeep}</button><button className="cd-button cd-button-dark" disabled={busy} onClick={onExit}>{COPY.exitButton}<ArrowUpRight size={15} /></button></div>
+  </div></Modal>;
+}
+
 export default function App() {
-  const [input, setInput] = useState(() => decodeURIComponent(location.hash.slice(1)));
+  const [link, setLink] = useState<DeepLink | null>(() => parseDeepLink(location.hash));
+  const [input, setInput] = useState(() => (link?.kind === "wallet" ? link.value : ""));
   const [owner, setOwner] = useState<Address | null>(null);
   const [rows, setRows] = useState<Row[] | null>(null);
+  const [rowsFor, setRowsFor] = useState<Address | null>(null);
   const [failed, setFailed] = useState(false);
   const [signer, setSigner] = useState<Signer | null>(null);
   const [installed, setInstalled] = useState<FoundWallet[]>([]);
   const [picking, setPicking] = useState<{ pick: FoundWallet[]; phone: boolean } | null>(null);
-  const [screen, setScreen] = useState<Screen>("overview");
+  const [screen, setScreen] = useState<Screen>(link?.kind === "disarm-all" ? "plan" : link && link.kind !== "wallet" ? "positions" : "overview");
   const [review, setReview] = useState<Address | null>(null);
   const [confirmDisarm, setConfirmDisarm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -185,7 +205,20 @@ export default function App() {
   const net = network(chain);
 
   useEffect(() => watchWallets(window, setInstalled), []);
-  useEffect(() => void (input && scan(input)), []); // A wallet handed over from the landing page in the URL fragment.
+  useEffect(() => void (link?.kind === "wallet" && scan(link.value)), []); // A wallet handed over from the landing page in the URL fragment.
+  useEffect(() => {
+    // A second bot link while the app is already open.
+    const onHash = () => {
+      const next = parseDeepLink(location.hash);
+      if (next && next.kind !== "wallet") setLink(next);
+    };
+    addEventListener("hashchange", onHash);
+    return () => removeEventListener("hashchange", onHash);
+  }, []);
+  function clearLink() {
+    setLink(null);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
 
   /** Reads a wallet on one network. A newer scan, or a switch to another network, makes this one's results stale. */
   async function scan(value: string, n: Net = net) {
@@ -200,6 +233,7 @@ export default function App() {
     const withState = await Promise.all(found.map(async (p) => ({ ...p, state: await n.armState(who, p.vault.address).catch(() => null) })));
     if (id !== scans.current) return;
     setRows(withState);
+    setRowsFor(who);
     setFailed(failed);
     setNote(failed ? { text: COPY.readFailed, error: true } : null);
   }
@@ -280,6 +314,20 @@ export default function App() {
   const mine = net.live && signer !== null && same(signer.account, owner);
   const scope = planScope(chain, OFFERED);
   const current = list.find((r) => same(r.vault.address, review)) ?? null;
+  // Positions count for a link only once they were read for the connected wallet itself.
+  const step = linkStep(link, { live: net.live, vaults: chain.vaults, rows: signer && same(signer.account, rowsFor) ? rows : null, complete: !failed, connected: signer !== null });
+  const linkRow = step.step === "exit" ? list.find((r) => same(r.vault.address, step.vault)) ?? null : null;
+  const linkNote = step.step === "refused" ? LINK_COPY.refused
+    : step.step === "not-live" ? COPY.notDeployed
+    : step.step === "unknown-vault" ? LINK_COPY.unknownVault
+    : step.step === "connect" ? (step.vault ? LINK_COPY.exitConnect(step.vault) : LINK_COPY.disarmConnect)
+    : step.step === "reading" ? COPY.reading
+    : step.step === "unreadable" ? COPY.readFailed
+    : step.step === "no-position" ? LINK_COPY.noPosition(step.vault)
+    : step.step === "not-armed" ? LINK_COPY.notArmed(step.vault)
+    : null;
+  const disarmOpen = confirmDisarm || step.step === "disarm";
+  const closeDisarm = () => (setConfirmDisarm(false), clearLink());
   const pay = (amount: bigint) => act(async () => ((await net.payPlan(signer!, amount)), { text: COPY.paidDone }));
   const empty = <div className="cd-empty"><span className="cd-empty-icon"><Search size={25} strokeWidth={1.4} /></span><h3>{rows ? COPY.noPositions : COPY.noScan}</h3></div>;
   const positionsCard = (compact: boolean) => <GlassCard className={compact ? "cd-overview-positions" : "cd-positions-table"}><div className="cd-card-top"><div><h2>{COPY.positionsTitle}</h2><p className="cd-caption">{list.filter((r) => r.state?.armed).length} armed · {list.length} found</p></div>{compact && <button className="cd-icon-button" onClick={() => setScreen("positions")} aria-label="View all positions"><ArrowUpRight size={19} /></button>}</div>{list.length ? <PositionRows rows={list} compact={compact} onReview={(r) => setReview(r.vault.address)} /> : empty}</GlassCard>;
@@ -291,6 +339,7 @@ export default function App() {
         {picking && <div className="cd-wallet-picker" role="dialog" aria-label={COPY.pickWallet}><p>{COPY.pickWallet}</p>{picking.pick.map((w) => { const icon = safeIcon(w.info.icon); return <button key={w.info.uuid} onClick={() => void chooseWallet(w.provider)}>{icon && <img src={icon} alt="" />}{w.info.name}</button>; })}{picking.phone && <button onClick={() => void connectPhone()}><Smartphone size={18} />{COPY.phoneWallet}</button>}</div>}
       </div></header>
     <main className="cd-main"><div className="cd-workspace" key={screen}>
+      {linkNote && <div className="cd-context-note"><CircleHelp size={15} /><p>{linkNote}</p>{step.step === "connect" && <button className="cd-button cd-button-dark" onClick={connect} disabled={busy}><Wallet size={15} />{COPY.connectButton}</button>}<button className="cd-icon-button" aria-label="Dismiss" onClick={clearLink}><X size={14} /></button></div>}
       {screen === "overview" && <>
         <div className="cd-page-heading"><div><span className="cd-eyebrow">YOUR WALLET</span><h1>{COPY.heading}</h1><p>{COPY.subheading}</p></div><div className="cd-network-label"><span />{chain.chainName}<small>{net.live ? COPY.autoExit : COPY.scanOnly}</small></div></div>
         <form className="cd-scan" onSubmit={submit}><label className="cd-search"><Search size={17} /><input value={input} onChange={(e) => setInput(e.target.value)} placeholder={COPY.scanPlaceholder} aria-label="Wallet address" autoComplete="off" spellCheck={false} /></label><button className="cd-button cd-button-dark" type="submit">{COPY.scanButton}<ArrowUpRight size={15} /></button></form>
@@ -324,6 +373,12 @@ export default function App() {
     <Dock active={screen} onNavigate={(s) => (setScreen(s), scrollTo({ top: 0 }))} />
     <div className="cd-toast-region" aria-live="polite" aria-atomic="true">{note && <div className={`cd-toast ${note.error ? "cd-toast-error" : ""}`}>{note.error ? <TriangleAlert size={15} /> : <Check size={15} />}<span>{note.text}{note.link && <> <a href={note.link} target="_blank" rel="noreferrer">{COPY.viewTx}<ExternalLink size={12} /></a></>}</span><button aria-label="Dismiss" onClick={() => setNote(null)}><X size={14} /></button></div>}</div>
     {current && owner && <PositionDialog key={`${chain.key}:${current.vault.address}`} net={net} row={current} owner={owner} signer={signer} busy={busy} note={note} act={act} onClose={() => setReview(null)} />}
-    {confirmDisarm && <Modal title={COPY.disarmTitle} eyebrow="YOUR CONTROLS" onClose={() => setConfirmDisarm(false)}><div className="cd-dialog-content"><p className="cd-confirm-copy">{COPY.disarmHelp}</p><div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={() => setConfirmDisarm(false)}>{COPY.keep}</button><button className="cd-button cd-button-dark" disabled={busy} onClick={() => { setConfirmDisarm(false); act(async () => ((await net.disarmAll(signer!)), { text: COPY.disarmDone })); }}>{COPY.disarmButton}</button></div></div></Modal>}
+    {step.step === "exit" && linkRow?.state && <ExitConfirm key={step.vault} name={step.name} busy={busy} note={note} onKeep={clearLink} onExit={() => act(async () => {
+      const { hash, complete } = await net.exitNow(signer!, step.vault, linkRow.state!.posId);
+      clearLink();
+      return { text: complete ? COPY.exitDone : COPY.exitPartial, link: `${chain.explorer}/tx/${hash}` };
+    })} />}
+    {step.step === "risk" && <RiskModal net={net} vault={step.vault} name={step.name} onClose={clearLink} />}
+    {disarmOpen && <Modal title={COPY.disarmTitle} eyebrow="YOUR CONTROLS" onClose={closeDisarm}><div className="cd-dialog-content"><p className="cd-confirm-copy">{COPY.disarmHelp} {LINK_COPY.disarmBody}</p><div className="cd-dialog-actions"><button className="cd-button cd-button-light" onClick={closeDisarm}>{COPY.keep}</button><button className="cd-button cd-button-dark" disabled={busy} onClick={() => { closeDisarm(); act(async () => ((await net.disarmAll(signer!)), { text: COPY.disarmDone })); }}>{COPY.disarmButton}</button></div></div></Modal>}
   </div>;
 }
