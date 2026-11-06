@@ -55,12 +55,14 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
 Robinhood Chain (4663), deployed at block 106087816:
 
-| Contract | Address |
-|---|---|
-| Timelock | [`0xA37196aCb22146424C1984001c18F49877B10D9b`](https://robinhoodchain.blockscout.com/address/0xA37196aCb22146424C1984001c18F49877B10D9b) |
-| AlarmBook | [`0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d`](https://robinhoodchain.blockscout.com/address/0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d) |
-| ExitRouter | [`0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C`](https://robinhoodchain.blockscout.com/address/0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C) |
-| ERC4626Adapter | [`0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC`](https://robinhoodchain.blockscout.com/address/0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC) |
+| Contract | Address | Metadata hash (IPFS) |
+|---|---|---|
+| Timelock | [`0xA37196aCb22146424C1984001c18F49877B10D9b`](https://robinhoodchain.blockscout.com/address/0xA37196aCb22146424C1984001c18F49877B10D9b) | `QmeQRVjhc1AMNeb7cbNjinuLTh6orcqvh7k2etSALd7QVL` |
+| AlarmBook | [`0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d`](https://robinhoodchain.blockscout.com/address/0x550cC2Ad4c2f095c37B8362bd19c475Ab7576e4d) | `QmT1qW4pSL6LswLamtSN52Khh44F7BW7UmbDiYPv2Zft9m` |
+| ExitRouter | [`0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C`](https://robinhoodchain.blockscout.com/address/0xC867A4B38f7B9F7CCc121D61b2F8d200395a965C) | `QmYkZvKCayuPRdYZVAQGruETkyTLBiAeTY8gQWUVDMtpui` |
+| ERC4626Adapter | [`0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC`](https://robinhoodchain.blockscout.com/address/0x14E6f3a2Cd259148f983E2b01Fe778c5002c98BC) | `QmX5Umk9JxzSph7RKE8dtxy7xP1nquDb4kcFK4SrZNLNSi` |
+
+Each metadata hash is the one at the end of the deployed bytecode, and `forge build` produces the same hash from `contracts/src`.
 
 The broadcast record is in `contracts/broadcast/`, and `services/deploy/verify.ts` checks that the deployed bytecode matches this source.
 
@@ -96,6 +98,34 @@ cd web && bun install && bun test
 ```bash
 tools/build-web.sh
 ```
+
+## Deploy from a fresh clone
+
+This is how the live deployment was made. Nothing here needs anything outside this repo.
+
+1. **Settings.** Copy `deploy/launch.env.example` to `deploy/launch.env` (git ignores it) and fill in the token, feed and swap-router addresses, your two Safes (admin and guardian, both multisigs), the admin expiry and the Timelock delay. Copy `deploy/settings.example.json` to `deploy/settings.json` with the same values, plus the watchers and vaults.
+2. **Preflight.** `cd services && bun deploy/preflight.ts <rpc url>` checks every setting, Safe, feed and vault against the live chain and lists what's missing. It sends nothing.
+3. **Deploy.** From `contracts/`, with `deploy/launch.env` loaded and a deployer keystore, run the script once without `--broadcast` and read the simulated output, then run it again with `--broadcast`:
+
+   ```bash
+   forge script script/Deploy.s.sol:Deploy --rpc-url "$RPC" --keystore <deployer keystore> --sender "$DEPLOYER"
+   ```
+
+   The script stops on an unsafe setting: a wrong chain, a missing contract, the same Safe twice, or a plain wallet as admin. Keep `contracts/broadcast/`, because it's the record of what was deployed.
+4. **Safe batches.** `cd services && bun deploy/plan.ts ../contracts/broadcast/Deploy.s.sol/<chain id>/run-latest.json ../deploy/settings.json <out dir>` writes `deployment.json` and the admin's first changes (adapter, watchers, alarm registrations) as Safe Transaction Builder files.
+5. **Verify, then hand over.**
+   - `cd services && bun deploy/verify.ts <out dir>/deployment.json "$RPC" deployed` checks the live bytecode against this build and every address and setting against what was intended. It reads expected values from the deployment file, never from the contracts it checks. Stop if any check fails.
+   - The admin Safe's signers load and sign the setup batch.
+   - Run the same command with `live` in place of `deployed` to check the result.
+6. **Services.** Copy `deploy/services.env.example`, set the deployed addresses, and start each role (see [Run your own keeper](#run-your-own-keeper)).
+
+## Audits
+
+| Date | Kind | Commit | Report |
+|---|---|---|---|
+| 2026-11-05 | Internal review | [`71c1fa0`](https://github.com/CanopyRH/canopy-app/tree/audit-2026-11-05) (tag `audit-2026-11-05`) | [Report](.audit-grade/2026-11-05/REPORT.md), [scope](.audit-grade/2026-11-05/SCOPE.md), [PoCs](.audit-grade/2026-11-05/POCS), [status of each finding](.audit-grade/findings.tsv) |
+
+Both Highs and all four Lows are fixed. The Medium is an accepted risk, explained in [SECURITY.md](SECURITY.md). No external audit has been done yet. Changes since launch are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Run your own keeper
 
