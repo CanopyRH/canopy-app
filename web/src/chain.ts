@@ -2,8 +2,9 @@ import { createPublicClient, http, maxUint256, parseAbi, type Address, type Hex 
 import { autoExit, type Chain, type Vault } from "./config";
 import { exitBlocked, gateAbi, type Read } from "./gates";
 import { sendTx, type Eip1193 } from "./wallet";
-import { keyOf, presetsFor, registrationOrder, type Detector, type Preset } from "../../services/src/api/presets";
+import { keyOf, presetsFor, registrationOrder, type Preset } from "../../services/src/api/presets";
 import { notArmable, presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
+import { armOneStep, batchSupport, needed } from "./batch";
 import { revertText } from "./errors";
 import { COPY } from "./copy/text";
 import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
@@ -22,12 +23,6 @@ export interface Position { vault: Vault; shares: bigint; assets: bigint }
 /** A connected wallet, and a hook to tell the person what their wallet is waiting on. */
 export interface Signer { provider: Eip1193; account: Address; onConfirm: () => void }
 export interface PresetView { preset: Preset; status: AlarmStatus }
-
-/** Whether a detector is one of the chosen presets, or a part one of them depends on. */
-function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
-  const key = keyOf(d);
-  return presets.filter((p) => keys.includes(p.key)).some((p) => p.key === key || (p.requires ?? []).some((r) => r.key === key));
-}
 
 /** Every read and transaction for one network. Each network keeps its own client and its own risk cards. */
 function make(c: Chain) {
@@ -138,12 +133,26 @@ function make(c: Chain) {
     return { hash, complete: left === 0n };
   }
 
+  /** Whether this wallet can arm in one confirmation. Asked when the alarm dialog opens, so the screen can say so. */
+  const canBatch = (s: Signer) => batchSupport(s.provider, s.account, c.chainHex).then((k) => k !== null);
+
+  /** Arms in one wallet confirmation when the wallet supports it, and with arm()'s steps when it doesn't. */
+  const armOneConfirm = (s: Signer, vault: Address, keys: Hex[]) => armOneStep({
+    provider: s.provider, account: s.account, network: c, onConfirm: s.onConfirm,
+    plan: {
+      io: alarmIo, book: c.alarmBook!, router: c.router!, adapter: c.adapter!,
+      isRegistered: (key) => client.readContract({ address: c.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((k) => k[0]),
+      allowance: () => client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, c.router!] }),
+    },
+    stepwise: () => arm(s, vault, keys),
+  }, vault, keys);
+
   const disarmAll = (s: Signer) => send(s, disarmAllTx(c.router!));
 
   /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
-  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan };
+  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm };
 }
 
 export type Net = ReturnType<typeof make>;

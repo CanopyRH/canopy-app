@@ -4,6 +4,7 @@ import { ArrowUpRight, Bell, Check, CircleHelp, CreditCard, ExternalLink, Eye, L
 import { formatUnits, type Address, type Hex } from "viem";
 import { COPY, SIGNALS, TERMS } from "../copy/text";
 import { CHAINS, offered, pick, planScope, saveChain, savedChain, type Chain } from "../config";
+import { BATCH_COPY } from "../copy/batch";
 import { network, type Net, type Position, type PresetView, type Signer } from "../chain";
 import { ensureChain, friendly, safeIcon, walletChoice, watchWallets, type Eip1193, type FoundWallet } from "../wallet";
 import { loadWalletConnect, phoneOptions } from "../walletconnect/load";
@@ -98,7 +99,11 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   const [picked, setPicked] = useState<Hex[]>([]);
   const [accepted, setAccepted] = useState(false);
   const [gated, setGated] = useState(false);
+  const [batching, setBatching] = useState(false);
   const mine = net.live && signer !== null && same(signer.account, owner);
+  useEffect(() => {
+    if (mine) void net.canBatch(signer!).then(setBatching);
+  }, [net, mine, signer]);
   useEffect(() => void net.riskCard(row.vault.address).then(setRisk), [net, row.vault.address]);
   useEffect(() => {
     if (!mine) return;
@@ -107,7 +112,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   }, [net, mine, row.vault.address, owner]);
   const toggle = (key: Hex, on: boolean) => setPicked((p) => (on ? [...p, key] : p.filter((k) => k !== key)));
   const armIt = () => act(async () => {
-    await net.arm(signer!, row.vault.address, picked);
+    await net.armOneConfirm(signer!, row.vault.address, picked);
     onClose();
     return { text: COPY.armedDone };
   });
@@ -135,6 +140,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
         {(views ?? []).some((v) => v.status === "going-off") && <p className="cd-inline-note"><TriangleAlert size={15} />{row.state?.armed ? COPY.alarmExitArmed : COPY.alarmExitUnarmed}</p>}
         <details className="cd-advanced"><summary>Terms</summary><pre className="cd-risk-text">{TERMS}</pre></details>
         <label className="cd-terms"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /> {COPY.termsAccept}</label>
+        <p className="cd-caption">{batching ? BATCH_COPY.oneConfirm : BATCH_COPY.threeSteps}</p>
       </>}
       {/* The page's toast sits under this modal, so wallet prompts and errors show here too. */}
       {note && <p className={`cd-dialog-status ${note.error ? "is-error" : ""}`} role="status">{note.text}</p>}
