@@ -113,7 +113,7 @@ describe("web-base-config", () => {
 
   test("builds the Base web file from a Base deployment, keeping the WalletConnect project", () => {
     expect(webBaseConfig({ ...d, settings: s }, { walletConnectProjectId: null })).toEqual({
-      config: { router: A(3), adapter: A(4), alarmBook: A(2), planPayTo: A(8), apiUrl: "https://api-base.canopy.invalid", walletConnectProjectId: null },
+      config: { router: A(3), adapter: A(4), alarmBook: A(2), deployBlock: 1, planPayTo: A(8), apiUrl: "https://api-base.canopy.invalid", walletConnectProjectId: null },
     });
   });
 
@@ -126,6 +126,9 @@ describe("web-base-config", () => {
     expect(problems({ planPayTo: example.planPayTo })).toContain("planPayTo");
     expect(problems({ apiUrl: example.apiUrl })).toContain("apiUrl");
     expect(problems({ apiUrl: "http://api.example.org" })).toContain("apiUrl");
+    // The limits page reads admin events from the deploy block, so a record without one can't fill the web file.
+    const noBlock = webBaseConfig({ ...d, startBlock: 0, settings: s }, {});
+    expect("problems" in noBlock ? noBlock.problems.join(" | ") : "").toContain("startBlock");
   });
 
   test("tells a local fork from Base", () => {

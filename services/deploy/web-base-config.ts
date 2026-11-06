@@ -21,6 +21,7 @@ export interface WebChainFile {
   router: Address;
   adapter: Address;
   alarmBook: Address;
+  deployBlock: number;
   planPayTo: Address;
   apiUrl: string;
   walletConnectProjectId: string | null;
@@ -35,10 +36,11 @@ export function webBaseConfig(d: Deployment & { settings: Settings }, current: {
   if (!isAddress(s?.planPayTo ?? "")) problems.push("settings.planPayTo is not an address: set the Base Payments Safe");
   const api = s?.apiUrl ?? "";
   if (!/^https:\/\/[^/]+/.test(api) || /YOUR_|example\.com|localhost|127\.0\.0\.1/.test(api)) problems.push(`settings.apiUrl "${api}" is not the Base API's https address`);
+  if (!Number.isInteger(d.startBlock) || d.startBlock <= 0) problems.push("startBlock is not a block number: the limits page reads admin events from it");
   if (problems.length) return { problems };
   return {
     config: {
-      router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: s.planPayTo!, apiUrl: api.replace(/\/+$/, ""),
+      router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, deployBlock: d.startBlock, planPayTo: s.planPayTo!, apiUrl: api.replace(/\/+$/, ""),
       walletConnectProjectId: current.walletConnectProjectId ?? null,
     },
   };

@@ -19,6 +19,8 @@ export interface Chain {
   router: Address | null;
   adapter: Address | null;
   alarmBook: Address | null;
+  /** The block the contracts were deployed in. The limits page reads admin events from here. Null until deployed. */
+  deployBlock: number | null;
   planPayTo: Address | null;
   /** Plan prices assume a 6-decimal stablecoin. */
   planToken: Address;
@@ -40,6 +42,7 @@ const ROBINHOOD_DEFAULTS: Chain = {
   router: null,
   adapter: null,
   alarmBook: null,
+  deployBlock: null,
   planPayTo: null,
   planToken: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", // USDG
   planTokenSymbol: "USDG",
@@ -66,6 +69,7 @@ const BASE_DEFAULTS: Chain = {
   router: null,
   adapter: null,
   alarmBook: null,
+  deployBlock: null,
   planPayTo: null,
   planToken: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
   planTokenSymbol: "USDC",

@@ -311,6 +311,7 @@
       { "label": "Docs", "href": "docs.html" },
       { "label": "Whitepaper", "href": "whitepaper.html" },
       { "label": "Roadmap", "href": "roadmap.html" },
+      { "label": "What Canopy can't do", "href": "limits.html" },
       { "label": "Fees", "href": "docs.html#fees" },
       { "label": "Exit limits", "href": "docs.html#exit-limits" },
       { "label": "Privacy", "href": "docs.html#privacy" },

@@ -49,7 +49,7 @@ describe("per-chain config", () => {
     // mainnet.base.json fills the same address fields as mainnet.json.
     expect(Object.keys(mainnetBase).sort()).toEqual(Object.keys(mainnet).sort());
     if (mainnetBase.router === null) {
-      expect(mainnetBase).toEqual({ router: null, adapter: null, alarmBook: null, planPayTo: null, apiUrl: "", walletConnectProjectId: null });
+      expect(mainnetBase).toEqual({ router: null, adapter: null, alarmBook: null, deployBlock: null, planPayTo: null, apiUrl: "", walletConnectProjectId: null });
       expect([base.router, base.adapter, base.alarmBook, base.planPayTo]).toEqual([null, null, null, null]);
       expect(offered(CHAINS)).toEqual([robinhood]);
       return;
@@ -59,7 +59,7 @@ describe("per-chain config", () => {
     if (!existsSync(record)) return;
     const d = JSON.parse(readFileSync(record, "utf8")) as { router: string; adapter: string; alarmBook: string; settings: { chainId: number; planPayTo: string; apiUrl: string } };
     expect(d.settings.chainId).toBe(8453);
-    expect(mainnetBase).toMatchObject({ router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: d.settings.planPayTo });
+    expect(mainnetBase).toMatchObject({ router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: d.settings.planPayTo, deployBlock: (d as unknown as { startBlock: number }).startBlock });
     expect(mainnetBase.apiUrl).toStartWith("https://");
     const rehearsalFile = join(import.meta.dir, "../../deploy/out/8453-rehearsal/deployment.json");
     if (!existsSync(rehearsalFile)) return;

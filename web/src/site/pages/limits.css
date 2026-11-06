@@ -1,0 +1,81 @@
+/* What Canopy can't do. Same palette and radii as the receipt, roadmap and docs pages. Written for a 375 px phone first. */
+.wp-head.lm-head{padding:32px 20px 10px}
+.lm-head h1{max-width:760px;font-size:clamp(30px,8vw,52px);margin-bottom:16px;overflow-wrap:anywhere}
+.lm-head .wp-abstract{font-size:16px;margin-bottom:18px}
+.lm-nets{display:flex;gap:6px;padding:4px;border:1px solid #e2e2e2;border-radius:30px;background:#fff;width:fit-content;max-width:100%}
+.lm-nets button{border:0;background:transparent;border-radius:24px;padding:9px 16px;font:inherit;font-size:14px;color:#6a6a6a;cursor:pointer}
+.lm-nets button[aria-pressed=true]{background:#242424;color:#fff}
+.lm-nets button:focus-visible,.lm-retry:focus-visible,.lm-post:focus-visible,.lm-src a:focus-visible,.lm-addr:focus-visible{outline:2px solid #6d63a6;outline-offset:2px}
+.lm-main{max-width:760px;margin:10px auto 70px;padding:0 16px;display:grid;gap:22px;min-width:0}
+.lm-main *{min-width:0}
+.lm-hero,.lm-card,.lm-note,.lm-rows{background:#fff;border:1px solid #ececec;border-radius:24px;box-shadow:0 4px 20px #00000005}
+.lm-hero{padding:22px 18px;box-shadow:0 8px 40px #00000010}
+.lm-kicker{display:flex;align-items:center;gap:6px;margin:0 0 8px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#777}
+.lm-big{margin:0 0 8px;font-size:clamp(30px,9vw,52px);font-weight:500;letter-spacing:-.05em;line-height:1.1;overflow-wrap:anywhere}
+.lm-date{margin:0 0 16px;font-size:16px;line-height:1.5;color:#444;overflow-wrap:anywhere}
+.lm-units{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 18px}
+.lm-units div{background:#f0f0f0;border-radius:16px;padding:12px 10px;text-align:center}
+.lm-units dt{font-size:12px;color:#777;text-transform:uppercase;letter-spacing:.08em}
+.lm-units dd{margin:2px 0 0;font-size:clamp(24px,8vw,36px);font-weight:500;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.lm-hero h3,.lm-sec h2{margin:18px 0 6px;font-size:18px;font-weight:550;letter-spacing:-.03em}
+.lm-sec h2{font-size:clamp(22px,6vw,30px);margin-top:0}
+.lm-sec{display:grid;gap:12px}
+.lm-lead,.lm-body{margin:0;font-size:15px;line-height:1.6;color:#5f5f5f;overflow-wrap:anywhere}
+.lm-cards{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.lm-card{padding:18px 16px}
+.lm-card h3{display:flex;gap:10px;align-items:flex-start;margin:0 0 8px;font-size:17px;font-weight:550;letter-spacing:-.02em;line-height:1.35}
+.lm-card h3 svg{flex:none;margin-top:3px;color:#6d63a6}
+.lm-card>p{margin:0 0 10px;font-size:15px;line-height:1.6;color:#5f5f5f}
+.lm-src{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin:10px 0 0;font-size:13px;color:#777}
+.lm-src code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#444;background:#f0f0f0;border-radius:8px;padding:2px 8px;overflow-wrap:anywhere}
+.lm-src span{display:inline-flex;gap:12px}
+.lm-src a,.lm-addr{display:inline-flex;align-items:center;gap:3px;color:#4b4390}
+.lm-src small{flex-basis:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;color:#999;overflow-wrap:anywhere;word-break:break-word}
+.lm-hero .lm-src{margin-top:14px}
+.lm-actions{display:flex;margin-top:18px}
+.lm-post{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border-radius:30px;padding:13px 20px;font-size:15px;background:#242424;color:#fff;border:1px solid #242424}
+.lm-post:hover{background:#000}
+.lm-rows{margin:0;padding:4px 16px}
+.lm-row{display:grid;grid-template-columns:1fr;gap:4px;padding:14px 0;border-bottom:1px solid #eee}
+.lm-row:last-child{border-bottom:0}
+.lm-row dt{font-size:13px;color:#888}
+.lm-row dd{margin:0;font-size:16px;line-height:1.45;color:#242424;overflow-wrap:anywhere}
+.lm-row dd small{display:block;margin-top:4px;font-size:13px;line-height:1.5;color:#888}
+.lm-row .lm-src{margin-top:8px}
+.lm-addr{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px}
+.lm-plain{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.lm-pill{display:inline-block;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:550;background:#efefef;color:#666;vertical-align:middle}
+.lm-on{background:#e9f1ec;color:#2f7556}
+.lm-warn{background:#f6ecdc;color:#8a5a14}
+.lm-w{padding:14px 16px}
+.lm-wtop{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.lm-wdates{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0 0}
+.lm-wdates dt{font-size:12px;color:#888}
+.lm-wdates dd{margin:2px 0 0;font-size:15px;color:#242424}
+.lm-rule{display:flex;gap:10px;align-items:flex-start;margin:0;font-size:15px;line-height:1.55;color:#444}
+.lm-rule svg{flex:none;margin-top:3px;color:#6d63a6}
+.lm-unread{display:flex;gap:8px;align-items:flex-start;margin:0;font-size:14px;line-height:1.5;color:#8a5a14}
+.lm-unread svg{flex:none;margin-top:2px}
+.lm-note{display:flex;gap:14px;align-items:flex-start;padding:22px 18px}
+.lm-note>svg{flex:none;color:#6d63a6;margin-top:3px}
+.lm-note h2{margin:0 0 6px;font-size:19px;font-weight:550;letter-spacing:-.03em}
+.lm-note p{margin:0;font-size:15px;line-height:1.6;color:#6a6a6a}
+.lm-retry{display:inline-flex;align-items:center;gap:6px;margin-top:12px;border:1px solid #ddd;border-radius:30px;padding:9px 16px;font:inherit;font-size:14px;background:#fff;color:#242424;cursor:pointer}
+.lm-retry:hover{border-color:#bbb}
+.lm-spin{flex:none;width:22px;height:22px;margin-top:3px;border-radius:50%;border:2.5px solid #e0dcef;border-top-color:#6d63a6;animation:lm-turn .9s linear infinite}
+@keyframes lm-turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.lm-spin{animation:none}}
+.lm-fine{margin:6px 4px 0;font-size:12px;line-height:1.6;color:#999}
+@media(min-width:700px){
+  .wp-head.lm-head{padding:56px 30px 20px}
+  .lm-head .wp-abstract{font-size:17px}
+  .lm-main{padding:0 24px;gap:30px}
+  .lm-hero{padding:32px 30px}
+  .lm-post{width:auto}
+  .lm-cards{grid-template-columns:1fr 1fr}
+  .lm-watchers{grid-template-columns:1fr 1fr 1fr}
+  .lm-rows{padding:6px 24px}
+  .lm-row{grid-template-columns:170px minmax(0,1fr);gap:16px}
+  .lm-note{padding:26px 24px}
+}
+@media print{.lm-actions,.lm-retry,.lm-nets{display:none}}

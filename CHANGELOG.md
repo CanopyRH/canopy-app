@@ -5,6 +5,11 @@ services, the web app or the tooling unless it says otherwise.
 
 ## 2026-11-06
 
+- **Web: "What Canopy can't do" page** (`limits.html`). Reads the router, Timelock and AlarmBook straight from the chain in
+  the browser: the countdown to `ADMIN_EXPIRY`, what nobody can do (each tied to a line of the verified source), the adapters,
+  guardian, arming pause, Timelock delay and proposer, and each watcher's start and end. A fact that can't be read is marked
+  unread. The web config gains `deployBlock` (the event history starts there), and `web-base-config.ts` fills it from the deploy.
+
 - **v2 contracts live on Robinhood Chain** at block 107737863: ExitRouter `0x1c3ca2B2f01C30B731909563Dad550062B340757`,
   AlarmBook `0x6A391f2c489dDFcb60Ad64eDddda5Ea0921584cf`, Timelock `0x4F656b09c4D3c859Dd2BB9919f384681e9ccb3f5`,
   ERC4626Adapter `0x32C39abF03a12303Cc3150be50eD7b0e03Ab9D38`. Exact matches on Sourcify, `verify.ts` 58 of 58, the 30 launch

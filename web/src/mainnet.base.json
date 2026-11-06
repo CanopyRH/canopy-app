@@ -2,6 +2,7 @@
   "router": null,
   "adapter": null,
   "alarmBook": null,
+  "deployBlock": null,
   "planPayTo": null,
   "apiUrl": "",
   "walletConnectProjectId": null

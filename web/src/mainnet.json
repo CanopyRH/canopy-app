@@ -2,6 +2,7 @@
   "router": "0x1c3ca2b2f01c30b731909563dad550062b340757",
   "adapter": "0x32c39abf03a12303cc3150be50ed7b0e03ab9d38",
   "alarmBook": "0x6a391f2c489ddfcb60ad64edddda5ea0921584cf",
+  "deployBlock": 107737863,
   "planPayTo": "0xb668d6822b09eA5D32606e78Ed81d10C34CB95ad",
   "apiUrl": "https://api.canopyrh.com",
   "walletConnectProjectId": "1dd8c1799b3b51b454c2cdbb6656439d"
