@@ -23,6 +23,26 @@ const tidy = (ip: string) => {
   return (v4 ? v4[1]! : ip).toLowerCase();
 };
 
+/**
+ * The /64 an IPv6 address belongs to, such as "2001:db8:1:2::/64". One host is usually given a whole /64, so counting
+ * each address alone would give it 2^64 fresh buckets. Anything that isn't IPv6 is returned as it is.
+ */
+export function bucketOf(ip: string): string {
+  if (isIP(ip) !== 6) return ip;
+  let s = ip.toLowerCase().split("%")[0]!;
+  // A trailing dotted quad, as in 64:ff9b::192.0.2.1, is the last two groups.
+  const quad = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (quad) {
+    const o = quad.slice(1).map(Number);
+    s = `${s.slice(0, -quad[0].length)}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
+  }
+  const [head, tail] = s.includes("::") ? (s.split("::") as [string, string]) : [s, undefined];
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? h : [...h, ...Array<string>(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return `${groups.slice(0, 4).map((g) => parseInt(g || "0", 16).toString(16)).join(":")}::/64`;
+}
+
 /** The caller's address from X-Forwarded-For, counting `hops` proxies from the end. Null if the header can't be trusted. */
 export function forwardedClient(header: string | undefined, hops: number): string | null {
   if (!header || hops < 1) return null;
@@ -64,7 +84,8 @@ export function rateLimit(limit: RateLimit, now: () => number, skip: (path: stri
     const method = c.req.method;
     if (limit.perMin <= 0 || (method !== "GET" && method !== "HEAD") || skip(c.req.path)) return next();
     const t = now();
-    const ip = clientIp(c, limit.proxyHops);
+    // IPv6 callers are counted by /64, the block one host is normally given.
+    const ip = bucketOf(clientIp(c, limit.proxyHops));
     let w = windows.get(ip);
     if (!w || t - w.start >= WINDOW_SEC) {
       if (!w && windows.size >= MAX_TRACKED) sweep(t);
