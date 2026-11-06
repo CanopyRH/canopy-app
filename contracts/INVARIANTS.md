@@ -134,16 +134,17 @@ plus anything strangers sent it directly. Direct gifts are never swept and never
 
 `arm` always arms for the caller, only through an allowed adapter, with a known harbour, a slippage cap of at most
 10%, at most 8 keys each armable in AlarmBook (A11), valid swap legs (R11), a token id only for NFTs, and an NFT only by
-its holder. A DRAIN key reaches a position only as a part of a BOTH key whose other part is a QUORUM key: `arm` refuses
-a bare DRAIN key and a BOTH key with a DRAIN part and a non-QUORUM other part (`DrainNeedsQuorum`), and a BOTH key whose
-part is itself a BOTH key (`NestedBoth`), so one level of parts is the whole tree. These checks read only AlarmBook's
-stored detectors. Since a BOTH key fires only when both parts fired within its window, no DRAIN fire can authorize an
-exit unless its QUORUM partner (two active watchers' signatures) fired too.
+its holder. A DRAIN key reaches a position only as a part of a BOTH key whose other part is a QUORUM key and whose window
+is exactly one day: `arm` refuses a bare DRAIN key, a BOTH key with a DRAIN part and a non-QUORUM other part, and a BOTH
+key with a DRAIN part and any other window (`DrainNeedsQuorum`), and a BOTH key whose part is itself a BOTH key
+(`NestedBoth`), so one level of parts is the whole tree. These checks read only AlarmBook's stored detectors. Since a
+BOTH key fires only when both parts fired within its window, no DRAIN fire can authorize an exit unless its QUORUM
+partner (two active watchers' signatures) fired within the 24 hours before the BOTH fire (A8).
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_rejectsUnlistedAdapter`, `test_arm_rejectsSlipAboveCap`, `test_arm_rejectsTooManyKeys`, `test_arm_rejectsBadHarbour`, `test_arm_rejectsWhilePaused`, `test_arm_isBoundToCaller`.
-- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`, `test_arm_AlarmNotClear_unknownKey`, `test_arm_AlarmNotClear_trippedKey`, `test_arm_AlarmNotClear_firedInTheLastDay`, `test_arm_AlarmNotClear_unreadableKeyFailsClosed`, `test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes`, `test_arm_DrainNeedsQuorum`, `test_arm_DrainNeedsQuorum_bothWithoutAQuorumPart`, `test_arm_NestedBoth`.
+- [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`, `test_arm_AlarmNotClear_unknownKey`, `test_arm_AlarmNotClear_trippedKey`, `test_arm_AlarmNotClear_firedInTheLastDay`, `test_arm_AlarmNotClear_unreadableKeyFailsClosed`, `test_arm_AlarmNotClear_oneBadKeyAmongGoodOnes`, `test_arm_DrainNeedsQuorum`, `test_arm_DrainNeedsQuorum_bothWithoutAQuorumPart` (with the one-day window case), `test_arm_NestedBoth`.
 - [V3VerifyB.t.sol](test/review/V3VerifyB.t.sol) `test_V3B_01_bothOfTwoDrains_isRefused`, `test_V3B_01_bothOfDrainAndANonQuorumKey_isRefused_eitherOrder`, `test_V3B_01_nestedBoth_isRefused`, `test_V3B_control_bareDrainIsRefused` (V3B-01, the verifier's proofs of concept inverted).
-- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_armingNeedsEveryKeyClear`: `arm` succeeded exactly when the model said every key was armable and none carried a DRAIN without a QUORUM or nested a BOTH (and the other arguments were valid), and refused with `DrainNeedsQuorum`, `NestedBoth` or `AlarmNotClear`, whichever key came first, when one didn't. The handler's keys include BOTH(DRAIN, QUORUM), which arms, and BOTH(DRAIN, PAUSED) and a nested BOTH, which never do.
+- [RouterInvariant.t.sol](test/RouterInvariant.t.sol) `invariant_armingNeedsEveryKeyClear`: `arm` succeeded exactly when the model said every key was armable and none carried a DRAIN without a QUORUM or nested a BOTH (and the other arguments were valid), and refused with `DrainNeedsQuorum`, `NestedBoth` or `AlarmNotClear`, whichever key came first, when one didn't. The handler's keys include the one-day BOTH(DRAIN, QUORUM), which arms, and BOTH(DRAIN, PAUSED), a two-day BOTH(DRAIN, QUORUM) and a nested BOTH, which never do.
 
 ### R10. A third party's swap never pays below 99% of the oracle price
 
@@ -261,7 +262,13 @@ still cannot fire twice). Malleable, wrong-length and rejected contract-wallet s
 
 ### A8. A BOTH alarm fires only when both of its parts fired within its window
 
-Its window is at least the refire delay, so neither part can be stale by design, and a flash deposit cannot raise a part into firing it.
+Its window is at least the refire delay, so neither part can be stale by design, and a flash deposit cannot raise a part
+into firing it. AlarmBook sets only that lower bound; the router adds an exact one for DRAIN: a BOTH key with a DRAIN
+part can be armed only with a window of exactly one day (R9), so it fires only when its DRAIN and QUORUM parts each fired
+within the 24 hours before it, and the watchers' signatures behind any DRAIN exit are at most a day older than the BOTH
+fire the exit uses (at most two days older than the exit).
+
+- [V3VerifyC.t.sol](test/review/V3VerifyC.t.sol) `test_V3C_01_longBothWindow_isRefusedAtArming` and `test_V3C_01_oneDayWindow_aQuorumFromDaysBeforeDoesntCount` (V3C-01, the verifier's proof of concept inverted).
 
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_both_needsBothInsideWindow`, `test_both_windowCantBeShorterThanTheRefireDelay`.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_flashDeposit_cantRaiseAQuorumFiredBoth`, `test_preburnedDrain_stillLetsARealHackFireBoth`, `test_lateConfirmation_stillFiresBoth`.
