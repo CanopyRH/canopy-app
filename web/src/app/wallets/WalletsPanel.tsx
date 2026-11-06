@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowUpRight, Eye, LockKeyhole, Pencil, Plus, RefreshCw, Trash2, TriangleAlert, Wallet } from "lucide-react";
 import type { Address } from "viem";
-import { armState, riskCard, scanWallet, type Position } from "../../chain";
+import type { Net, Position } from "../../chain";
 import { WALLETS_COPY as T, capNote } from "./copy";
 import { addWallet, defaultStore, formatUsd, loadList, MAX_LABEL, MAX_WALLETS, removeWallet, saveList, setLabel, shortAddress, shown, STORAGE_KEY, totals, type Saved } from "./list";
 import "./wallets.css";
@@ -10,26 +10,26 @@ type Row = Position & { armed: boolean };
 type Reading = { status: "loading" } | { status: "done"; rows: Row[]; failed: boolean };
 
 /** Reads one wallet from the chain, the same way the main list does. Nothing here talks to Canopy's API. */
-async function read(owner: Address): Promise<Reading> {
-  const { found, failed } = await scanWallet(owner);
-  const rows = await Promise.all(found.map(async (p) => ({ ...p, armed: (await armState(owner, p.vault.address).catch(() => null))?.armed ?? false })));
+async function read(net: Net, owner: Address): Promise<Reading> {
+  const { found, failed } = await net.scanWallet(owner);
+  const rows = await Promise.all(found.map(async (p) => ({ ...p, armed: (await net.armState(owner, p.vault.address).catch(() => null))?.armed ?? false })));
   return { status: "done", rows, failed };
 }
 
 /** Risk text per vault. riskCard fetches every listed vault once for everyone, so it never reveals which vaults a wallet holds. */
-function RiskFacts({ rows }: { rows: Row[] }) {
+function RiskFacts({ net, rows }: { net: Net; rows: Row[] }) {
   const [open, setOpen] = useState(false);
   const [texts, setTexts] = useState<Record<string, string | null | undefined>>({});
   useEffect(() => {
     if (!open) return;
-    rows.forEach((r) => void riskCard(r.vault.address).then((t) => setTexts((x) => ({ ...x, [r.vault.address]: t })), () => setTexts((x) => ({ ...x, [r.vault.address]: null }))));
-  }, [open, rows]);
+    rows.forEach((r) => void net.riskCard(r.vault.address).then((t) => setTexts((x) => ({ ...x, [r.vault.address]: t })), () => setTexts((x) => ({ ...x, [r.vault.address]: null }))));
+  }, [open, rows, net]);
   return <details className="cd-advanced cd-wallet-risk" onToggle={(e) => setOpen(e.currentTarget.open)}><summary>{T.riskFacts}</summary>
     {rows.map((r) => <div key={r.vault.address} className="cd-wallet-risk-item"><strong>{r.vault.name}</strong><pre className="cd-risk-text">{texts[r.vault.address] === undefined ? T.reading : (texts[r.vault.address] ?? "Risk facts could not be loaded.")}</pre></div>)}
   </details>;
 }
 
-function WalletCard({ w, reading, onSave, onRemove, onRename, onOpen }: { w: ReturnType<typeof shown>[number]; reading: Reading | undefined; onSave: () => void; onRemove: () => void; onRename: (label: string) => void; onOpen: () => void }) {
+function WalletCard({ net, w, reading, onSave, onRemove, onRename, onOpen }: { net: Net; w: ReturnType<typeof shown>[number]; reading: Reading | undefined; onSave: () => void; onRemove: () => void; onRename: (label: string) => void; onOpen: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(w.label);
   const done = reading?.status === "done" ? reading : null;
@@ -49,7 +49,7 @@ function WalletCard({ w, reading, onSave, onRemove, onRename, onOpen }: { w: Ret
       {done && done.rows.length === 0 && <p className="cd-caption">{T.none}</p>}
       {done?.rows.map((r) => <div key={r.vault.address} className="cd-wallet-position"><span>{r.vault.name}<small>{r.vault.asset}</small></span><strong>{formatUsd(r.assets)}</strong><span className={`cd-status ${r.armed ? "cd-status-armed" : "cd-status-idle"}`}><span className="cd-status-dot" />{r.armed ? "Armed" : "Not armed"}</span></div>)}
       {done?.failed && <p className="cd-inline-note"><TriangleAlert size={15} />{T.failed}</p>}
-      {done && done.rows.length > 0 && <RiskFacts rows={done.rows} />}
+      {done && done.rows.length > 0 && <RiskFacts net={net} rows={done.rows} />}
     </div>
     <div className="cd-wallet-actions">
       <button className="cd-button cd-button-light" onClick={onOpen}>{T.open}<ArrowUpRight size={14} /></button>
@@ -62,7 +62,7 @@ function WalletCard({ w, reading, onSave, onRemove, onRename, onOpen }: { w: Ret
 }
 
 /** Saved wallets and their positions on one screen. Only the connected wallet can act, and that rule stays in the main list: "Show in list above" opens a wallet there, where arming and Exit Now already check who is connected. */
-export default function WalletsPanel({ connected, onOpen }: { connected: Address | null; onOpen: (a: Address) => void }) {
+export default function WalletsPanel({ net, connected, onOpen }: { net: Net; connected: Address | null; onOpen: (a: Address) => void }) {
   const [saved, setSaved] = useState<Saved[]>(() => loadList());
   const [kept, setKept] = useState(true);
   const [input, setInput] = useState("");
@@ -81,15 +81,20 @@ export default function WalletsPanel({ connected, onOpen }: { connected: Address
     addEventListener("storage", on);
     return () => removeEventListener("storage", on);
   }, []);
+  // A switch to another chain reads every wallet again there.
+  useEffect(() => {
+    asked.current.clear();
+    setReadings({});
+  }, [net]);
   // Read each wallet once as it appears. "Read again" asks for all of them afresh.
   useEffect(() => {
     list.forEach((w) => {
       const id = w.address.toLowerCase();
       if (asked.current.has(id)) return;
       asked.current.add(id);
-      void read(w.address).then((r) => setReadings((x) => ({ ...x, [id]: r })), () => setReadings((x) => ({ ...x, [id]: { status: "done", rows: [], failed: true } })));
+      void read(net, w.address).then((r) => setReadings((x) => ({ ...x, [id]: r })), () => setReadings((x) => ({ ...x, [id]: { status: "done", rows: [], failed: true } })));
     });
-  }, [key]);
+  }, [key, net]);
   const again = () => {
     asked.current.clear();
     setReadings({});
@@ -97,7 +102,7 @@ export default function WalletsPanel({ connected, onOpen }: { connected: Address
     list.forEach((w) => {
       const id = w.address.toLowerCase();
       asked.current.add(id);
-      void read(w.address).then((r) => setReadings((x) => ({ ...x, [id]: r })), () => setReadings((x) => ({ ...x, [id]: { status: "done", rows: [], failed: true } })));
+      void read(net, w.address).then((r) => setReadings((x) => ({ ...x, [id]: r })), () => setReadings((x) => ({ ...x, [id]: { status: "done", rows: [], failed: true } })));
     });
   };
 
@@ -134,7 +139,7 @@ export default function WalletsPanel({ connected, onOpen }: { connected: Address
     {error && <p className="cd-dialog-status is-error" role="alert">{error}</p>}
     {list.length > 0 && <div className="cd-wallets-total"><div><span className="cd-card-label">{T.totalLabel}</span><strong>{waiting ? T.reading : formatUsd(sum.total)}</strong></div><small>{waiting ? "" : `${formatUsd(sum.armed)} armed · ${sum.positions} ${sum.positions === 1 ? "position" : "positions"} · ${list.length} ${list.length === 1 ? "wallet" : "wallets"}`}</small>{incomplete && <small className="cd-wallets-warn"><TriangleAlert size={13} />{T.incomplete}</small>}</div>}
     {list.length === 0 && <p className="cd-caption">{T.empty}</p>}
-    <div className="cd-wallet-list">{list.map((w) => <WalletCard key={w.address} w={w} reading={readings[w.address.toLowerCase()]} onSave={saveConnected} onRemove={() => update(removeWallet(saved, w.address))} onRename={(l) => update(setLabel(saved, w.address, l))} onOpen={() => onOpen(w.address)} />)}</div>
+    <div className="cd-wallet-list">{list.map((w) => <WalletCard key={w.address} net={net} w={w} reading={readings[w.address.toLowerCase()]} onSave={saveConnected} onRemove={() => update(removeWallet(saved, w.address))} onRename={(l) => update(setLabel(saved, w.address, l))} onOpen={() => onOpen(w.address)} />)}</div>
     {saved.length > 0 && <div className="cd-wallets-clear">{confirmClear
       ? <><span className="cd-caption">{T.clearConfirm}</span><button className="cd-button cd-button-light" onClick={() => setConfirmClear(false)}>Keep</button><button className="cd-button cd-button-dark" onClick={() => (update([]), setConfirmClear(false))}>{T.clear}</button></>
       : <button className="cd-button cd-button-light" onClick={() => setConfirmClear(true)}><Trash2 size={14} />{T.clear}</button>}</div>}

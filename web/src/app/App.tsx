@@ -306,7 +306,7 @@ export default function App() {
       {screen === "positions" && <>
         <div className="cd-page-heading"><div><span className="cd-eyebrow">POSITIONS</span><h1>{COPY.positionsScreen}</h1><p>{COPY.positionsScreenHelp}</p></div></div>
         {positionsCard(false)}
-        <WalletsPanel connected={signer?.account ?? null} onOpen={(a) => (setInput(a), void scan(a), scrollTo({ top: 0 }))} />
+        <WalletsPanel net={net} connected={signer?.account ?? null} onOpen={(a) => (setInput(a), void scan(a), scrollTo({ top: 0 }))} />
         <div className="cd-info-strip"><TriangleAlert size={19} /><div><strong>A plan is only as useful as its limits.</strong><p>A fully lent-out vault or a share gate can delay or stop an exit. Read each risk card before arming.</p></div></div>
       </>}
       {screen === "plan" && <>

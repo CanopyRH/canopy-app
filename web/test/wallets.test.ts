@@ -131,5 +131,5 @@ test("the wallet code never sends a wallet anywhere but the chain reads", () => 
   }
   // The only network call that touches a vault list is the existing one, which asks for every launch vault and no wallet.
   const chain = readFileSync(join(import.meta.dir, "../src/chain.ts"), "utf8");
-  expect(chain.match(/fetch\(`[^`]*`/g)).toEqual(["fetch(`${CONFIG.apiUrl}/risk/${v.address}`"]);
+  expect(chain.match(/fetch\(`[^`]*`/g)).toEqual(["fetch(`${c.apiUrl}/risk/${v.address}`"]);
 });
