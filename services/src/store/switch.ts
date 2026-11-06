@@ -36,6 +36,8 @@ export const CONTRACT_JOB_KINDS = ["exit", "poke", "checkpoint", "claim"] as con
  * reader follows the plan token and stays.
  */
 export const CONTRACT_CURSORS = ["router", "alarms"] as const;
+/** Where the switch leaves the plain-named cursors of older code: past any block a chain will reach. */
+export const PARKED_CURSOR = 4_000_000_000_000_000_000n;
 
 /** A list of fixed names as SQL. Only ever fed the constants above. */
 const inList = (names: readonly string[]) => `(${names.map((n) => `'${n}'`).join(",")})`;
@@ -103,6 +105,12 @@ async function run(q: Db, a: Addresses, authorise?: string): Promise<SwitchResul
   // The cursor is the next block to read. One block early costs one empty read and can't skip a log.
   const start = a.startBlock > 0n ? a.startBlock - 1n : 0n;
   await q.query(`DELETE FROM cursors WHERE ${named("name")}`);
+  // Older code reads with the plain names and no address check. A deleted cursor would send such a copy, still running
+  // during a rolling deploy, back to its own START_BLOCK to replay the old contracts into the tables just cleared. Parked
+  // far past any chain head instead, it reads nothing (it only reads while its cursor is at or below the tip).
+  for (const c of CONTRACT_CURSORS) {
+    await q.query(`INSERT INTO cursors (name, block) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET block=$2`, [c, PARKED_CURSOR.toString()]);
+  }
   for (const c of [routerCursor(router), alarmsCursor(book)]) {
     await q.query(`INSERT INTO cursors (name, block) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET block=$2`, [c, start.toString()]);
   }

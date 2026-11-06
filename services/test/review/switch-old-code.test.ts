@@ -14,7 +14,7 @@ import { routerAbi } from "../../src/chain/abi";
 import { applyRouterLog, syncLogs, type Log } from "../../src/indexer/indexer";
 import type { Db } from "../../src/store/db";
 import { repo, type Repo } from "../../src/store/repo";
-import { contractFence, routerCursor, switchContracts } from "../../src/store/switch";
+import { PARKED_CURSOR, contractFence, routerCursor, switchContracts } from "../../src/store/switch";
 import { freshDb } from "../db";
 
 const V1 = { router: "0x00000000000000000000000000000000000000a1" as Address, alarmBook: "0x00000000000000000000000000000000000000a2" as Address, startBlock: 100n };
@@ -76,36 +76,35 @@ beforeEach(async () => {
   expect(await r.cursor("router")).toBe(HEAD + 1n);
 });
 
-describe("V3V-01: the switch deletes the old code's cursor, so an old indexer in the overlap replays v1 into the v2 tables", () => {
-  test("the old reader restarts from the v1 START_BLOCK after the switch, and its replay switches off a v2 position armed on chain", async () => {
+describe("V3V-01 (fixed): the switch parks the old code's cursor past any head, so an old indexer in the overlap reads nothing", () => {
+  test("the old reader reads nothing after the switch, and a v2 position armed on chain stays on", async () => {
     // The indexer is deployed first with CONTRACT_SWITCH, as the runbook says.
     expect(await switchContracts(db, V2, V2.router)).not.toBeNull();
-    expect(await r.cursor("router")).toBeNull(); // the old code's cursor is gone
+    expect(await r.cursor("router")).toBe(PARKED_CURSOR); // parked past any head, not deleted
+    expect(await r.cursor("alarms")).toBe(PARKED_CURSOR);
     // The new reader indexes a v2 arm by the same owner (epoch 0 on the v2 router).
     const logs = [...V1_LOGS, armedLog(V2.router, 5_050n, V2_POS, 4)];
     await newReader(chain(HEAD, logs, []));
     expect(await active(V2_POS)).toBe(true);
-    // The old indexer copy is still running (rolling-deploy overlap). Its next pass:
+    // The old indexer copy is still running (rolling-deploy overlap). The deployed code reads only while its cursor is at
+    // or below the tip, so with the cursor parked it asks for no logs at all and replays nothing.
     const asked: bigint[] = [];
-    await oldReader(chain(HEAD, logs, asked));
-    expect(asked[0]).toBe(V1.startBlock); // a full replay of v1 history, not just the blocks since the switch
-    // The replayed v1 DisarmedAll(owner, 2) deactivated the owner's v2 position, which is armed on the v2 router.
-    expect(await active(V2_POS)).toBe(false);
-    expect(await r.armedWith(KEY)).toEqual([]); // the keeper won't queue its exit
-    // confirmArms only re-checks unconfirmed arms, and nothing else re-reads this one: it stays off.
-    await db.query(`UPDATE positions SET confirmed=true WHERE lower(pos_id)=$1`, [V2_POS.toLowerCase()]);
-    expect((await r.unconfirmedArms(10_000n)).map((p) => p.pos_id.toLowerCase())).not.toContain(V2_POS.toLowerCase());
+    const oldCursor = (await r.cursor("router"))!;
+    if (oldCursor <= HEAD) await oldReader(chain(HEAD, logs, asked));
+    expect(asked).toEqual([]);
+    expect(await active(V2_POS)).toBe(true);
+    expect((await r.armedWith(KEY)).map((p) => p.pos_id.toLowerCase())).toContain(V2_POS.toLowerCase());
   });
 
-  test("the replayed v1 epoch stays in owner_epochs: a later v2 arm inherits it, and the owner's v2 Disarm All is ignored", async () => {
+  test("no v1 epoch comes back, so a later v2 arm and the owner's v2 Disarm All are both honoured", async () => {
     await switchContracts(db, V2, V2.router);
-    await oldReader(chain(HEAD, V1_LOGS, [])); // overlap replay, before any v2 activity
-    expect(await r.epochOf(OWNER.toLowerCase())).toBe(2n);
+    // The overlap copy reads nothing (see above), so the owner's epoch starts clean.
+    expect(await r.epochOf(OWNER.toLowerCase())).toBe(0n);
     // Days later the owner arms on v2 (the router's epoch for them is 0), then uses Disarm All on v2 (new epoch 1).
     const later = [...V1_LOGS, armedLog(V2.router, 7_000n, V2_POS, 5), disarmedAllLog(V2.router, 7_100n, 1n, 6)];
     await newReader(chain(8_000n, later, []));
-    // On chain the position is off. The database still holds it armed, so the keeper keeps acting on it.
-    expect(await active(V2_POS)).toBe(true);
-    expect((await r.armedWith(KEY)).map((p) => p.pos_id.toLowerCase())).toContain(V2_POS.toLowerCase());
+    // On chain the position is off, and so it is in the database: the keeper leaves it alone.
+    expect(await active(V2_POS)).not.toBe(true);
+    expect((await r.armedWith(KEY)).map((p) => p.pos_id.toLowerCase())).not.toContain(V2_POS.toLowerCase());
   });
 });

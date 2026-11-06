@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { postgres, type Db } from "../src/store/db";
 import { repo, type Repo } from "../src/store/repo";
-import { alarmsCursor, contractFence, ContractMismatch, routerCursor, SwitchRefused, switchContracts, switchText } from "../src/store/switch";
+import { alarmsCursor, contractFence, ContractMismatch, routerCursor, SwitchRefused, switchContracts, switchText, PARKED_CURSOR } from "../src/store/switch";
 import { freshDb } from "./db";
 
 const V1 = { router: "0x00000000000000000000000000000000000000a1", alarmBook: "0x00000000000000000000000000000000000000a2", startBlock: 100n };
@@ -74,7 +74,10 @@ describe("the contract switch", () => {
     // The cursors are named for the contract they follow, and the old ones (named for v1 or not at all) are gone.
     expect((await r.cursor(routerCursor(V2.router)))).toBe(4_999n);
     expect((await r.cursor(alarmsCursor(V2.alarmBook)))).toBe(4_999n);
-    expect((await db.query<{ name: string }>(`SELECT name FROM cursors ORDER BY name`)).map((x) => x.name)).toEqual([alarmsCursor(V2.alarmBook), "payments", routerCursor(V2.router)].sort());
+    expect((await db.query<{ name: string }>(`SELECT name FROM cursors ORDER BY name`)).map((x) => x.name)).toEqual(["alarms", alarmsCursor(V2.alarmBook), "payments", "router", routerCursor(V2.router)].sort());
+    // The plain names older code reads are parked past any head, so an old copy still running reads nothing.
+    expect(await r.cursor("router")).toBe(PARKED_CURSOR);
+    expect(await r.cursor("alarms")).toBe(PARKED_CURSOR);
     const reader = "(source='router' OR source='alarms' OR source LIKE 'router@%' OR source LIKE 'alarms@%')";
     expect(await n("block_hashes", reader)).toBe(0);
     expect(await n("log_touches", reader)).toBe(0);
