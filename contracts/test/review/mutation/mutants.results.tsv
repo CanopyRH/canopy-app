@@ -1,0 +1,112 @@
+file	mutant	existing_suite	with_review_tests
+src/ExitRouter.sol	arm: pause ignores expiry	KILLED	KILLED
+src/ExitRouter.sol	arm: adapter allowlist off	KILLED	KILLED
+src/ExitRouter.sol	arm: harbour >=	KILLED	KILLED
+src/ExitRouter.sol	arm: slip cap >=	KILLED	KILLED
+src/ExitRouter.sol	arm: keys cap >=	KILLED	KILLED
+src/ExitRouter.sol	arm: armable check off	KILLED	KILLED
+src/ExitRouter.sol	arm: NFT owner check off	KILLED	KILLED
+src/ExitRouter.sol	arm: tokenId check off	KILLED	KILLED
+src/ExitRouter.sol	arm: old keys not cleared	SURVIVED	KILLED
+src/ExitRouter.sol	arm: armedAt one second early	SURVIVED	SURVIVED
+src/ExitRouter.sol	arm: epoch 0	KILLED	KILLED
+src/ExitRouter.sol	disarm: no owner check	KILLED	KILLED
+src/ExitRouter.sol	disarm: stays active	KILLED	KILLED
+src/ExitRouter.sol	disarmAll: no increment	KILLED	KILLED
+src/ExitRouter.sol	claim: owed not zeroed	KILLED	KILLED
+src/ExitRouter.sol	claim: totalOwed not reduced	KILLED	KILLED
+src/ExitRouter.sol	claim: zero allowed	KILLED	KILLED
+src/ExitRouter.sol	claim: ETH failure ignored	KILLED	KILLED
+src/ExitRouter.sol	isArmed: ignores epoch	KILLED	KILLED
+src/ExitRouter.sol	quote: slip bound off	KILLED	KILLED
+src/ExitRouter.sol	quote: stable floor off	KILLED	KILLED
+src/ExitRouter.sol	quote: double slip	KILLED	KILLED
+src/ExitRouter.sol	quote: ok always	SURVIVED	KILLED
+src/ExitRouter.sol	admin: no expiry	KILLED	KILLED
+src/ExitRouter.sol	pause: no expiry	KILLED	KILLED
+src/ExitRouter.sol	pause: anyone	KILLED	KILLED
+src/ExitRouter.sol	legs: raw harbour allowed	KILLED	KILLED
+src/ExitRouter.sol	legs: max >=	KILLED	KILLED
+src/ExitRouter.sol	legs: duplicates allowed	KILLED	KILLED
+src/ExitRouter.sol	legs: heartbeat +1	KILLED	KILLED
+src/ExitRouter.sol	legs: decimals >=	KILLED	KILLED
+src/ExitRouter.sol	legs: path alignment off	SURVIVED	KILLED
+src/ExitRouter.sol	legs: end not checked	KILLED	KILLED
+src/ExitRouter.sol	legs: start not checked	KILLED	KILLED
+src/ExitRouter.sol	auth: epoch ignored	KILLED	KILLED
+src/ExitRouter.sol	auth: key not checked	KILLED	KILLED
+src/ExitRouter.sol	auth: ttl ignores arming	KILLED	KILLED
+src/ExitRouter.sol	auth: ttl off by one	SURVIVED	SURVIVED
+src/ExitRouter.sol	auth: owner treated as third party	KILLED	KILLED
+src/ExitRouter.sol	unwind: stable not netted	SURVIVED	KILLED
+src/ExitRouter.sol	unwind: stable to caller	KILLED	KILLED
+src/ExitRouter.sol	unwind: stable only on stable harbour	KILLED	KILLED
+src/ExitRouter.sol	pull: ignores allowance	KILLED	KILLED
+src/ExitRouter.sol	pull: amount above balance	SURVIVED	SURVIVED
+src/ExitRouter.sol	pull: zero allowed	KILLED	KILLED
+src/ExitRouter.sol	outputs: no leftover share	KILLED	KILLED
+src/ExitRouter.sol	free: ignores owed	KILLED	KILLED
+src/ExitRouter.sol	settle: no third-party cap	KILLED	KILLED
+src/ExitRouter.sol	settle: stable not skipped	SURVIVED	SURVIVED
+src/ExitRouter.sol	settle: shares not special	KILLED	KILLED
+src/ExitRouter.sol	settle: shares to caller	KILLED	KILLED
+src/ExitRouter.sol	settle: proceeds to caller	KILLED	KILLED
+src/ExitRouter.sol	swap: first leg for any token	SURVIVED	SURVIVED
+src/ExitRouter.sol	swap: approval not reset	KILLED	KILLED
+src/ExitRouter.sol	swap: no minimum	KILLED	KILLED
+src/ExitRouter.sol	swap: quote uncapped	SURVIVED	SURVIVED
+src/ExitRouter.sol	pay: totalOwed not booked	KILLED	KILLED
+src/ExitRouter.sol	price: future/zero updatedAt	SURVIVED	SURVIVED
+src/ExitRouter.sol	price: staleness off	KILLED	KILLED
+src/ExitRouter.sol	price: decimals bound off	SURVIVED	SURVIVED
+src/ExitRouter.sol	price: feed read uncapped	KILLED	KILLED
+src/AlarmBook.sol	watcher: anyone sets	KILLED	KILLED
+src/AlarmBook.sol	watcher: no term cap	KILLED	KILLED
+src/AlarmBook.sol	watcher: no delay	KILLED	KILLED
+src/AlarmBook.sol	watcher: lapsed keeps old start	KILLED	KILLED
+src/AlarmBook.sol	watcher: until inclusive	KILLED	KILLED
+src/AlarmBook.sol	register: re-register resets	SURVIVED	KILLED
+src/AlarmBook.sol	register: zero share price ok	KILLED	KILLED
+src/AlarmBook.sol	register: drain snapAt unset	KILLED	KILLED
+src/AlarmBook.sol	check: confirm ignored	KILLED	KILLED
+src/AlarmBook.sol	armable: live ignored	KILLED	KILLED
+src/AlarmBook.sol	armable: unknown is clear	KILLED	KILLED
+src/AlarmBook.sol	poke: unreadable drain sights	KILLED	KILLED
+src/AlarmBook.sol	poke: no confirm delay	KILLED	KILLED
+src/AlarmBook.sol	poke: pending kept after fire	KILLED	KILLED
+src/AlarmBook.sol	poke: refire while live	KILLED	KILLED
+src/AlarmBook.sol	checkpoint: rolls while tripped	KILLED	KILLED
+src/AlarmBook.sol	checkpoint: mark can fall	KILLED	KILLED
+src/AlarmBook.sol	checkpoint: drain last sample	KILLED	KILLED
+src/AlarmBook.sol	checkpoint: period = window	KILLED	KILLED
+src/AlarmBook.sol	checkpoint: zero sample	SURVIVED	SURVIVED
+src/AlarmBook.sol	rebase: any kind	KILLED	KILLED
+src/AlarmBook.sol	rebase: stale episode ok	KILLED	KILLED
+src/AlarmBook.sol	rebase: clear ok	KILLED	KILLED
+src/AlarmBook.sol	rebase: episode kept	KILLED	KILLED
+src/AlarmBook.sol	rebase: pending kept	SURVIVED	SURVIVED
+src/AlarmBook.sol	quorum: deadline >=	KILLED	KILLED
+src/AlarmBook.sol	quorum: far deadline ok	KILLED	KILLED
+src/AlarmBook.sol	quorum: refire while live	KILLED	KILLED
+src/AlarmBook.sol	quorum: threshold ignored	KILLED	KILLED
+src/AlarmBook.sol	quorum: duplicates ok	KILLED	KILLED
+src/AlarmBook.sol	quorum: non-watcher ok	KILLED	KILLED
+src/AlarmBook.sol	isLive: strict	KILLED	KILLED
+src/AlarmBook.sol	fire: episode always restarts	KILLED	KILLED
+src/AlarmBook.sol	episode: 1 day gap	KILLED	KILLED
+src/AlarmBook.sol	liveNow: inclusive	KILLED	KILLED
+src/AlarmBook.sol	pending: 2x window	KILLED	KILLED
+src/AlarmBook.sol	validate: short drain window	KILLED	KILLED
+src/AlarmBook.sol	validate: quorum of 1	KILLED	KILLED
+src/AlarmBook.sol	validate: short BOTH window	KILLED	KILLED
+src/AlarmBook.sol	reading: share drop <=	SURVIVED	SURVIVED
+src/AlarmBook.sol	reading: exhausted ignored	KILLED	KILLED
+src/AlarmBook.sol	reading: drain reference never expires	KILLED	KILLED
+src/AlarmBook.sol	reading: price staleness off	KILLED	KILLED
+src/AlarmBook.sol	read: no gas floor	KILLED	KILLED
+src/AlarmBook.sol	read: overhead without 1/64	SURVIVED	KILLED
+src/AlarmBook.sol	read: never exhausted	KILLED	KILLED
+src/AlarmBook.sol	read: decimals bound off	SURVIVED	SURVIVED
+src/AlarmBook.sol	read: address bound off	SURVIVED	SURVIVED
+src/AlarmBook.sol	domain: version 1	KILLED	KILLED
+src/AlarmBook.sol	ctor: 2-year watchers	KILLED	KILLED
