@@ -15,17 +15,18 @@ import { readFileSync, statSync } from "node:fs";
 import { createPublicClient, createWalletClient, encodeFunctionData, getAddress, http, isAddress, parseAbi, type Address, type Hex, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { alarmBookAbi } from "../src/chain/abi";
-import { keyOf, registrationOrder, type Detector } from "../src/api/presets";
+import { keyOf, Kind, registrationOrder, type Detector } from "../src/api/presets";
 import { CONFIG } from "../../web/src/config";
 import { MAINNETS } from "./plan";
 
 /** Gas floor for a registration. AlarmBook reads the target with a full 1M gas, and a SHARE_DROP reads twice. */
 export const REGISTER_GAS_FLOOR = 1_600_000n;
 const pausedAbi = parseAbi(["function paused() view returns (bool)"]);
+const shareAbi = parseAbi(["function decimals() view returns (uint8)", "function convertToAssets(uint256) view returns (uint256)"]);
 const KIND_NAMES = ["PRICE_BELOW", "SHARE_DROP", "PAUSED", "ADDRESS_CHANGE", "DRAIN", "QUORUM", "BOTH"];
 
 export interface RegisterDeps {
-  client: Pick<PublicClient, "getChainId" | "readContract" | "estimateGas" | "waitForTransactionReceipt">;
+  client: Pick<PublicClient, "getChainId" | "readContract" | "estimateGas" | "waitForTransactionReceipt"> & Partial<Pick<PublicClient, "call">>;
   /** Sends a transaction from the key and returns its hash. */
   send: (tx: { to: Address; data: Hex; gas: bigint }) => Promise<Hex>;
   /** The sending account, only for estimating. */
@@ -68,6 +69,9 @@ export async function registerPresets(d: RegisterDeps, o: RegisterOptions): Prom
       if (state[0]) {
         res.skipped++;
         d.log(`  skip     ${label} (already registered)`);
+        // Registration is open, so someone else may have registered this key first, and AlarmBook took its baseline from
+        // whatever the target read at that moment. A baseline that is off would make the alarm fire at once or never.
+        for (const w of await baselineWarnings(d, det, state[3] as bigint)) d.log(`  WARNING  ${label}: ${w}`);
         continue;
       }
       if (o.dryRun) {
@@ -81,6 +85,35 @@ export async function registerPresets(d: RegisterDeps, o: RegisterOptions): Prom
   }
   d.log(o.dryRun ? `dry run: ${res.wouldSend} to send, ${res.skipped} already registered` : `done: ${res.registered} registered, ${res.skipped} already registered`);
   return res;
+}
+
+/** Why the baseline of an alarm registered by someone else looks wrong for its target. Empty when it looks right or can't be told. */
+export async function baselineWarnings(d: Pick<RegisterDeps, "client">, det: Detector, baseline: bigint): Promise<string[]> {
+  try {
+    if (det.kind === Kind.DRAIN) {
+      return baseline === 0n ? ["the DRAIN reference is zero, so it can never read a drop. Do not rely on this alarm."] : [];
+    }
+    if (det.kind === Kind.SHARE_DROP) {
+      const decimals = await d.client.readContract({ address: det.target, abi: shareAbi, functionName: "decimals" });
+      const now = await d.client.readContract({ address: det.target, abi: shareAbi, functionName: "convertToAssets", args: [10n ** BigInt(decimals)] });
+      // The baseline is the high-water mark and only rises: one more than half a percent above today's price fires at the first poke.
+      return baseline * 10_000n > now * 10_050n
+        ? [`the share-price baseline ${baseline} is more than 0.5% above the current price ${now}. It reads as dropped, and will fire or refuse to arm at once.`]
+        : [];
+    }
+    if (det.kind === Kind.ADDRESS_CHANGE) {
+      if (!d.client.call) return [];
+      const out = await d.client.call({ to: det.target, data: det.a.slice(0, 10) as Hex });
+      const current = out.data && out.data.length >= 66 ? BigInt(out.data.slice(0, 66)) : null;
+      if (current === null) return [];
+      return current !== baseline
+        ? [`the registered address 0x${baseline.toString(16).padStart(40, "0")} is not the current one 0x${current.toString(16).padStart(40, "0")}. It reads as changed already.`]
+        : [];
+    }
+  } catch {
+    // A target that can't be read is the registrant's problem; the run goes on.
+  }
+  return [];
 }
 
 async function registerOne(d: RegisterDeps, book: Address, det: Detector, label: string) {

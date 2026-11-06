@@ -93,7 +93,12 @@ export function writePlan(d: Deployment, s: Settings, out: string) {
   for (const [file, batch] of planFiles(d, s)) write(file, batch);
   writeFileSync(join(out, "services.env"), [
     `CHAIN_ID=${s.chainId}`, `ROUTER=${d.router}`, `ALARM_BOOK=${d.alarmBook}`, `ADAPTER_4626=${d.adapter}`, `START_BLOCK=${d.startBlock}`,
-    `PLAN_TOKEN=${s.stable}`, `WATCHERS=${s.watchers.join(",")}`, "",
+    `PLAN_TOKEN=${s.stable}`, `WATCHERS=${s.watchers.join(",")}`,
+    // Railway sends X-Forwarded-For as "caller, edge" (measured), so two entries at the end are the proxies' own. With the
+    // default of 1 every caller would share the edge server's address and one rate-limit bucket.
+    `# Railway sends "caller, edge" in X-Forwarded-For (measured): two hops.`,
+    "TRUSTED_PROXY_HOPS=2",
+    "RATE_LIMIT_PER_MIN=120", "",
   ].join("\n"));
   write("web-mainnet.json", { router: d.router, adapter: d.adapter, alarmBook: d.alarmBook, planPayTo: s.planPayTo ?? null, apiUrl: s.apiUrl ?? "" });
 }

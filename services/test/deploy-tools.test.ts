@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeFunctionData, toFunctionSelector, type Address, type Hex } from "viem";
 import { alarmBookAbi } from "../src/chain/abi";
-import { keyOf, registrationOrder } from "../src/api/presets";
+import { keyOf, Kind, registrationOrder } from "../src/api/presets";
+import { contractsBuilt, OUT } from "./forge";
 import { planFiles, presetBatch, writePlan, type Deployment, type Settings } from "../deploy/plan";
-import { parseArgs, readKeyFile, Refused, registerPresets, REGISTER_GAS_FLOOR, type RegisterDeps } from "../deploy/register-presets";
+import { baselineWarnings, parseArgs, readKeyFile, Refused, registerPresets, REGISTER_GAS_FLOOR, type RegisterDeps } from "../deploy/register-presets";
 import { ALARM_BOOK_CONSTANTS, domainSeparator, REMOVED_ROUTER_FUNCTIONS, ROUTER_CONSTANTS } from "../deploy/verify";
 
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}` as Address;
@@ -158,11 +159,13 @@ describe("register-presets", () => {
   });
 });
 
-describe("the verifier's fixed facts", () => {
-  const router = JSON.parse(readFileSync(join(import.meta.dir, "../../contracts/out/ExitRouter.sol/ExitRouter.json"), "utf8")) as { deployedBytecode: { object: string } };
-  const code = router.deployedBytecode.object.toLowerCase();
+// The compiled router is needed for the first test only. Without contracts/out it is built (forge), or the test says why it was skipped.
+const build = contractsBuilt();
 
-  test("the removed router functions are not in the compiled router, and a function that is there is found", () => {
+describe("the verifier's fixed facts", () => {
+  test.skipIf(!build.ok)("the removed router functions are not in the compiled router, and a function that is there is found", () => {
+    const router = JSON.parse(readFileSync(join(OUT, "ExitRouter.sol/ExitRouter.json"), "utf8")) as { deployedBytecode: { object: string } };
+    const code = router.deployedBytecode.object.toLowerCase();
     for (const sig of REMOVED_ROUTER_FUNCTIONS) expect(code.includes(toFunctionSelector(sig).slice(2).toLowerCase())).toBe(false);
     expect(code.includes(toFunctionSelector("swapsOf(bytes32)").slice(2).toLowerCase())).toBe(true);
   });
@@ -191,5 +194,53 @@ describe("the verifier's fixed facts", () => {
     };
     for (const [n, want] of Object.entries(ALARM_BOOK_CONSTANTS)) expect([n, value(src("AlarmBook.sol"), n)]).toEqual([n, want]);
     for (const [n, want] of Object.entries(ROUTER_CONSTANTS)) expect([n, value(src("ExitRouter.sol"), n)]).toEqual([n, want]);
+  });
+});
+
+describe("register-presets warns about a baseline someone else registered", () => {
+  const TARGET = A(0x77);
+  const clientOf = (reads: Record<string, unknown>, current?: Hex) => ({
+    client: {
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName in reads) return reads[functionName];
+        throw new Error(functionName);
+      },
+      ...(current ? { call: async () => ({ data: current }) } : {}),
+    },
+  }) as never;
+  const det = (kind: number, a: Hex = `0x${"00".repeat(32)}`) => ({ kind, target: TARGET, threshold: 50n, window: 0, a, b: a });
+
+  test("a SHARE_DROP baseline more than half a percent above the share price", async () => {
+    const c = clientOf({ decimals: 18, convertToAssets: 1_000_000n });
+    expect(await baselineWarnings(c, det(Kind.SHARE_DROP), 1_006_000n)).toHaveLength(1);
+    expect(await baselineWarnings(c, det(Kind.SHARE_DROP), 1_005_000n)).toEqual([]); // exactly 0.5% is tolerated
+    expect(await baselineWarnings(c, det(Kind.SHARE_DROP), 900_000n)).toEqual([]); // below the price is the safe side
+  });
+
+  test("an ADDRESS_CHANGE baseline that is not the current address", async () => {
+    const now = `0x${"00".repeat(12)}${"ab".repeat(20)}` as Hex;
+    const c = clientOf({}, now);
+    expect(await baselineWarnings(c, det(Kind.ADDRESS_CHANGE, `0x313ce567${"00".repeat(28)}`), BigInt(`0x${"cd".repeat(20)}`))).toHaveLength(1);
+    expect(await baselineWarnings(c, det(Kind.ADDRESS_CHANGE, `0x313ce567${"00".repeat(28)}`), BigInt(`0x${"ab".repeat(20)}`))).toEqual([]);
+  });
+
+  test("a DRAIN reference of zero", async () => {
+    expect(await baselineWarnings(clientOf({}), det(Kind.DRAIN), 0n)).toHaveLength(1);
+    expect(await baselineWarnings(clientOf({}), det(Kind.DRAIN), 5n)).toEqual([]);
+  });
+
+  test("a target that can't be read says nothing and doesn't stop the run", async () => {
+    expect(await baselineWarnings(clientOf({}), det(Kind.SHARE_DROP), 10n ** 30n)).toEqual([]);
+  });
+
+  test("the run prints the warning loudly for a key already registered, still skips it, and does not fail", async () => {
+    const f = fake({ chainId: 84532, registered: new Set(registrationOrder(VAULTS[0]!, VAULTS[0]!).map(keyOf)) });
+    const base = f.deps.client.readContract as unknown as (a: { functionName: string; args?: unknown[]; address: Address }) => Promise<unknown>;
+    // The DRAIN alarms read as registered with a zero reference (the fake's default state); the vault's share price is unreadable.
+    (f.deps.client as unknown as { readContract: unknown }).readContract = base;
+    const res = await registerPresets(f.deps, { ...opts, vaults: [VAULTS[0]!] });
+    expect(res.registered).toBe(0);
+    expect(f.sent).toHaveLength(0);
+    expect(f.lines.some((l) => l.includes("WARNING") && l.includes("DRAIN"))).toBe(true);
   });
 });
