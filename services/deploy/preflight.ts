@@ -83,6 +83,11 @@ export async function preflight(client: PublicClient, l: Launch, now: number): P
     check(`launch.env and settings.json agree on ${key}`, Boolean(l.deployEnv[key]) && same(l.deployEnv[key], want), "they differ, or one is empty");
   }
 
+  // The deploy script approves WATCHERS from the first block, and nothing can change them for two days after. A different list
+  // in launch.env than in settings.json would start the launch with watchers nobody planned for.
+  const list = (v?: string) => (v ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  check("launch.env and settings.json agree on WATCHERS", list(l.deployEnv.WATCHERS).join() === (s.watchers ?? []).map((w) => w.toLowerCase()).join() && list(l.deployEnv.WATCHERS).length > 0, "they differ, or WATCHERS is empty in launch.env");
+
   check("Proposer and guardian are different Safes", isAddress(s.proposer) && isAddress(s.guardian) && !same(s.proposer, s.guardian), "two separate Safes are needed");
   for (const [name, safe] of [["Proposer", s.proposer], ["Guardian", s.guardian]] as const) {
     if (!isAddress(safe)) { check(`${name} Safe needs 2 or more signers`, false, "address not set"); continue; }

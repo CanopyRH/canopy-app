@@ -1,11 +1,15 @@
 /**
- * Turns a broadcast deployment into files a multisig can review and sign. Holds no keys and sends nothing.
+ * Turns a broadcast deployment into the files the launch needs. Holds no keys and sends nothing.
  * Usage: bun deploy/plan.ts <run-latest.json> <settings.json> <out dir>
+ *
+ * v2 needs no admin setup: the router allows the vault adapter in its constructor and the AlarmBook approves the watchers in
+ * its own, so the deploy leaves nothing for the Timelock to do. What remains is registering the launch vaults' alarm
+ * presets, which anyone can do (see deploy/register-presets.ts), and the service and web settings.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeFunctionData, keccak256, parseAbi, stringToHex, type Address, type Hex } from "viem";
-import { alarmBookAbi, routerAbi } from "../src/chain/abi";
+import { encodeFunctionData, type Address, type Hex } from "viem";
+import { alarmBookAbi } from "../src/chain/abi";
 import { registrationOrder } from "../src/api/presets";
 
 export interface Settings {
@@ -18,8 +22,11 @@ export interface Settings {
   stableFeed: Address;
   heartbeat: number;
   adminExpiry: number;
+  /** Approved from deployment for 365 days (the deploy's WATCHERS). */
   watchers: Address[];
   vaults: Address[];
+  /** Launch vaults that answer paused(). They get the Paused alarm too. None of the five launch vaults does. */
+  pausedVaults?: Address[];
   /** The app's plan payment Safe and API address, for the web config. */
   planPayTo?: Address;
   apiUrl?: string;
@@ -32,11 +39,6 @@ export interface Settings {
 }
 export interface Deployment { timelock: Address; alarmBook: Address; router: Address; adapter: Address; startBlock: number }
 export interface Call { to: Address; value: string; data: Hex }
-
-const timelockAbi = parseAbi([
-  "function schedule(address target, uint256 value, bytes data, bytes32 salt) returns (bytes32)",
-  "function execute(address target, uint256 value, bytes data, bytes32 salt) payable returns (bytes)",
-]);
 
 export function readBroadcast(path: string): Deployment {
   const run = JSON.parse(readFileSync(path, "utf8")) as {
@@ -54,38 +56,16 @@ export function readBroadcast(path: string): Deployment {
   };
 }
 
-/** Admin changes that go through the Timelock, in the order they must run. */
-export function adminCalls(d: Deployment, s: Settings): { target: Address; data: Hex; label: string }[] {
-  return [
-    { target: d.router, label: "enable ERC4626Adapter", data: encodeFunctionData({ abi: routerAbi, functionName: "setAdapter", args: [d.adapter, true] }) },
-    ...s.watchers.map((w) => ({
-      target: d.alarmBook,
-      label: `approve watcher ${w}`,
-      data: encodeFunctionData({ abi: alarmBookAbi, functionName: "setWatcher", args: [w, true] }),
-    })),
-  ];
-}
-
-const salt = (label: string): Hex => keccak256(stringToHex(`canopy:v1:${label}`));
-
 export const delayOf = (s: Settings) => s.testTimelockDelay ?? s.timelockDelay ?? 0;
 export const MAINNETS = [8453, 4663];
 
-export function timelockBatches(d: Deployment, s: Settings) {
-  const calls = adminCalls(d, s);
-  const wrap = (fn: "schedule" | "execute"): Call[] =>
-    calls.map((c) => ({
-      to: d.timelock,
-      value: "0",
-      data: encodeFunctionData({ abi: timelockAbi, functionName: fn, args: [c.target, 0n, c.data, salt(c.label)] }),
-    }));
-  return { schedule: wrap("schedule"), execute: wrap("execute"), labels: calls.map((c) => c.label) };
-}
+/** Whether a launch vault is to get the Paused alarm. */
+const answersPaused = (s: Pick<Settings, "pausedVaults">, v: Address) => (s.pausedVaults ?? []).some((p) => p.toLowerCase() === v.toLowerCase());
 
 /** AlarmBook registration is open to anyone, so this batch needs no Timelock. */
-export function presetBatch(d: Deployment, vaults: Address[]): Call[] {
+export function presetBatch(d: Deployment, vaults: Address[], s: Pick<Settings, "pausedVaults"> = {}): Call[] {
   return vaults.flatMap((v) =>
-    registrationOrder(v).map((x) => ({
+    registrationOrder(v, v, { paused: answersPaused(s, v) }).map((x) => ({
       to: d.alarmBook,
       value: "0",
       data: encodeFunctionData({ abi: alarmBookAbi, functionName: "register", args: [x] }),
@@ -101,22 +81,9 @@ const safeBatch = (chainId: number, name: string, description: string, transacti
   transactions,
 });
 
-/** The Safe batch files, in signing order. With no delay, schedule and execute go in one batch. */
+/** The Safe batch files. Just one: registering the alarm presets. There is no admin setup to sign. */
 export function planFiles(d: Deployment, s: Settings): [string, ReturnType<typeof safeBatch>][] {
-  const t = timelockBatches(d, s);
-  const delay = delayOf(s);
-  const register = (n: number) => [`${n}-register-alarms.safe.json`, safeBatch(s.chainId, `Canopy ${n}: register alarm presets`, `${s.vaults.length} vaults`, presetBatch(d, s.vaults))] as [string, ReturnType<typeof safeBatch>];
-  if (delay === 0) {
-    return [
-      ["1-admin-setup.safe.json", safeBatch(s.chainId, "Canopy 1: admin setup", t.labels.join("; "), [...t.schedule, ...t.execute])],
-      register(2),
-    ];
-  }
-  return [
-    ["1-schedule.safe.json", safeBatch(s.chainId, "Canopy 1: schedule admin setup", t.labels.join("; "), t.schedule)],
-    ["2-execute-after-delay.safe.json", safeBatch(s.chainId, "Canopy 2: execute admin setup", `Only valid ${delay} seconds after step 1.`, t.execute)],
-    register(3),
-  ];
+  return [["1-register-alarms.safe.json", safeBatch(s.chainId, "Canopy: register alarm presets", `${s.vaults.length} vaults`, presetBatch(d, s.vaults, s))]];
 }
 
 export function writePlan(d: Deployment, s: Settings, out: string) {

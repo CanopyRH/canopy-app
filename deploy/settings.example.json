@@ -14,6 +14,7 @@
     "0xWATCHER_2",
     "0xWATCHER_3"
   ],
+  "pausedVaults": [],
   "vaults": [
     "0xBeEff033F34C046626B8D0A041844C5d1A5409dd",
     "0xBEEff039907422219Fb367e525954DDC092854d9",

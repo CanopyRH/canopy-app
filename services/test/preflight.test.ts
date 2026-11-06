@@ -36,7 +36,7 @@ const launch = (): Launch => ({
   },
   deployEnv: {
     STABLE, WETH, SWAP_ROUTER: ROUTER, STABLE_FEED: FEED, PROPOSER_MULTISIG: PROPOSER, GUARDIAN_MULTISIG: GUARDIAN,
-    STABLE_FEED_HEARTBEAT: "90000", ADMIN_EXPIRY: String(NOW + 365 * 86_400), TIMELOCK_DELAY: "0",
+    STABLE_FEED_HEARTBEAT: "90000", ADMIN_EXPIRY: String(NOW + 365 * 86_400), TIMELOCK_DELAY: "0", WATCHERS: [A(11), A(12), A(13)].join(","),
   },
   webChainId: 4663,
   services: {
@@ -96,6 +96,8 @@ describe("preflight", () => {
     ["one Safe in both roles", "Proposer and guardian are different Safes", (l) => { l.settings.guardian = PROPOSER; }],
     ["a one-signer Safe", "Guardian Safe needs 2 or more signers", () => {}, { thresholds: { [PROPOSER]: 2n, [GUARDIAN]: 1n } }],
     ["a plain wallet as a Safe", "Proposer Safe needs 2 or more signers", () => {}, { thresholds: { [GUARDIAN]: 2n } }],
+    ["files that disagree on the watchers", "launch.env and settings.json agree on WATCHERS", (l) => { l.deployEnv.WATCHERS = [A(11), A(12), A(14)].join(","); }],
+    ["no WATCHERS in launch.env", "launch.env and settings.json agree on WATCHERS", (l) => { delete l.deployEnv.WATCHERS; }],
     ["a repeated watcher", "Three different watchers", (l) => { l.settings.watchers = [A(11), A(11), A(13)]; }],
     ["the keeper as a watcher", "Keeper is separate from the watchers", (l) => { l.settings.keeper = A(11); }],
     ["a keeper with no gas", "Keeper holds gas", () => {}, { balance: 1n }],

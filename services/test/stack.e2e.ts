@@ -6,13 +6,16 @@
 import { spawn } from "bun";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { createPublicClient, createWalletClient, encodeFunctionData, http, type Address, type Chain, type Hex } from "viem";
+import { createPublicClient, createWalletClient, decodeErrorResult, encodeFunctionData, getContractAddress, http, type Address, type Chain, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, robinhood } from "viem/chains";
 import { alarmBookAbi, erc20Abi, routerAbi } from "../src/chain/abi";
 import { BASE, ROBINHOOD } from "../src/chain/addresses";
 import { postgres } from "../src/store/db";
 import { approveTx, armTx, planTx, PLAN_AMOUNTS } from "../../web/src/tx";
+import { COPY } from "../../web/src/copy/text";
+import { revertText } from "../../web/src/errors";
+import { attestDomain, attestTypes, signAttest } from "../src/watcher/attest";
 import { presetsFor } from "../src/api/presets";
 
 const FORK = process.argv[2]!;
@@ -107,13 +110,15 @@ try {
 
   const start = await client.getBlockNumber(); // Logs start after this, so queries stay on the fork and off the public RPC.
   const block = await client.getBlock();
-  const book = await deploy("AlarmBook.sol/AlarmBook.json", [deployer.address]);
-  const router = await deploy("ExitRouter.sol/ExitRouter.json", [P.stable, P.weth, P.swapRouter, book, deployer.address, deployer.address, P.feed, 90_000, block.timestamp + 31_536_000n]);
-  const adapter = await deploy("ERC4626Adapter.sol/ERC4626Adapter.json", [router]);
-  const pausable = await deploy("Mocks.sol/MockPausable.json");
-  await admin(wallet(deployer).writeContract({ address: router, abi: routerAbi, functionName: "setAdapter", args: [adapter, true] }));
+  // v2 needs no admin batch: the watchers are approved in the AlarmBook's constructor and the adapter is allowed in the router's.
   const watchers = [privateKeyToAccount(wA).address, privateKeyToAccount(wB).address];
-  for (const w of watchers) await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "setWatcher", args: [w, true] }));
+  const book = await deploy("AlarmBook.sol/AlarmBook.json", [deployer.address, watchers]);
+  const nextNonce = await client.getTransactionCount({ address: deployer.address, blockTag: "pending" });
+  const predicted = getContractAddress({ from: deployer.address, nonce: BigInt(nextNonce + 1) });
+  const adapter = await deploy("ERC4626Adapter.sol/ERC4626Adapter.json", [predicted]);
+  const router = await deploy("ExitRouter.sol/ExitRouter.json", [P.stable, P.weth, P.swapRouter, book, deployer.address, deployer.address, P.feed, 90_000, block.timestamp + 31_536_000n, [adapter]]);
+  if (router.toLowerCase() !== predicted.toLowerCase()) throw new Error("the router did not land where the adapter expected it");
+  const pausable = await deploy("Mocks.sol/MockPausable.json");
   await rpc("anvil_setBalance", [privateKeyToAccount(keeperKey).address, "0x56BC75E2D63100000"]);
 
   // Fresh databases, one per operator.
@@ -151,6 +156,10 @@ try {
   const pB = launch("operator-b", { DATABASE_URL: `${PG}/canopy_b`, PORT: String(API_B), WATCHER_PRIVATE_KEY: wB });
   const ok = await waitFor("both APIs", async () => (await fetch(`http://127.0.0.1:${API_A}/alarms/live`)).ok && (await fetch(`http://127.0.0.1:${API_B}/alarms/live`)).ok);
   check("two operators started as separate processes on real Postgres", ok && pA.every((p) => p.exitCode === null) && pB.exitCode === null);
+
+  // The constructors emit the admin events (one AdapterSet, a WatcherSet per watcher). Each operator reads them from the deploy block and tells the ops chat.
+  check("the ops chat heard both watchers and the adapter from the constructors", await waitFor("ops events", async () =>
+    telegram.filter((m) => m.chat === 1 && m.text.includes("admin event WatcherSet")).length >= 2 && telegram.some((m) => m.chat === 1 && m.text.includes("admin event AdapterSet"))));
 
   // A real Telegram update reaches the bot through the webhook.
   const watchUpdate = { update_id: 1, message: { message_id: 1, date: 0, chat: { id: 777, type: "private" }, from: { id: 777, is_bot: false, first_name: "U" }, text: `/watch ${VAULT.toLowerCase()}`, entities: [{ type: "bot_command", offset: 0, length: 6 }] } };
@@ -201,6 +210,32 @@ try {
   check("a key that isn't one of the vault's presets alerts nobody", !telegram.some((m) => m.text.includes("Alarm on")));
   check("the API shows the live alarm", await waitFor("live", async () => ((await (await fetch(`http://127.0.0.1:${API_A}/alarms/live`)).json()) as unknown[]).length === 1));
 
+  // A key that is going off cannot be armed on a new position: one that fired in the last day, and one tripped now that nobody poked.
+  const armFrom = async (from: Address, key: Hex) => {
+    const t = armTx(router, adapter, VAULT, [key]);
+    try {
+      await client.call({ account: from, to: t.to, data: t.data });
+      return null;
+    } catch (e) {
+      const data = [(e as { data?: Hex }).data, (e as { cause?: { data?: Hex } }).cause?.data, (e as { cause?: { cause?: { data?: Hex } } }).cause?.cause?.data].find((x) => typeof x === "string" && x.startsWith("0x"));
+      return { error: data ? decodeErrorResult({ abi: routerAbi, data }) : null, text: revertText(e) };
+    }
+  };
+  const refused1 = await armFrom(HOLDER_HARD, hardKey);
+  check("arm refuses a key that fired in the last day (AlarmNotClear)", refused1?.error?.errorName === "AlarmNotClear" && (refused1.error.args as readonly Hex[])[0] === hardKey);
+  check("the web app says so in plain words", refused1?.text === COPY.errAlarmNotClear);
+  const pausable2 = await deploy("Mocks.sol/MockPausable.json");
+  const hard2 = { ...hard, target: pausable2 };
+  await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "register", args: [hard2] }));
+  const hard2Key = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "keyOf", args: [hard2] });
+  check("a fresh key reads armable", await client.readContract({ address: book, abi: alarmBookAbi, functionName: "armable", args: [hard2Key] }));
+  await send(deployer.address, pausable2, encodeFunctionData({ abi: artifact("Mocks.sol/MockPausable.json").abi, functionName: "setPaused", args: [true] }));
+  const refused2 = await armFrom(HOLDER_HARD, hard2Key);
+  check("arm refuses a key that reads tripped right now, though it never fired", refused2?.error?.errorName === "AlarmNotClear" && (refused2.error.args as readonly Hex[])[0] === hard2Key);
+  check("armable is false for both, true for a clear key", !(await client.readContract({ address: book, abi: alarmBookAbi, functionName: "armable", args: [hardKey] }))
+    && !(await client.readContract({ address: book, abi: alarmBookAbi, functionName: "armable", args: [hard2Key] }))
+    && await client.readContract({ address: book, abi: alarmBookAbi, functionName: "armable", args: [quorumKey] }));
+
   // Path 2: a hack report. It arrives first, and the report alone must do nothing.
   const b2 = await bal(HOLDER_QUORUM);
   await Bun.sleep(1000);
@@ -226,6 +261,63 @@ try {
   const open = await dbA.query<{ dedupe: string; attempts: number }>(`SELECT dedupe, attempts FROM jobs WHERE NOT done`);
   console.log(`  jobs still open when the exit landed: ${open.length}, attempts ${open.map((j) => j.attempts).join(",")}`);
   check("no job is left waiting", await waitFor("jobs", async () => (await dbA.query(`SELECT 1 FROM jobs WHERE NOT done`)).length === 0, 5_000));
+
+  // Path 3: a DRAIN alarm fires in two steps. The first poke that sees the drop only records it (Pending), and a poke a minute
+  // later fires it. The keeper must count the first as progress, not as a miss, and come back for the second.
+  const token = await deploy("Mocks.sol/MockERC20.json", [6]);
+  const mockVault = await deploy("Mocks.sol/MockVault.json", [token, 10n ** 18n]);
+  const mocks = artifact("Mocks.sol/MockVault.json").abi;
+  const SINK = "0x00000000000000000000000000000000000051c0" as Address;
+  await send(deployer.address, mockVault, encodeFunctionData({ abi: mocks, functionName: "mint", args: [SINK, 1_000n * 10n ** 18n] }));
+  const drain = { kind: 4, target: mockVault, threshold: 2500n, window: 1200, a: `0x${"00".repeat(32)}` as Hex, b: `0x${"00".repeat(32)}` as Hex };
+  await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "register", args: [drain] }));
+  const drainKey = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "keyOf", args: [drain] });
+  // A paying owner with no shares arms a position on the real vault with this key, so the keeper polls it and its exit job ends at once.
+  await send(P.morpho, P.stable, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [deployer.address, 100_000_000n] }));
+  const dp = planTx(P.stable, PAY_TO, PLAN_AMOUNTS.months3);
+  await send(deployer.address, dp.to, dp.data);
+  const da = armTx(router, adapter, VAULT, [drainKey]);
+  await send(deployer.address, da.to, da.data);
+  check("the DRAIN position and its plan reached the keeper's database", await waitFor("drain position", async () =>
+    (await dbA.query(`SELECT 1 FROM positions WHERE active`)).length === 3 && (await dbA.query(`SELECT 1 FROM plans`)).length === 3));
+  // The reference needs one sampling period (600 s) to roll, so the fork's clock moves, then a checkpoint sets it.
+  await rpc("evm_increaseTime", [610]);
+  await rpc("evm_mine", []);
+  await send(deployer.address, book, encodeFunctionData({ abi: alarmBookAbi, functionName: "checkpoint", args: [drainKey] }));
+  const drainState = () => client.readContract({ address: book, abi: alarmBookAbi, functionName: "state", args: [drainKey] });
+  const counter = async (name: string) => Number((await dbA.query<{ value: string }>(`SELECT value FROM counters WHERE name=$1`, [name]))[0]?.value ?? 0);
+  check("the reference rolled and nothing is pending", (await drainState())[4] === 1_000n * 10n ** 18n && (await drainState())[6] === 0n);
+  const misses0 = await counter("poke_miss"), fails0 = await counter("poke_fail"), pending0 = await counter("poke_pending");
+  await send(deployer.address, mockVault, encodeFunctionData({ abi: mocks, functionName: "setPrice", args: [5n * 10n ** 17n] })); // half the assets are gone
+  const tDrain = Date.now();
+  check("the keeper's first poke recorded the drop (Pending) and did not fire", await waitFor("pending", async () => (await drainState())[6] > 0n, 30_000)
+    && !(await client.readContract({ address: book, abi: alarmBookAbi, functionName: "isLive", args: [drainKey, 86_400n] })));
+  check("that poke counted as progress, not a miss or a failure", await waitFor("pending counter", async () => (await counter("poke_pending")) > pending0, 10_000)
+    && (await counter("poke_miss")) === misses0 && (await counter("poke_fail")) === fails0);
+  check("the keeper came back a minute later and the second poke fired it", await waitFor("drain fired", async () =>
+    await client.readContract({ address: book, abi: alarmBookAbi, functionName: "isLive", args: [drainKey, 86_400n] }), 120_000),
+  `${((Date.now() - tDrain) / 1000).toFixed(0)}s after the drop`);
+  check("the indexer recorded the DRAIN alarm", await waitFor("drain alarm", async () => (await dbA.query(`SELECT 1 FROM alarms WHERE key=$1`, [drainKey])).length === 1, 20_000));
+  check("the DRAIN exit job ended with nothing to exit", await waitFor("drain job", async () => (await dbA.query(`SELECT 1 FROM jobs WHERE NOT done`)).length === 0, 20_000));
+  check("a pending sighting cleared once it fired", (await drainState())[6] === 0n);
+
+  // Watchers sign under AlarmBook v2's domain. A version 1 signature is refused on chain.
+  const quorum2 = { kind: 5, target: pausable, threshold: 2n, window: 0, a: `0x${"00".repeat(32)}` as Hex, b: `0x${"00".repeat(32)}` as Hex };
+  await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "register", args: [quorum2] }));
+  const q2 = await client.readContract({ address: book, abi: alarmBookAbi, functionName: "keyOf", args: [quorum2] });
+  const evidence = `0x${"7e".repeat(32)}` as Hex;
+  const deadline = (await client.getBlock()).timestamp + 900n;
+  const sorted = [wA, wB].map((k) => privateKeyToAccount(k)).sort((x, y) => (BigInt(x.address) < BigInt(y.address) ? -1 : 1));
+  const sigs = {
+    v2: await Promise.all(sorted.map((a) => signAttest(a, book, P.chain.id, q2, evidence, deadline))),
+    v1: await Promise.all(sorted.map((a) => a.signTypedData({ domain: { ...attestDomain(book, P.chain.id), version: "1" }, types: attestTypes, primaryType: "Attest", message: { key: q2, evidence, deadline } }))),
+  };
+  const fire = (v: "v1" | "v2") => client.simulateContract({ address: book, abi: alarmBookAbi, functionName: "fireByQuorum", args: [q2, evidence, deadline, sorted.map((a) => a.address), sigs[v]], account: deployer.address });
+  check("the AlarmBook's domain version is 2", (await client.readContract({ address: book, abi: alarmBookAbi, functionName: "DOMAIN_SEPARATOR" })) === (await import("../deploy/verify")).domainSeparator(P.chain.id, book));
+  check("signatures made under version 1 are refused (BadSignature)", await fire("v1").then(() => false, (e: Error) => /BadSignature/.test(e.message)));
+  check("signatures made under version 2 are accepted", await fire("v2").then(() => true, () => false));
+  await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "fireByQuorum", args: [q2, evidence, deadline, sorted.map((a) => a.address), sigs.v2] }));
+  check("the quorum alarm fired from version 2 signatures", await client.readContract({ address: book, abi: alarmBookAbi, functionName: "isLive", args: [q2, 60n] }));
 
   // Restart: the indexer resumes from its cursor and credits nothing twice.
   const paid = await dbA.query<{ paid_until: string }>(`SELECT paid_until FROM plans ORDER BY wallet`);

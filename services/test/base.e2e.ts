@@ -7,7 +7,7 @@ import { spawn } from "bun";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { createPublicClient, createWalletClient, encodeFunctionData, http, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, getContractAddress, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 import { alarmBookAbi, erc20Abi, routerAbi } from "../src/chain/abi";
@@ -68,14 +68,13 @@ try {
   const startBlock = await client.getBlockNumber();
   const block = await client.getBlock();
   const nowChain = () => client.getBlock().then((b) => Number(b.timestamp));
-  const book = await deploy("AlarmBook.sol/AlarmBook.json", alarmBookAbi as never, [deployer.address]);
+  // v2: the watchers go in the AlarmBook's constructor, and the adapter (told where the router will be) in the router's.
+  const book = await deploy("AlarmBook.sol/AlarmBook.json", alarmBookAbi as never, [deployer.address, [w1.address, w2.address]]);
+  const nextNonce = await client.getTransactionCount({ address: deployer.address, blockTag: "pending" });
+  const adapter = await deploy("ERC4626Adapter.sol/ERC4626Adapter.json", artifact("ERC4626Adapter.sol/ERC4626Adapter.json").abi as never, [getContractAddress({ from: deployer.address, nonce: BigInt(nextNonce + 1) })]);
   const router = await deploy("ExitRouter.sol/ExitRouter.json", routerAbi as never, [
-    BASE.usdc, BASE.weth, BASE.swapRouter, book, deployer.address, deployer.address, BASE.usdcFeed, 90_000, block.timestamp + 31_536_000n,
+    BASE.usdc, BASE.weth, BASE.swapRouter, book, deployer.address, deployer.address, BASE.usdcFeed, 90_000, block.timestamp + 31_536_000n, [adapter],
   ]);
-  const adapter = await deploy("ERC4626Adapter.sol/ERC4626Adapter.json", artifact("ERC4626Adapter.sol/ERC4626Adapter.json").abi as never, [router]);
-  const admin = async (tx: Promise<Hex>) => client.waitForTransactionReceipt({ hash: await tx });
-  await admin(wallet(deployer).writeContract({ address: router, abi: routerAbi, functionName: "setAdapter", args: [adapter, true] }));
-  for (const w of [w1, w2]) await admin(wallet(deployer).writeContract({ address: book, abi: alarmBookAbi, functionName: "setWatcher", args: [w.address, true] }));
   await rpc("anvil_setBalance", [keeperKey.address, "0x56BC75E2D63100000"]);
   check("contracts deployed on the Base fork", true, `router ${router.slice(0, 10)}`);
 
