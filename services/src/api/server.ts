@@ -9,7 +9,7 @@ import type { Repo } from "../store/repo";
 import { acceptAttestation } from "../watcher/watcher";
 import { PLUGINS, type Plugin } from "../plugins";
 import { sameSecret } from "./secret";
-import { DEFAULT_RATE_LIMIT, rateLimit, type RateLimit } from "./ratelimit";
+import { DEFAULT_RATE_LIMIT, bucketOf, clientIp, rateLimit, type RateLimit } from "./ratelimit";
 
 const AttestBody = z.strictObject({
   key: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
@@ -68,7 +68,10 @@ export function createApi(d: ApiDeps) {
   });
   app.get("/health", async (c) => {
     if (!d.health || !d.healthToken || !sameSecret(c.req.header("authorization"), `Bearer ${d.healthToken}`)) return c.json({ error: "forbidden" }, 403);
-    return c.json(await d.health());
+    // Who the API thinks is asking, so an operator can check the proxy settings the read limit relies on.
+    const limit = d.rateLimit ?? DEFAULT_RATE_LIMIT;
+    const caller = { forwardedFor: c.req.header("x-forwarded-for") ?? null, realIp: c.req.header("x-real-ip") ?? null, countedAs: bucketOf(clientIp(c, limit.proxyHops)) };
+    return c.json({ ...((await d.health()) as object), caller });
   });
   app.get("/risk/:target", async (c) => {
     const t = vaultParam(c.req.param("target"));

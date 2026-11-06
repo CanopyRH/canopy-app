@@ -705,7 +705,10 @@ describe("api limits", () => {
   test("/health needs its token, and stays off without one", async () => {
     const on = api({ health: async () => ({ ok: true }), healthToken: "t".repeat(16) });
     expect((await on.request("/health")).status).toBe(403);
-    expect((await on.request("/health", { headers: { authorization: `Bearer ${"t".repeat(16)}` } })).status).toBe(200);
+    const ok = await on.request("/health", { headers: { authorization: `Bearer ${"t".repeat(16)}`, "x-forwarded-for": "203.0.113.9, 198.51.100.7" } });
+    expect(ok.status).toBe(200);
+    // The operator sees which address the read limit counts, one proxy hop from the end by default.
+    expect(((await ok.json()) as { caller: unknown }).caller).toEqual({ forwardedFor: "203.0.113.9, 198.51.100.7", realIp: null, countedAs: "198.51.100.7" });
     const unset = api({ health: async () => ({ ok: true }) });
     expect((await unset.request("/health")).status).toBe(403);
     expect((await unset.request("/health", { headers: { authorization: "Bearer undefined" } })).status).toBe(403);
