@@ -5,7 +5,8 @@ file (a link) and its function. Run everything from `contracts/`.
 
 The rules come from two places: the header comment of `ExitRouter` (rules R1 to R5, numbered as in the comment)
 and the header and inline comments of `AlarmBook` (rules A1 to A10). The accounting rules the invariant suite
-checks, which the comments imply but do not number, are R6 to R9. Timelock and the adapter have a few rules of their own at the end.
+checks, which the comments imply but do not number, are R6 to R9. R10 is the cap on slippage when a third party runs the exit.
+Timelock and the adapter have a few rules of their own at the end.
 
 ## How to run the tests
 
@@ -43,10 +44,12 @@ exception is the swap router, which pulls the input token of a swap the router a
 ### R2. Only the owner, or anyone while an alarm the owner armed is live
 
 A third party can exit a position only if the position is armed, the alarm key was armed on that position, and that
-alarm fired after the arming and within the last 24 hours. A disarmed position is closed to everyone but its owner.
+alarm fired at or after the arming (the same second counts) and within the last 24 hours. A disarmed position is closed
+to everyone but its owner.
 
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_keeperExit_rejectedWithNoAlarm`, `test_keeperExit_rejectedWithUnarmedKey`, `test_keeperExit_rejectedAfterTtl`.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_alarmFiredBeforeArming_doesntAuthorizeAThirdParty`: an alarm that fired before the arming does not count.
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_alarmFiredInTheSameSecondAsArmingAuthorizesAKeeper` pins that "at or after" includes the arming second, and `test_alarmFiredOneSecondBeforeArmingIsRefused` pins the other side of the line.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: a poisoned alarm cannot exit a user who armed later.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_unknownPosition_reverts`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_exit_NotArmed_unknownPositionByStranger`, `test_exit_NotArmed_afterDisarm`, `test_exit_NotArmed_afterDisarmAll`, `test_exit_NotAuthorized_keyNotArmedForThisPosition`, `test_exit_AlarmNotLive_neverFired`, `test_exit_AlarmNotLive_firedBeforeArming`, `test_exit_AlarmNotLive_firedLongAgo`.
@@ -118,6 +121,15 @@ plus anything strangers sent it directly. Direct gifts are never swept and never
 - [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_arm_rejectsUnlistedAdapter`, `test_arm_rejectsSlipAboveCap`, `test_arm_rejectsTooManyKeys`, `test_arm_rejectsBadHarbour`, `test_arm_rejectsWhilePaused`, `test_arm_isBoundToCaller`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_arm_NotSupported_unlistedAdapter`, `test_arm_NotSupported_afterAdapterDisabled`, `test_arm_BadHarbour`, `test_arm_SlipTooHigh`, `test_arm_TooManyKeys`, `test_arm_NotOwner_nftHeldBySomeoneElse`, `test_arm_BadTokenId_erc20WithTokenId`.
 
+### R10. A third party's swap never pays below 99% of the oracle price
+
+When anyone but the owner runs the exit, the slippage allowed on the optional stablecoin swap is the smaller of the
+owner's `maxSlipBps` and `THIRD_PARTY_SLIP_CAP_BPS` (1%). A wider limit, up to the owner's own 10% ceiling, applies
+only to exits the owner sends. If the pool cannot fill within the cap, the swap is skipped and the raw token is paid.
+
+- [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_swap_thirdPartyCappedAtOnePercent`: at 5% under the oracle, inside the owner's 10% limit, a keeper exit skips the swap.
+- [ExitRouter.t.sol](test/ExitRouter.t.sol) `test_swap_thirdPartyInsideOnePercent` and `test_swap_userLimitBelowCapStillApplies`: a swap at the cap goes through, and a tighter limit set by the owner still applies.
+
 ---
 
 ## AlarmBook rules
@@ -151,17 +163,30 @@ threshold, a missing or empty reading, a bad quorum size, a `BOTH` whose parts d
 `checkpoint` moves the mark up, never down. The audit lead asked whether anyone can raise it with a one-transaction
 price spike (flash deposit, donation, withdrawal) and so fire a false "Vault loss" later.
 
+The same rule has a cost: nothing can lower a mark, and an `ADDRESS_CHANGE` detector never updates its registered
+address. So a key that has tripped for good, after a lasting share-price loss or one curator change, stays tripped and
+refires every 24 hours. Anyone who arms it later is exited at the next refire. The web app never arms such a key.
+
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_shareDrop_markNeverFalls`, `test_shareDrop_smallDipDoesNotLowerMark`.
 - [ForkCheckpoint.t.sol](test/ForkCheckpoint.t.sol) `test_fork_shareDropCheckpoint_everyLaunchVault`: on all five launch vaults, four spike attempts each, on the live state and after 180 idle days. None leaves the mark above the settled price, and none can fire the alarm.
-- [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: for a vault where the attack would work (a naive one that counts donations), the poison cannot exit a user who arms after it.
+- [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_poisonedShareMark_cantExitALaterUser`: for a vault where the attack would work (a naive one that counts donations), the poison cannot exit a user who arms after it. It only looks one second ahead.
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_shareDropKeyStaysTrippedAfterALastingLossAndRefiresDaily`, `test_addressChangeKeyStaysTrippedForGoodAfterOneCuratorChange` and `test_poisonedShareMarkExitsALaterUserAtTheDailyRefire`: the documented limit. A key tripped for good refires daily, and a poisoned mark exits a later user at the first refire.
+- [alarms.test.ts](../web/test/alarms.test.ts): the app refuses a key that is tripped now or fired in the last 24 hours.
 
-### A5. DRAIN never trusts one reading
+### A5. DRAIN never trusts one high reading, but it can trust a single low one
 
-A single `totalAssets` reading, such as one taken inside a flash deposit, never becomes a baseline. The lowest sample
-of a whole period does, and nothing rolls while the detector is tripped, so a drain cannot be reset away.
+A single high `totalAssets` reading, such as one taken inside a flash deposit, never becomes a baseline. The lowest
+sample of a whole period does, and nothing rolls while the detector is tripped, so a drain cannot be reset away.
+
+The other direction is weaker. One low reading can fire the alarm: a holder of a large share can withdraw, poke and
+redeposit in one transaction. Low samples taken by `checkpoint` lower the next reference, so a real loss can later go
+unseen. And a window of 1 or 2 seconds is accepted, so two samples inside one flash deposit can move the reference.
+The web app offers DRAIN only inside `BOTH` with a watcher quorum, and refuses to register a window under 1,200 seconds.
 
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_flashDeposit_cantRaiseTheBaseline`, `test_flashDeposit_onANewDetector_cantFire`, `test_flashSample_isPulledDownByTheNextHonestSample`, `test_midDrainCheckpoint_cantHideADrain`, `test_midDrainRoll_cantHideADrain`, `test_flashDeposit_cantResetATrippedDrain`, `test_samplesDuringATrippedDrain_cantLowerTheNextBaseline`, `test_quietVault_baselineFollowsRealGrowth`.
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_drain_snapshotCannotResetAfterWindowWhileTripped`, `test_drain_snapshotExpires`, `test_drain_andCheckpointRules`.
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_drainFiresOnASingleLowReadingFromAFlashWithdrawal`, `test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen` and `test_drainWindowOfOneSecondIsAcceptedAndFlashManipulable`: the documented limits.
+- [alarms.test.ts](../web/test/alarms.test.ts) (DRAIN windows): the app refuses a window under 1,200 seconds.
 
 ### A6. An alarm cannot refire for 24 hours
 
@@ -173,11 +198,15 @@ After a fire, `poke` and `fireByQuorum` cannot fire the same key again until `RE
 ### A7. A quorum alarm needs k distinct, approved watchers with valid, fresh, low-s signatures
 
 Signers must be sorted ascending and distinct, every one on the watcher list, each signing this chain's and this
-contract's EIP-712 digest for this key. A signature lives at most one hour, shorter than the refire delay, so it
-cannot fire twice. Malleable, wrong-length and rejected contract-wallet signatures fail.
+contract's EIP-712 digest for this key. The one-hour limit is measured at fire time, not at signing time: the deadline
+may be at most one hour ahead of the block that fires. So a signature made with a far deadline cannot fire until its
+last hour, and then anyone holding it can fire it. It still cannot fire twice, because one hour is shorter than the
+refire delay. Malleable, wrong-length and rejected contract-wallet signatures fail. The watchers cap their own
+deadlines at 10 to 30 minutes.
 
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_quorum_twoOfThreeFires`, `test_quorum_oneSignerFails`, `test_quorum_duplicateAndUnsortedFail`, `test_quorum_nonWatcherFails`, `test_quorum_removedWatcherFails`, `test_quorum_expiredFails`, `test_quorum_badSignatureFails`, `test_quorum_cannotFireAnotherKey`, `test_quorumAlarm_endToEndExit`.
 - [AlarmAttacks.t.sol](test/AlarmAttacks.t.sol) `test_reusedSignatures_cantOutliveTheRefireDelay`.
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_farDeadlineQuorumSignatureCanFireByAnyoneInItsLastHour`: the limit is on the deadline at fire time. `test_contractWatcherThatApprovesCanSignViaErc1271`, `test_eoaWithCodeFallsBackToEcdsa`, `test_signatureForAnotherDeploymentIsRejected` and `test_domainSeparatorBindsTheChainIdAndTheContract` cover contract wallets and the chain id in the domain.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_fireByQuorum_NotQuorumKind`, `test_fireByQuorum_Expired`, `test_fireByQuorum_deadlineEqualToNowIsStillValid`, `test_fireByQuorum_DeadlineTooFar`, `test_fireByQuorum_BadSigners_belowThreshold`, `test_fireByQuorum_BadSigners_noSigners`, `test_fireByQuorum_BadSigners_lengthMismatch`, `test_fireByQuorum_BadSigners_unsortedOrDuplicate`, `test_fireByQuorum_BadSigners_zeroAddressFirst`, `test_fireByQuorum_NotWatcher_neverApproved`, `test_fireByQuorum_NotWatcher_removed`, `test_fireByQuorum_BadSignature_signedAnotherDigest`, `test_fireByQuorum_BadSignature_signedByTheOtherWatcher`, `test_fireByQuorum_BadSignature_highS`, `test_fireByQuorum_BadSignature_wrongLengthOrEmpty`, `test_fireByQuorum_BadSignature_badRecoveryId`, `test_fireByQuorum_BadSignature_contractWatcherSaysNo`, `test_fireByQuorum_aFailedAttemptLeavesNothingFired`.
 
 ### A8. A BOTH alarm fires only when both of its parts fired within its window
@@ -190,10 +219,13 @@ Its window is at least the refire delay, so neither part can be stale by design,
 
 ### A9. Only the admin edits the watcher list
 
-The list stays with the Timelock, so a bad watcher can always be removed.
+The list stays with the Timelock, so a bad watcher can always be removed. It has no expiry: unlike the router's admin, the
+AlarmBook admin keeps this power after `ADMIN_EXPIRY`. So whoever holds the admin and two watcher keys can fire any
+`QUORUM` key. Funds still go only to owners (R1), so the worst case is an early exit.
 
 - [AlarmBook.t.sol](test/AlarmBook.t.sol) `test_setWatcher_onlyAdmin`.
 - [Reverts.t.sol](test/Reverts.t.sol) `test_setWatcher_NotAdmin`.
+- [AlarmLimits.t.sol](test/AlarmLimits.t.sol) `test_watcherListStaysAdminControlledAfterRouterAdminExpiry`: after the router's admin has expired, the watcher list can still be changed and a `QUORUM` key can still be fired.
 
 ### A10. Unknown keys are rejected
 
