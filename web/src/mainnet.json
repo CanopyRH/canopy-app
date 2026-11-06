@@ -1,7 +1,7 @@
 {
-  "router": "0xc867a4b38f7b9f7ccc121d61b2f8d200395a965c",
-  "adapter": "0x14e6f3a2cd259148f983e2b01fe778c5002c98bc",
-  "alarmBook": "0x550cc2ad4c2f095c37b8362bd19c475ab7576e4d",
+  "router": "0x1c3ca2b2f01c30b731909563dad550062b340757",
+  "adapter": "0x32c39abf03a12303cc3150be50ed7b0e03ab9d38",
+  "alarmBook": "0x6a391f2c489ddfcb60ad64edddda5ea0921584cf",
   "planPayTo": "0xb668d6822b09eA5D32606e78Ed81d10C34CB95ad",
   "apiUrl": "https://api.canopyrh.com",
   "walletConnectProjectId": "1dd8c1799b3b51b454c2cdbb6656439d"
