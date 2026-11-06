@@ -27,6 +27,16 @@ export function needed(presets: Preset[], keys: Hex[], d: Detector): boolean {
 export const askedKeys = (presets: Preset[], keys: Hex[]): Hex[] =>
   [...new Set(presets.filter((p) => keys.includes(p.key)).flatMap((p) => [p.key, ...(p.requires ?? []).map((q) => q.key)]))];
 
+/**
+ * How many wallet confirmations arming will take. One when the wallet can batch and armPlan() would batch: nothing to
+ * register and an approval to send with the arm. Otherwise one per unregistered alarm part, one for the approval if it is
+ * needed, and one for the arm, which is what arm()'s steps send.
+ */
+export function confirmCount(o: { batch: boolean; unregistered: number; needsApproval: boolean }): number {
+  if (o.batch && o.unregistered === 0 && o.needsApproval) return 1;
+  return o.unregistered + (o.needsApproval ? 1 : 0) + 1;
+}
+
 export interface PlanDeps {
   io: AlarmIo;
   book: Address;

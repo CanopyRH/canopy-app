@@ -4,7 +4,7 @@ import { exitBlocked, gateAbi, type Read } from "./gates";
 import { sendTx, type Eip1193 } from "./wallet";
 import { keyOf, presetsFor, registrationOrder, type Preset } from "../../services/src/api/presets";
 import { notArmable, presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
-import { armOneStep, batchSupport, needed } from "./batch";
+import { armOneStep, batchSupport, confirmCount, needed } from "./batch";
 import { revertText } from "./errors";
 import { COPY } from "./copy/text";
 import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
@@ -136,6 +136,19 @@ function make(c: Chain) {
   /** Whether this wallet can arm in one confirmation. Asked when the alarm dialog opens, so the screen can say so. */
   const canBatch = (s: Signer) => batchSupport(s.provider, s.account, c.chainHex).then((k) => k !== null);
 
+  /** How many confirmations arming these keys will ask for, read from the chain the way armOneConfirm() decides. */
+  async function armConfirms(s: Signer, vault: Address, keys: Hex[]): Promise<number> {
+    const paused = await answersPaused(vault);
+    const presets = presetsFor(vault, vault, { paused });
+    const parts = registrationOrder(vault, vault, { paused }).filter((d) => needed(presets, keys, d));
+    const [batch, known, allowed] = await Promise.all([
+      canBatch(s),
+      Promise.all(parts.map((d) => alarmIo.known!(keyOf(d)).catch(() => false))),
+      client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, c.router!] }),
+    ]);
+    return confirmCount({ batch, unregistered: known.filter((k) => !k).length, needsApproval: allowed < maxUint256 / 2n });
+  }
+
   /** Arms in one wallet confirmation when the wallet supports it, and with arm()'s steps when it doesn't. */
   const armOneConfirm = async (s: Signer, vault: Address, keys: Hex[]) => {
     const paused = await answersPaused(vault);
@@ -157,7 +170,7 @@ function make(c: Chain) {
   /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
-  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm };
+  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm, armConfirms };
 }
 
 export type Net = ReturnType<typeof make>;

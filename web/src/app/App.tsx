@@ -99,11 +99,16 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   const [picked, setPicked] = useState<Hex[]>([]);
   const [accepted, setAccepted] = useState(false);
   const [gated, setGated] = useState(false);
-  const [batching, setBatching] = useState(false);
+  const [confirms, setConfirms] = useState<number | null>(null);
   const mine = net.live && signer !== null && same(signer.account, owner);
   useEffect(() => {
-    if (mine) void net.canBatch(signer!).then(setBatching);
-  }, [net, mine, signer]);
+    // Counted for the alarms picked: one that still needs registering means separate steps, even in a wallet that can batch.
+    setConfirms(null);
+    if (!mine || picked.length === 0) return;
+    let live = true;
+    void net.armConfirms(signer!, row.vault.address, picked).then((n) => live && setConfirms(n), () => {});
+    return () => void (live = false);
+  }, [net, mine, signer, row.vault.address, picked]);
   useEffect(() => void net.riskCard(row.vault.address).then(setRisk), [net, row.vault.address]);
   useEffect(() => {
     if (!mine) return;
@@ -140,7 +145,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
         {(views ?? []).some((v) => v.status === "going-off") && <p className="cd-inline-note"><TriangleAlert size={15} />{row.state?.armed ? COPY.alarmExitArmed : COPY.alarmExitUnarmed}</p>}
         <details className="cd-advanced"><summary>Terms</summary><pre className="cd-risk-text">{TERMS}</pre></details>
         <label className="cd-terms"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /> {COPY.termsAccept}</label>
-        <p className="cd-caption">{batching ? BATCH_COPY.oneConfirm : BATCH_COPY.threeSteps}</p>
+        {confirms !== null && <p className="cd-caption">{BATCH_COPY.confirms(confirms)}</p>}
       </>}
       {/* The page's toast sits under this modal, so wallet prompts and errors show here too. */}
       {note && <p className={`cd-dialog-status ${note.error ? "is-error" : ""}`} role="status">{note.text}</p>}

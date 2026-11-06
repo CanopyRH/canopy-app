@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decodeFunctionData, getAddress, maxUint256, type Address, type Hex } from "viem";
-import { armOneStep, armPlan, batchSupport, readStatus, sendBatch, suggestsNoSupport, toCalls, waitForBatch, type ArmEnv, type PlanDeps } from "../src/batch";
+import { armOneStep, armPlan, batchSupport, confirmCount, readStatus, sendBatch, suggestsNoSupport, toCalls, waitForBatch, type ArmEnv, type PlanDeps } from "../src/batch";
 import { REFIRE_SECONDS, type AlarmIo } from "../src/alarms";
 import { COPY } from "../src/copy/text";
 import { BATCH_COPY } from "../src/copy/batch";
@@ -271,5 +271,23 @@ describe("the safety re-check comes before any wallet request", () => {
   });
   test("armPlan alone refuses too, so no caller can build a batch around a tripped key", async () => {
     await expect(armPlan(deps({ io: clear([KEYS[0]!]) }), V, KEYS)).rejects.toThrow(COPY.armRefused);
+  });
+});
+
+describe("confirmCount: what the alarm dialog says before arming", () => {
+  test("one confirmation only when the wallet batches and nothing needs registering", () => {
+    expect(confirmCount({ batch: true, unregistered: 0, needsApproval: true })).toBe(1);
+  });
+  test("an alarm part to register means separate steps, even in a wallet that batches", () => {
+    expect(confirmCount({ batch: true, unregistered: 1, needsApproval: true })).toBe(3);
+    expect(confirmCount({ batch: true, unregistered: 2, needsApproval: false })).toBe(3);
+  });
+  test("a wallet that can't batch confirms each step", () => {
+    expect(confirmCount({ batch: false, unregistered: 0, needsApproval: true })).toBe(2);
+    expect(confirmCount({ batch: false, unregistered: 0, needsApproval: false })).toBe(1);
+  });
+  test("the caption says one or the number", () => {
+    expect(BATCH_COPY.confirms(1)).toBe("One confirmation in your wallet");
+    expect(BATCH_COPY.confirms(3)).toBe("3 confirmations in your wallet");
   });
 });
