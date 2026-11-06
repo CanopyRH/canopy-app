@@ -1,0 +1,77 @@
+{
+  "eyebrow": "STATUS",
+  "title": "Is Canopy working right now?",
+  "intro": "This page reads the live services: the keeper that sends exits, the indexer that follows the chain, the watchers that confirm alarms, and the checks that run on your alarms. It shows no wallet addresses.",
+  "verdict": {
+    "ok": "Everything we can measure looks normal.",
+    "warn": "Working, with something to watch.",
+    "bad": "Something needs attention. Your alarms stay armed, but an exit could be late.",
+    "unknown": "We can't tell right now."
+  },
+  "loadingLabel": "Loading status",
+  "error": {
+    "title": "The status service is not reachable right now.",
+    "body": "That may mean something is wrong, or it may only be your connection. Your positions stay in your wallet and the chain is not affected. Try again in a moment.",
+    "retry": "Try again"
+  },
+  "updated": "Updated",
+  "keeper": {
+    "title": "Keeper",
+    "about": "Sends the exit when an alarm fires. It pays gas only and can only pay the position's owner.",
+    "lastActed": "Last exit handled",
+    "never": "None in the last week",
+    "gas": "Gas for sending exits",
+    "gasLabels": {
+      "healthy": "Healthy",
+      "low": "Low",
+      "empty": "Empty",
+      "unknown": "Not reported"
+    },
+    "queue": "Exits waiting to be sent",
+    "queueNone": "None waiting",
+    "oldest": "Oldest has waited"
+  },
+  "indexer": {
+    "title": "Indexer",
+    "about": "Follows the chain and records positions and alarms.",
+    "lag": "Behind the chain by",
+    "unknown": "Not reported",
+    "behind": "Further behind than usual."
+  },
+  "watchers": {
+    "title": "Watchers",
+    "about": "Independent operators who confirm an alarm before it fires. A watcher only signs when it sees a real problem, so a long quiet spell is normal.",
+    "last": "Last signed",
+    "never": "Has not signed yet",
+    "none": "No watchers are listed."
+  },
+  "checks": {
+    "title": "Alarm checks",
+    "about": "How recently the services last looked at the vaults your alarms watch.",
+    "last": "Last checked",
+    "never": "Not checked yet",
+    "stale": "Checks have not run for a while."
+  },
+  "history": {
+    "title": "Recent admin and guardian changes",
+    "about": "Changes to the router's settings and to the list of watchers. Each one is a transaction you can open and read on the explorer.",
+    "empty": "No admin or guardian changes recorded recently.",
+    "link": "View transaction"
+  },
+  "firings": {
+    "title": "Alarm firings, last 7 days",
+    "about": "Each time an alarm fired. A firing does not always mean an exit: only armed positions exit.",
+    "total": "Alarms fired",
+    "empty": "No alarms fired in the last 7 days.",
+    "link": "View transaction"
+  },
+  "events": {
+    "AdapterSet": "Vault adapter allowed or removed",
+    "FeedSet": "Price feed changed",
+    "RouteSet": "Swap route changed",
+    "GuardianSet": "Guardian changed",
+    "ArmingPaused": "Arming paused or resumed",
+    "WatcherSet": "Watcher allowed or removed"
+  },
+  "footer": "Some times are accurate only to within ten minutes. This page asks for no wallet and keeps nothing about you."
+}
