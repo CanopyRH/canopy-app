@@ -15,7 +15,7 @@ interface VmEtch {
 }
 
 /// @dev Stands in for a large depositor who can move a vault's totalAssets inside one transaction.
-contract Audit2Whale {
+contract Whale {
     function deposit(RealVault v, uint256 amt) external {
         MockERC20 a = v.assetToken();
         a.approve(address(v), amt);
@@ -34,7 +34,7 @@ contract Audit2Whale {
 }
 
 /// @dev Flash deposit that samples twice in one transaction. Only a tiny-window DRAIN detector lets that move the reference.
-contract Audit2DoubleSampler {
+contract DoubleSampler {
     function run(AlarmBook book, RealVault v, bytes32 key, uint256 loan) external returns (bool fired) {
         v.assetToken().approve(address(v), loan);
         uint256 s = v.deposit(loan, address(this));
@@ -46,7 +46,7 @@ contract Audit2DoubleSampler {
 }
 
 /// @dev A smart-contract watcher (ERC-1271) that approves exactly one digest.
-contract Audit2Wallet1271 {
+contract Wallet1271 {
     bytes32 public okHash;
 
     function set(bytes32 h) external {
@@ -58,15 +58,15 @@ contract Audit2Wallet1271 {
     }
 }
 
-contract Audit2Reverter {
+contract Reverter {
     fallback() external {
         revert();
     }
 }
 
-/// @notice Audit 2 proofs of concept for AlarmBook and its interaction with ExitRouter.
+/// @notice Documented limits of AlarmBook and its interaction with ExitRouter, pinned as regression tests.
 /// None of these moves funds to anyone but the owner. They show early or repeated exits, blinded alarms and doc gaps.
-contract Audit2AlarmTest is Base {
+contract AlarmLimitsTest is Base {
     uint256 internal constant PK_A = 0xA1;
     uint256 internal constant PK_B = 0xB2;
     uint32 internal constant WINDOW = 3600;
@@ -102,11 +102,11 @@ contract Audit2AlarmTest is Base {
         g[1] = abi.encodePacked(r1, s1, v1);
     }
 
-    // ------------------------------------------------------------------ A2-01: a tripped detector can never be reset
+    // ------------------------------------------------------------------ a tripped detector can never be reset
 
     /// SHARE_DROP: after a real, lasting loss the high-water mark stays put. The key refires every 24 hours,
     /// and whoever arms it afterwards is exited at the next refire.
-    function test_A2_01_shareDropStaysTrippedAndRefiresEveryDay() public {
+    function test_shareDropKeyStaysTrippedAfterALastingLossAndRefiresDaily() public {
         vault.deposit(OWNER, 100e18);
         bytes32 k = book.register(_detector(AlarmBook.Kind.SHARE_DROP, address(vault), 50, 0, 0, 0));
         vault.setPrice(0.98e6); // a 2% loss that is never made good
@@ -140,7 +140,7 @@ contract Audit2AlarmTest is Base {
     }
 
     /// ADDRESS_CHANGE: the registered address never updates, so one legitimate change trips the key for good.
-    function test_A2_01b_addressChangeStaysTrippedAfterALegitimateChange() public {
+    function test_addressChangeKeyStaysTrippedForGoodAfterOneCuratorChange() public {
         MockOwned owned = new MockOwned(address(0x111));
         bytes32 sel = bytes32(bytes4(keccak256("curator()")));
         bytes32 k = book.register(_detector(AlarmBook.Kind.ADDRESS_CHANGE, address(owned), 0, 0, sel, 0));
@@ -154,7 +154,7 @@ contract Audit2AlarmTest is Base {
 
     /// The pinned poison test (AlarmAttacks.t.sol test_poisonedShareMark_cantExitALaterUser) only looks one second ahead.
     /// The poisoned key is still tripped 24 hours after its first firing, refires, and then exits the user who armed after it.
-    function test_A2_01c_poisonedShareMarkExitsALaterUserAtTheRefire() public {
+    function test_poisonedShareMarkExitsALaterUserAtTheDailyRefire() public {
         MockERC20 asset = new MockERC20(18);
         RealVault rv = new RealVault(asset);
         asset.mint(ATTACKER, 2000e18);
@@ -190,12 +190,12 @@ contract Audit2AlarmTest is Base {
         assertEq(asset.balanceOf(OWNER), 100e18, "the later user was exited by the attacker's poison");
     }
 
-    // ------------------------------------------------------------------ A2-02: DRAIN trusts one low reading
+    // ------------------------------------------------------------------ DRAIN trusts one low reading
 
-    function _drainWorld() internal returns (RealVault rv, Audit2Whale whale, bytes32 key, MockERC20 asset) {
+    function _drainWorld() internal returns (RealVault rv, Whale whale, bytes32 key, MockERC20 asset) {
         asset = new MockERC20(18);
         rv = new RealVault(asset);
-        whale = new Audit2Whale();
+        whale = new Whale();
         asset.mint(address(whale), 400e18);
         whale.deposit(rv, 400e18);
         asset.mint(address(this), 600e18);
@@ -209,8 +209,8 @@ contract Audit2AlarmTest is Base {
     /// A depositor holding 40% of the vault withdraws, pokes, and deposits back in one transaction. The alarm fires
     /// with no loss, and a position armed with the bare DRAIN key is exited. (The app only offers DRAIN inside BOTH
     /// with a quorum, so this reaches custom keys only.)
-    function test_A2_02_flashWithdrawalFiresDrainWithNoLoss() public {
-        (RealVault rv, Audit2Whale whale, bytes32 key, MockERC20 asset) = _drainWorld();
+    function test_drainFiresOnASingleLowReadingFromAFlashWithdrawal() public {
+        (RealVault rv, Whale whale, bytes32 key, MockERC20 asset) = _drainWorld();
         rv.transfer(OWNER, 100e18);
         vm.prank(OWNER);
         rv.approve(address(router), type(uint256).max);
@@ -230,10 +230,10 @@ contract Audit2AlarmTest is Base {
     /// checkpoint each time (the lowest sample of a period becomes the next reference, and a sample that would trip the
     /// alarm is refused). The reference falls to 60% of the real level, so a real 50% loss no longer fires. The control
     /// world, without the dips, fires. Each dip is undone in the same transaction, so it costs only gas.
-    function test_A2_02b_lowSamplesBlindALaterRealDrain() public {
+    function test_drainReferenceFollowsLowSamplesSoALaterRealLossCanGoUnseen() public {
         bool blind;
         for (uint256 pass; pass < 2; ++pass) {
-            (RealVault rv, Audit2Whale whale, bytes32 key,) = _drainWorld();
+            (RealVault rv, Whale whale, bytes32 key,) = _drainWorld();
             if (pass == 0) {
                 whale.dip(book, rv, key, 240e18, false); // 24% under the reference: not tripped, so it is sampled
                 vm.warp(block.timestamp + WINDOW / 2);
@@ -255,7 +255,7 @@ contract Audit2AlarmTest is Base {
 
     /// DRAIN windows of 1 or 2 seconds are accepted. Their roll interval is window/2 = 0 or 1 seconds, so two samples
     /// inside one flash deposit make the inflated reading the reference.
-    function test_A2_02c_tinyDrainWindowIsFlashManipulable() public {
+    function test_drainWindowOfOneSecondIsAcceptedAndFlashManipulable() public {
         MockERC20 asset = new MockERC20(18);
         RealVault rv = new RealVault(asset);
         asset.mint(address(this), 1000e18);
@@ -263,17 +263,17 @@ contract Audit2AlarmTest is Base {
         rv.deposit(1000e18, address(this));
         bytes32 key = book.register(_detector(AlarmBook.Kind.DRAIN, address(rv), 2500, 1, 0, 0));
         vm.warp(block.timestamp + 1);
-        Audit2DoubleSampler s = new Audit2DoubleSampler();
+        DoubleSampler s = new DoubleSampler();
         asset.mint(address(s), 334e18);
         assertTrue(s.run(book, rv, key, 334e18), "false drain fired by a flash deposit");
         // The canonical 3600 s window rejects the same attack (see AlarmAttacks.t.sol test_flashDeposit_cantRaiseTheBaseline).
     }
 
-    // ------------------------------------------------------------------ A2-03: QUORUM signatures with a far deadline
+    // ------------------------------------------------------------------ QUORUM signatures with a far deadline
 
     /// The 1-hour cap is measured at fire time, not at signing time. Signatures made with a 30-day deadline can't fire
     /// for 30 days minus an hour, then anyone holding them can fire in the last hour.
-    function test_A2_03_farDeadlineAttestationIsABearerTokenInItsLastHour() public {
+    function test_farDeadlineQuorumSignatureCanFireByAnyoneInItsLastHour() public {
         bytes32 qk = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
         uint64 dl = uint64(block.timestamp + 30 days);
         (address[] memory s, bytes[] memory g) = _sigsFor(book.attestDigest(qk, EVIDENCE, dl));
@@ -291,9 +291,9 @@ contract Audit2AlarmTest is Base {
         assertTrue(book.isLive(qk, 1 days), "fired from month-old signatures");
     }
 
-    // ------------------------------------------------------------------ A2-04: the admin controls the watcher list for ever
+    // ------------------------------------------------------------------ the admin controls the watcher list for ever
 
-    function test_A2_04_adminWatchersFireQuorumKeysAfterRouterAdminExpiry() public {
+    function test_watcherListStaysAdminControlledAfterRouterAdminExpiry() public {
         address proposer = address(0x9999);
         Timelock tl = new Timelock(proposer, 0); // the live setup: delay 0
         AlarmBook b2 = new AlarmBook(address(tl));
@@ -347,9 +347,9 @@ contract Audit2AlarmTest is Base {
         vm.stopPrank();
     }
 
-    // ------------------------------------------------------------------ A2-05: "fired after you armed" is "fired at or after"
+    // ------------------------------------------------------------------ "fired after you armed" is "fired at or after"
 
-    function test_A2_05_alarmFiredEarlierInTheSameSecondAuthorizesAKeeper() public {
+    function test_alarmFiredInTheSameSecondAsArmingAuthorizesAKeeper() public {
         vault.deposit(OWNER, 100e18);
         pausable.setPaused(true);
         assertTrue(book.poke(pauseKey), "fires");
@@ -363,7 +363,7 @@ contract Audit2AlarmTest is Base {
         assertEq(stable.balanceOf(OWNER), 100e6, "exited on a firing that came before the arming");
     }
 
-    function test_A2_05b_oneSecondLaterItIsRefused() public {
+    function test_alarmFiredOneSecondBeforeArmingIsRefused() public {
         vault.deposit(OWNER, 100e18);
         pausable.setPaused(true);
         assertTrue(book.poke(pauseKey), "fires");
@@ -380,8 +380,8 @@ contract Audit2AlarmTest is Base {
     // ------------------------------------------------------------------ checks that pass (coverage gaps in the suite)
 
     /// The live-path of ERC-1271 (a contract watcher that approves) was never exercised.
-    function test_A2_C1_contractWatcherThatApprovesCanSign() public {
-        Audit2Wallet1271 w = new Audit2Wallet1271();
+    function test_contractWatcherThatApprovesCanSignViaErc1271() public {
+        Wallet1271 w = new Wallet1271();
         vm.prank(ADMIN);
         book.setWatcher(address(w), true);
         bytes32 qk = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
@@ -401,9 +401,9 @@ contract Audit2AlarmTest is Base {
     }
 
     /// An EOA that has gained code (EIP-7702) still signs by plain ECDSA when its ERC-1271 call fails.
-    function test_A2_C2_eoaWithCodeFallsBackToEcdsa() public {
+    function test_eoaWithCodeFallsBackToEcdsa() public {
         address a = vm.addr(PK_A);
-        VmEtch(address(uint160(uint256(keccak256("hevm cheat code"))))).etch(a, address(new Audit2Reverter()).code);
+        VmEtch(address(uint160(uint256(keccak256("hevm cheat code"))))).etch(a, address(new Reverter()).code);
         bytes32 qk = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
         uint64 dl = uint64(block.timestamp + 600);
         (address[] memory s, bytes[] memory g) = _sigsFor(book.attestDigest(qk, EVIDENCE, dl));
@@ -412,7 +412,7 @@ contract Audit2AlarmTest is Base {
     }
 
     /// A signature made for another chain id is no good: the domain separator binds block.chainid at deploy.
-    function test_A2_C3_signatureForAnotherDeploymentIsRejected() public {
+    function test_signatureForAnotherDeploymentIsRejected() public {
         AlarmBook other = new AlarmBook(ADMIN);
         bytes32 qk = book.register(_detector(AlarmBook.Kind.QUORUM, address(0xBEEF), 2, 0, 0, 0));
         uint64 dl = uint64(block.timestamp + 600);
@@ -422,7 +422,7 @@ contract Audit2AlarmTest is Base {
     }
 
     /// No existing test pins the chain id in the EIP-712 domain: removing `block.chainid` from the constructor kept the whole suite green.
-    function test_A2_C8_domainSeparatorBindsTheChainIdAndTheContract() public {
+    function test_domainSeparatorBindsTheChainIdAndTheContract() public {
         bytes32 typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
         bytes32 name = keccak256("Canopy AlarmBook");
         bytes32 version = keccak256("1");

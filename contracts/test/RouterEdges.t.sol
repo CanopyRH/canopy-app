@@ -7,7 +7,7 @@ import {IExitAdapter} from "../src/interfaces/IExitAdapter.sol";
 import {MockERC20, MockVault, MockFeed} from "./Mocks.sol";
 
 /// @dev A token whose transfer succeeds but returns one byte instead of a 32-byte bool.
-contract Audit2ShortToken is MockERC20 {
+contract ShortToken is MockERC20 {
     constructor() MockERC20(6) {}
 
     function transfer(address to, uint256 a) public override returns (bool) {
@@ -20,7 +20,7 @@ contract Audit2ShortToken is MockERC20 {
 }
 
 /// @dev A vault whose redeem pays its asset by minting, so the odd token never has to be decoded by a vault.
-contract Audit2MintVault is MockERC20 {
+contract MintVault is MockERC20 {
     MockERC20 public immutable tok;
 
     constructor(MockERC20 t) MockERC20(18) {
@@ -43,7 +43,7 @@ contract Audit2MintVault is MockERC20 {
 }
 
 /// @dev Burns every unit of gas it is given.
-contract Audit2GasBurnFeed {
+contract GasBurnFeed {
     function decimals() external pure returns (uint8) {
         return 8;
     }
@@ -56,7 +56,7 @@ contract Audit2GasBurnFeed {
 }
 
 /// @dev An allowlisted adapter that unwinds into native ETH.
-contract Audit2EthAdapter is IExitAdapter {
+contract EthAdapter is IExitAdapter {
     address public immutable ROUTER;
 
     constructor(address r) {
@@ -81,7 +81,7 @@ contract Audit2EthAdapter is IExitAdapter {
     }
 }
 
-contract Audit2Weth is MockERC20 {
+contract Weth is MockERC20 {
     constructor() MockERC20(18) {}
 
     function deposit() external payable {
@@ -90,7 +90,7 @@ contract Audit2Weth is MockERC20 {
 }
 
 /// @dev A contract owner whose ETH acceptance can be switched.
-contract Audit2Owner {
+contract Owner {
     bool public acceptEth;
 
     receive() external payable {
@@ -114,13 +114,13 @@ contract Audit2Owner {
     }
 }
 
-/// @notice Audit 2 proofs of concept and untested-path checks for ExitRouter.
-contract Audit2RouterTest is Base {
-    // ------------------------------------------------------------------ A2-06: tryTransfer reads a 1-byte return as failure
+/// @notice Documented edge behaviour of ExitRouter, pinned as regression tests, plus the ETH and WETH payout paths.
+contract RouterEdgesTest is Base {
+    // ------------------------------------------------------------------ tryTransfer reads a 1-byte return as failure
 
-    function test_A2_06_shortReturnTokenIsPaidAndBookedAsOwed() public {
-        Audit2ShortToken tok = new Audit2ShortToken();
-        Audit2MintVault mv = new Audit2MintVault(tok);
+    function test_oneByteReturnTokenIsPaidAndAlsoBookedAsOwed() public {
+        ShortToken tok = new ShortToken();
+        MintVault mv = new MintVault(tok);
         mv.mint(OWNER, 100e6);
         vm.prank(OWNER);
         mv.approve(address(router), type(uint256).max);
@@ -140,14 +140,14 @@ contract Audit2RouterTest is Base {
         router.claimOwed(OWNER, address(tok));
     }
 
-    // ------------------------------------------------------------------ A2-07: a gas-burning feed makes Stable-harbour exits expensive
+    // ------------------------------------------------------------------ a gas-burning feed makes Stable-harbour exits expensive
 
-    function test_A2_07_gasBurningFeedMakesAnExitCostTwentyTimesTheGas() public {
+    function test_gasBurningFeedMakesAStableHarbourExitCostTwentyTimesTheGas() public {
         MockERC20 a = new MockERC20(18);
         MockVault vA = new MockVault(a, 1e18);
         MockVault vB = new MockVault(new MockERC20(18), 1e18);
         swap.setRate(1e6);
-        _feedAndRoute(address(a), address(new Audit2GasBurnFeed()));
+        _feedAndRoute(address(a), address(new GasBurnFeed()));
         _feedAndRoute(address(vB.assetToken()), address(new MockFeed(1e8)));
 
         bytes32 id1 = _setup(address(0xA1A1), vA, 1e18, 1, 100);
@@ -187,19 +187,19 @@ contract Audit2RouterTest is Base {
 
     // ------------------------------------------------------------------ untested ETH / WETH payout paths (all behave as documented)
 
-    function _ethWorld(address wethAddr) internal returns (ExitRouter r, Audit2EthAdapter ad, MockERC20 share) {
+    function _ethWorld(address wethAddr) internal returns (ExitRouter r, EthAdapter ad, MockERC20 share) {
         r = new ExitRouter(
             address(stable), wethAddr, address(swap), address(book), ADMIN, GUARD, address(stableFeed), 90_000,
             block.timestamp + 365 days
         );
-        ad = new Audit2EthAdapter(address(r));
+        ad = new EthAdapter(address(r));
         vm.prank(ADMIN);
         r.setAdapter(address(ad), true);
         vm.deal(address(ad), 10 ether);
         share = new MockERC20(18);
     }
 
-    function _ethParams(Audit2EthAdapter ad, MockERC20 share) internal pure returns (ExitRouter.ArmParams memory) {
+    function _ethParams(EthAdapter ad, MockERC20 share) internal pure returns (ExitRouter.ArmParams memory) {
         return ExitRouter.ArmParams({
             adapter: address(ad),
             target: address(share),
@@ -211,8 +211,8 @@ contract Audit2RouterTest is Base {
         });
     }
 
-    function test_A2_C4_ethGoesStraightToAnEoaOwner() public {
-        (ExitRouter r, Audit2EthAdapter ad, MockERC20 share) = _ethWorld(address(weth));
+    function test_ethPayoutGoesStraightToAnEoaOwner() public {
+        (ExitRouter r, EthAdapter ad, MockERC20 share) = _ethWorld(address(weth));
         share.mint(OWNER, 1 ether);
         vm.prank(OWNER);
         share.approve(address(r), type(uint256).max);
@@ -224,10 +224,10 @@ contract Audit2RouterTest is Base {
         assertEq(address(r).balance, 0, "nothing left");
     }
 
-    function test_A2_C5_ownerThatRefusesEthGetsWeth() public {
-        Audit2Weth w = new Audit2Weth();
-        (ExitRouter r, Audit2EthAdapter ad, MockERC20 share) = _ethWorld(address(w));
-        Audit2Owner o = new Audit2Owner();
+    function test_ownerThatRefusesEthIsPaidInWeth() public {
+        Weth w = new Weth();
+        (ExitRouter r, EthAdapter ad, MockERC20 share) = _ethWorld(address(w));
+        Owner o = new Owner();
         share.mint(address(o), 1 ether);
         o.approve(address(share), address(r));
         bytes32 id = o.arm(r, _ethParams(ad, share));
@@ -237,10 +237,10 @@ contract Audit2RouterTest is Base {
         assertEq(r.totalOwed(address(w)), 0, "nothing owed");
     }
 
-    function test_A2_C6_wethTransferFailureBooksWethOwedAndClaimWorks() public {
-        Audit2Weth w = new Audit2Weth();
-        (ExitRouter r, Audit2EthAdapter ad, MockERC20 share) = _ethWorld(address(w));
-        Audit2Owner o = new Audit2Owner();
+    function test_wethTransferFailureBooksWethOwedAndClaimWorks() public {
+        Weth w = new Weth();
+        (ExitRouter r, EthAdapter ad, MockERC20 share) = _ethWorld(address(w));
+        Owner o = new Owner();
         share.mint(address(o), 1 ether);
         o.approve(address(share), address(r));
         bytes32 id = o.arm(r, _ethParams(ad, share));
@@ -256,12 +256,12 @@ contract Audit2RouterTest is Base {
         assertEq(r.totalOwed(address(w)), 0, "cleared");
     }
 
-    function test_A2_C7_noUsableWethBooksEthOwedAndClaimsLater() public {
+    function test_noUsableWethBooksEthOwedAndClaimsLater() public {
         // `weth` in Base is a plain token with no deposit(), and address(0) skips the WETH branch entirely.
         address[2] memory wethChoices = [address(weth), address(0)];
         for (uint256 i; i < 2; ++i) {
-            (ExitRouter r, Audit2EthAdapter ad, MockERC20 share) = _ethWorld(wethChoices[i]);
-            Audit2Owner o = new Audit2Owner();
+            (ExitRouter r, EthAdapter ad, MockERC20 share) = _ethWorld(wethChoices[i]);
+            Owner o = new Owner();
             share.mint(address(o), 1 ether);
             o.approve(address(share), address(r));
             bytes32 id = o.arm(r, _ethParams(ad, share));
