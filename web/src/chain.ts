@@ -143,7 +143,7 @@ function make(c: Chain) {
   /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
-  return { chain: c, client, live, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan };
+  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan };
 }
 
 export type Net = ReturnType<typeof make>;
