@@ -47,7 +47,7 @@ function logOf(address: Address, abi: Abi, eventName: string, args: Record<strin
 const LOGS: RpcLog[] = [
   logOf(ROUTER, routerAbi as Abi, "ArmingPaused", { paused: true }, 995n, TX(1)),
   logOf(ROUTER, routerAbi as Abi, "Armed", { posId: POS, owner: OWNER, adapter: ADAPTER, target: VAULT, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: TX(9), keys: [KEY] }, 996n, TX(2)),
-  logOf(BOOK, alarmBookAbi as Abi, "WatcherSet", { watcher: PAYER, allowed: true }, 994n, TX(3)),
+  logOf(BOOK, alarmBookAbi as Abi, "WatcherSet", { watcher: PAYER, since: 1_000n, until: 2_000n }, 994n, TX(3)),
   logOf(BOOK, alarmBookAbi as Abi, "Registered", { key: KEY, kind: PRESET.detector.kind, target: VAULT, threshold: PRESET.detector.threshold, window: PRESET.detector.window, a: PRESET.detector.a, b: PRESET.detector.b }, 995n, TX(4)),
   logOf(BOOK, alarmBookAbi as Abi, "Fired", { key: KEY, kind: PRESET.detector.kind, target: VAULT, by: OWNER, evidence: TX(8) }, 997n, TX(5)),
   // 990 is deep enough under a depth of 2. 999 is not.
@@ -63,7 +63,7 @@ function callResult(to: string, data: Hex): Hex {
   const all = [...(routerAbi as Abi), ...(alarmBookAbi as Abi)] as Abi;
   const { functionName } = decodeFunctionData({ abi: all, data });
   if (functionName === "isArmed") return encodeFunctionResult({ abi: routerAbi as Abi, functionName: "isArmed", result: true });
-  if (functionName === "state") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "state", result: [true, FIRED_AT, 0n, 0n, 0n] });
+  if (functionName === "state") return encodeFunctionResult({ abi: alarmBookAbi as Abi, functionName: "state", result: [true, FIRED_AT, 0n, 0n, 0n, 0n, 0n] });
   throw new Error(`reverted ${functionName} on ${to}`);
 }
 

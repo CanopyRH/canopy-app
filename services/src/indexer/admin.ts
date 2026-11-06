@@ -4,7 +4,7 @@ import { txUrl } from "../chain/addresses";
 
 /** Events that only an admin or the guardian can cause. Each one is worth a human looking at it. */
 const WATCHED = {
-  ExitRouter: ["AdapterSet", "FeedSet", "RouteSet", "GuardianSet", "ArmingPaused"],
+  ExitRouter: ["AdapterSet", "GuardianSet", "ArmingPaused"],
   AlarmBook: ["WatcherSet"],
 } as const;
 const ABIS = { ExitRouter: routerAbi, AlarmBook: alarmBookAbi } as const;

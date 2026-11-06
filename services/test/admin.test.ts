@@ -33,8 +33,6 @@ const alarms = (name: string, args: Record<string, unknown>, i = 0) => logOf(ala
 
 const ADMIN_LOGS: [string, () => Log, string[]][] = [
   ["AdapterSet", () => router("AdapterSet", { adapter: A, allowed: true }), [`adapter=${A}`, "allowed=true"]],
-  ["FeedSet", () => router("FeedSet", { token: A, feed: B, heartbeat: 3600, tokenDecimals: 6 }), [`token=${A}`, `feed=${B}`, "heartbeat=3600", "tokenDecimals=6"]],
-  ["RouteSet", () => router("RouteSet", { token: A, path: "0x1234" }), [`token=${A}`, "path=0x1234"]],
   ["GuardianSet", () => router("GuardianSet", { guardian: B }), [`guardian=${B}`]],
   ["ArmingPaused", () => router("ArmingPaused", { paused: true }), ["paused=true"]],
 ];
@@ -55,8 +53,8 @@ describe("admin event alerts", () => {
 
   test("a watcher being allowed or removed is reported from the AlarmBook", async () => {
     const seen: AdminEvent[] = [];
-    for (const allowed of [true, false]) expect(await applyAlarmAdmin(alarms("WatcherSet", { watcher: B, allowed }), async (e) => void seen.push(e))).toBe(true);
-    expect(seen.map((e) => e.args)).toEqual([[["watcher", B], ["allowed", "true"]], [["watcher", B], ["allowed", "false"]]]);
+    for (const [since, until] of [[1_000n, 2_000n], [0n, 0n]]) expect(await applyAlarmAdmin(alarms("WatcherSet", { watcher: B, since, until }), async (e) => void seen.push(e))).toBe(true);
+    expect(seen.map((e) => e.args)).toEqual([[["watcher", B], ["since", "1000"], ["until", "2000"]], [["watcher", B], ["since", "0"], ["until", "0"]]]);
     expect(seen[0]!.contract).toBe("AlarmBook");
   });
 
@@ -65,7 +63,10 @@ describe("admin event alerts", () => {
     const onAdmin = async (e: AdminEvent) => void seen.push(e);
     await applyRouterLog(r, router("Disarmed", { posId: TX, owner: A }), onAdmin);
     await applyRouterLog(r, router("SwapSkipped", { token: A, amount: 1n }), onAdmin);
+    await applyRouterLog(r, router("SwapLegSet", { posId: TX, token: A, feed: B, heartbeat: 3600, tokenDecimals: 6, path: "0x1234" }), onAdmin);
     expect(await applyAlarmAdmin(alarms("Checkpoint", { key: TX, value: 5n }), onAdmin)).toBe(false);
+    expect(await applyAlarmAdmin(alarms("Pending", { key: TX, at: 5n }), onAdmin)).toBe(false);
+    expect(await applyAlarmAdmin(alarms("Rebased", { key: TX, newBaseline: 5n }), onAdmin)).toBe(false);
     expect(await applyAlarmAdmin(alarms("Fired", { key: TX, kind: 1, target: A, by: B, evidence: TX }), onAdmin)).toBe(false);
     expect(seen).toEqual([]);
     expect(adminEventOf("ExitRouter", router("Disarmed", { posId: TX, owner: A }))).toBeNull();
@@ -75,11 +76,9 @@ describe("admin event alerts", () => {
     await applyRouterLog(r, router("ArmingPaused", { paused: true }));
   });
 
-  test("a long route path is shortened, and an unknown chain still gets the transaction hash", () => {
-    const e = adminEventOf("ExitRouter", router("RouteSet", { token: A, path: `0x${"ab".repeat(200)}` }))!;
-    expect(e.args[1]![1].length).toBeLessThan(140);
-    const text = adminAlertText(1, e);
-    expect(text).toContain(`Transaction: ${TX}`);
+  test("an unknown chain still gets the transaction hash", () => {
+    const e = adminEventOf("ExitRouter", router("AdapterSet", { adapter: A, allowed: true }))!;
+    expect(adminAlertText(1, e)).toContain(`Transaction: ${TX}`);
   });
 
   test("a replayed log queues one operator message", async () => {
