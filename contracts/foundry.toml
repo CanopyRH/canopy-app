@@ -15,3 +15,13 @@ cbor_metadata = true
 
 [fuzz]
 runs = 256
+
+# Stateful invariant run: at least 100,000 calls (512 runs x 256 calls). Use:
+#   FOUNDRY_PROFILE=invariant forge test --match-path test/RouterInvariant.t.sol
+# The default profile runs only a short smoke pass of the same suite (forge-config line in the test file).
+# This adds a profile and changes nothing about how contracts are compiled.
+[profile.invariant.invariant]
+runs = 512
+depth = 256
+fail_on_revert = false
+show_metrics = true
