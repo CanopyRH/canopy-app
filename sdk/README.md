@@ -70,3 +70,7 @@ coverage is not checked. Read failures are unknowns, never evidence of safety.
 
 `bun run build` emits an ESM bundle in `dist/` with `viem` external. Source imports still require the repository;
 publication, package declarations and independent distribution are separate release work.
+
+## Research suite
+
+Ten additional read-only/local research tools are included. See [the launch guide](../docs/research-launch.md) for methods, input formats, deployment and verification. Existing transaction-preparation tools retain their original owner-review boundary.

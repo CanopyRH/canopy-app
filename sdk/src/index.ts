@@ -235,3 +235,4 @@ export function createCanopy(options: { chainId?: number; rpcUrl?: string; clien
 export type Canopy = ReturnType<typeof createCanopy>;
 /** RPC-sized integers are decimal strings at the MCP/JSON boundary, never rounded JavaScript numbers. */
 export const toJson = (value: unknown) => JSON.stringify(value, (_, v) => typeof v === "bigint" ? v.toString() : v);
+export { createObservatory, sessionIcs, heartbeatTyped, type Observatory } from "./research";

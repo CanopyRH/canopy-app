@@ -6,10 +6,10 @@ import { CanopyError, type Canopy } from "../../sdk/src/index";
 
 const owner = "0xabababababababababababababababababababab";
 const vault = "0xbeeff033f34c046626b8d0a041844c5d1a5409dd";
-const names = ["arm_position", "check_wallet", "exit_now", "exit_receipt", "explain_position", "list_alarms", "tighten"];
+const names = ["arm_position", "check_wallet", "exit_now", "exit_receipt", "explain_position", "list_alarms", "tighten", ...["oracles","controls","concentration","liquidity","perps","funding","sessions","evidence","heartbeat","changes"].map(n=>"research_"+n)].sort();
 
-async function harness(sdk: Partial<Canopy> = {}) {
-  const server = createServer(sdk as Canopy);
+async function harness(sdk: Partial<Canopy> = {}, research?: Parameters<typeof createServer>[1]) {
+  const server = createServer(sdk as Canopy,research);
   const [client, transport] = InMemoryTransport.createLinkedPair();
   let id = 0;
   const waiting = new Map<number, (value: Record<string, unknown>) => void>();
@@ -33,7 +33,7 @@ async function harness(sdk: Partial<Canopy> = {}) {
   return { request, close: () => server.close() };
 }
 
-test("MCP handshake advertises exactly the seven keyless tools, with strict schemas", async () => {
+test("MCP handshake advertises the seven existing tools and ten research tools, with strict schemas", async () => {
   const h = await harness();
   try {
     const answer = await h.request("tools/list");
@@ -111,3 +111,22 @@ test("the actual stdio executable starts and serves tools without keys, a databa
     clearTimeout(timeout); child.kill(); await child.exited; reader.releaseLock();
   }
 }, 7000);
+
+test("research tools pass only strict inputs, use the local verifier, and redact failures",async()=>{
+  let calls=0;
+  const research={controls:async(v:string)=>{calls++;return {vault:v,allocation:"999999999999999999999"};},funding:async()=>{throw new Error("private-provider-token");},changes:(a:unknown,b:unknown)=>({before:a,after:b})} as unknown as Parameters<typeof createServer>[1];
+  const h=await harness({},research);
+  try{
+    const r=await h.request("tools/call",{name:"research_controls",arguments:{vault}});
+    expect((r.result as any).structuredContent).toEqual({vault,allocation:"999999999999999999999"});
+    for(const extra of [{apiUrl:"https://attacker.invalid"},{privateKey:"secret"}]){
+      const r=await h.request("tools/call",{name:"research_controls",arguments:{vault,...extra}});
+      expect(Boolean(r.error||(r.result as any)?.isError)).toBe(true);
+    }
+    expect(calls).toBe(1);
+    const diff=await h.request("tools/call",{name:"research_changes",arguments:{before:{value:"1"},after:{value:"2"}}});
+    expect((diff.result as any).structuredContent).toEqual({before:{value:"1"},after:{value:"2"}});
+    const failed=await h.request("tools/call",{name:"research_funding",arguments:{}});
+    expect((failed.result as any).isError).toBe(true);expect(JSON.stringify(failed)).not.toContain("private-provider-token");
+  }finally{await h.close();}
+});

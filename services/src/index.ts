@@ -8,6 +8,7 @@ import { alarmBookAbi, erc20Abi, routerAbi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
+import { createResearch } from "./observatory";
 import { alertKeyboard, createBot, notifyText } from "./bot/bot";
 import { queueAlert as enqueueAlert, queueOps, sendQueuedAlerts, sendQueuedOps } from "./bot/queue";
 import { ALARM_NAMES, alarmAlert, watchAlert } from "./copy/alerts";
@@ -455,6 +456,7 @@ if ((run("api") || run("bot")) && bot) {
   // grammY refuses polling once a webhook handler exists, so polling mode never creates one.
   const hook = env.BOT_MODE === "webhook" ? webhookCallback(bot, "std/http") : null;
   const app = createApi({
+    research: createResearch(client, {chainId: env.CHAIN_ID, vaults: listed, now}),
     db,
     repo: r,
     vaults: async () => {

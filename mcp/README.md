@@ -41,3 +41,7 @@ See the SDK's transaction review and concurrency limits before connecting a wall
 
 The server uses the official [MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/v2/serving/stdio).
 The transport tests cover negotiation, listing, validation, bigint serialization, error redaction and the real executable.
+
+## Research suite
+
+Ten additional read-only/local research tools are included. See [the launch guide](../docs/research-launch.md) for methods, input formats, deployment and verification. Existing transaction-preparation tools retain their original owner-review boundary.

@@ -14,6 +14,10 @@ Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
 > **Status:** live on Robinhood Chain mainnet since 2026-11-04. The contracts have **not had an external audit yet**. Use small amounts until one is published here.
 
+## Research suite
+
+Ten new tools cover oracle inputs, control roles, shared exposure, idle-liquidity shocks, RH Lighter markets, funding references, session planning, evidence signatures, agent heartbeats and observation changes. Open `research.html` after deploying this release. See the [launch guide](docs/research-launch.md) for capabilities, limits and deployment checks. These tools read or verify data; they do not activate trades or exits.
+
 ## How it works
 
 <p align="center">
