@@ -161,6 +161,12 @@ export const ROUTES: RouteDef[] = [
     errors: [{ status: 400, description: "A malformed vault or limit.", schema: errorSchema }],
   },
   {
+    method: "get", path: "/watchers", tag: "Reads", rateLimited: true,
+    summary: "The approved watchers",
+    description: "Every approved outside watcher: where its approval comes from, whether it is active, pending or expired, when it last signed, and how many of its signatures matched an alarm that fired. Up to 30 seconds old.",
+    ok: { contentType: "application/json", description: "The watcher roster." },
+  },
+  {
     method: "get", path: "/calldata/arm", tag: "Calldata", rateLimited: true,
     summary: "Calldata to arm a vault position",
     description:
