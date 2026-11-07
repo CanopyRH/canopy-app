@@ -141,6 +141,12 @@ export function lighterClient(fetcher: typeof fetch = fetch) {
         .object({ order_book_details: z.array(LighterMarket).max(2000) })
         .parse(await read("orderBookDetails")).order_book_details;
     },
+    async funding() {
+      return z.object({ funding_rates: z.array(z.object({
+        market_id: index, exchange: z.string().min(1).max(40), symbol: z.string().min(1).max(40),
+        rate: z.number().finite().min(-10).max(10),
+      })).max(5000) }).parse(await read("funding-rates")).funding_rates;
+    },
     async key(accountIndex: number, keyIndex: number, publicKey: string) {
       index.parse(accountIndex);
       z.number().int().min(2).max(254).parse(keyIndex);
