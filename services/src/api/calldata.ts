@@ -70,7 +70,7 @@ export function disarmAllCall(router: Address): Call {
 /** What the API reads from the chain to answer a calldata request. Read-only. */
 export interface ChainReads {
   /** AlarmBook: whether the key was ever registered, and whether the router could arm it right now. */
-  keyState(key: Hex): Promise<{ known: boolean; armable: boolean }>;
+  keyState(key: Hex): Promise<{ known: boolean; armable: boolean; coverage?: string }>;
   /** ExitRouter.positionId for an ERC-20 vault position (token id 0). */
   positionId(owner: Address, vault: Address): Promise<Hex>;
   isArmed(posId: Hex): Promise<boolean>;
@@ -84,7 +84,7 @@ export interface CalldataChain {
   reads: ChainReads;
 }
 
-export type KeyRefusal = { key: Hex; reason: "not_registered" | "not_armable" | "unreadable" };
+export type KeyRefusal = { key: Hex; reason: "not_registered" | "not_armable" | "unreadable" | "warming-up" | "stale" };
 
 /** Every key the router would turn away now, with the reason. An empty list means each one is registered and armable. */
 export async function refusedKeys(reads: ChainReads, keys: Hex[]): Promise<KeyRefusal[]> {
@@ -93,6 +93,7 @@ export async function refusedKeys(reads: ChainReads, keys: Hex[]): Promise<KeyRe
       try {
         const s = await reads.keyState(key);
         if (!s.known) return { key, reason: "not_registered" };
+        if(s.coverage === "warming-up" || s.coverage === "stale")return {key,reason:s.coverage};
         return s.armable ? null : { key, reason: "not_armable" };
       } catch {
         return { key, reason: "unreadable" };

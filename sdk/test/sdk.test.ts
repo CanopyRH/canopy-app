@@ -8,7 +8,7 @@ const chain = CHAINS[0]!, vault = chain.vaults[0]!.address;
 const owner = "0xabababababababababababababababababababab" as Address;
 const presets = presetsFor(vault), keys = presets.map((p) => p.key);
 const id = positionId(owner, chain.adapter!, vault);
-const state = [true, 0n, 0n, 0n, 0n, 0n, 0n, 0n] as const;
+const state = [true, 0n, 1_000_000n, 0n, 100n, 0n, 0n, 100n] as const;
 
 function fixture(opts: { active?: boolean; recorded?: boolean; oldKeys?: Hex[]; harbour?: number; shares?: bigint; unknown?: boolean; failed?: string; wrongChain?: boolean; goingOff?: Hex; unavailable?: boolean; blockedGate?: boolean; swaps?: object[]; simulateFailure?: boolean } = {}) {
   const calls: { functionName: string; address: Address; args: readonly unknown[]; blockNumber: bigint }[] = [];
@@ -28,6 +28,7 @@ function fixture(opts: { active?: boolean; recorded?: boolean; oldKeys?: Hex[]; 
         case "armingPaused": return false;
         case "ADMIN_EXPIRY": return 2_000_000n;
         case "paused": throw new Error("No paused() function");
+        case "detector": return registrationOrder(vault).find(d => keyOf(d) === p.args[0]) ?? registrationOrder(vault)[0];
         case "state": return opts.unknown ? [false, ...state.slice(1)] : state;
         case "check": return p.args[0] === opts.goingOff;
         case "armable": return p.args[0] !== opts.goingOff;
@@ -74,17 +75,17 @@ test("fails closed for an unsupported network or a wrong RPC chain", async () =>
   await expect(fixture({ wrongChain: true }).sdk.checkWallet(owner)).rejects.toThrow("different network");
 });
 test("builds ordered registrations, approval and raw arming from existing app presets", async () => {
-  const out = await fixture({ unknown: true }).sdk.armPosition(owner, vault, [keys[2]!]);
+  const out = await fixture({ unknown: true }).sdk.armPosition(owner, vault, [keys[3]!]);
   expect(out.kind).toBe("unsigned");
   expect(out.requiresOwnerApproval).toBe(true);
   const registrations = out.transactions.filter((t) => t.to === chain.alarmBook);
   const registered = registrations.map((t) => keyOf(decodeFunctionData({ abi: alarmBookAbi, data: t.data }).args![0] as ReturnType<typeof presetsFor>[number]["detector"]));
-  const expected = registrationOrder(vault).filter((d) => [keys[2], ...presets[2]!.requires!.map((p) => p.key)].includes(keyOf(d))).map(keyOf);
+  const expected = registrationOrder(vault).filter((d) => [keys[3], ...presets[3]!.requires!.map((p) => p.key)].includes(keyOf(d))).map(keyOf);
   expect(registered).toEqual(expected);
   expect(out.transactions.at(-2)!.purpose).toContain("unlimited");
   const decoded = decodeFunctionData({ abi: routerAbi, data: out.transactions.at(-1)!.data });
   expect(decoded.functionName).toBe("arm");
-  expect(decoded.args![0]).toMatchObject({ target: vault, harbour: 0, keys: [keys[2]], swaps: [] });
+  expect(decoded.args![0]).toMatchObject({ target: vault, harbour: 0, keys: [keys[3]], swaps: [] });
   expect(out.transactions.every((t) => t.from.toLowerCase() === owner && t.chainId === 4663 && t.value === "0x0")).toBe(true);
   expect(out.terms!.text.length).toBeGreaterThan(0);
 });
@@ -135,3 +136,5 @@ test("validates addresses, vaults, hashes and duplicate keys before preparing ca
   await expect(sdk.exitReceipt("0x12")).rejects.toThrow("32-byte");
   await expect(sdk.armPosition(owner, vault, [keys[0]!, keys[0]!])).rejects.toThrow("only once");
 });
+
+test("cold drain references refuse an unsigned arm even when the key itself reads armable",async()=>{const {sdk,client}=fixture();const read=client.readContract.bind(client);client.readContract=(async(p:any)=>p.functionName==='state'?[true,0n,0n,0n,0n,0n,0n,0n]:read(p)) as typeof client.readContract;await expect(sdk.armPosition(owner,vault,[keys[2]!])).rejects.toThrow('alarm is going off');});

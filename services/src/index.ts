@@ -1,3 +1,6 @@
+import { armReadiness } from "./risk/arm-readiness";
+import { ReportApprovals } from "./watcher/attribution";
+import { maintenanceKeys } from "./keeper/maintenance";
 import { scanPool } from "./detectors/lp";
 import { Profiles } from "./watchnet/diversity";
 import { archiveEvidence } from "./watchnet/evidence";
@@ -39,6 +42,9 @@ import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, re
 
 scrubConsole();
 const env = loadEnv(process.env);
+if (env.WATCHER_REQUIRE_DIVERSITY && !env.WATCHER_PROFILE_FILE) console.warn("Watcher quorum submission disabled: reviewed independent profiles are required. Chain alarms and owner exits remain available.");
+if (!env.WATCHER_REQUIRE_DIVERSITY) console.warn("Watcher diversity enforcement is disabled on this host; signer count alone does not establish independence.");
+if (!env.WATCHER_APPROVAL_FILE) console.warn("Feed attestations disabled: reviewed report attribution file is required.");
 const profiles = env.WATCHER_PROFILE_FILE ? Profiles.parse(await Bun.file(env.WATCHER_PROFILE_FILE).json()) : undefined;
 const now = () => Math.floor(Date.now() / 1000);
 const transport = fallback([http(env.RPC_URL), http(env.RPC_URL_BACKUP)]);
@@ -327,6 +333,7 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
   firing.add(key);
   try {
     await fence?.();
+    if (env.WATCHER_REQUIRE_DIVERSITY && !profiles) return;
     const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook, profiles);
     if (!call) return;
     // Firing costs gas, so it's spent only on alarms in scope: a listed vault's preset, or one a position armed.
@@ -357,9 +364,9 @@ if (run("keeper") && keeper) {
     for (const q of await r.quorumReady(env.QUORUM, now())) await tryQuorum(q.key as Hex, q.evidence_hash as Hex, BigInt(q.deadline));
   });
   const paidAfter = () => (keeper.paidOnly ? now() : undefined);
-  every(3_600_000, "share baselines", async () => checkpointKeys(keeper, (await r.liveKeysOfKind(Kind.SHARE_DROP, paidAfter())) as Hex[]));
+  every(3_600_000, "share baselines", async () => checkpointKeys(keeper, await maintenanceKeys(r, listed, Kind.SHARE_DROP, paidAfter())));
   // A DRAIN baseline older than its window can't fire, so this checks far more often than a baseline comes due.
-  every(600_000, "drain baselines", async () => checkpointKeys(keeper, (await r.liveKeysOfKind(Kind.DRAIN, paidAfter())) as Hex[]));
+  every(600_000, "drain baselines", async () => checkpointKeys(keeper, await maintenanceKeys(r, listed, Kind.DRAIN, paidAfter())));
   every(86_400_000, "owed", () => claimOwed(keeper));
   every(60_000, "ops", async () => {
     const gasWei = await client.getBalance({ address: keeper.account });
@@ -422,6 +429,9 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
   const peers = env.WATCHER_PEERS.split(",").filter(Boolean);
   every(60_000, "feeds", async () => {
     await fence?.();
+    const approvalFile = env.WATCHER_APPROVAL_FILE ? Bun.file(env.WATCHER_APPROVAL_FILE) : null;
+    if (approvalFile && approvalFile.size > 2_000_000) throw new Error("Report approval file exceeds limit");
+    const approvals = approvalFile ? ReportApprovals.parse(await approvalFile.json()) : { version: 1 as const, reports: [] };
     for (const url of urls) {
       for (const text of await fetchFeed(url, now())) {
         await ingestFeed(db, classify, url, text, now()).catch((e: Error) => console.warn("feed item", e.message));
@@ -435,7 +445,8 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
     const inScopeNow = await quorumScopeNow(r, listed, now, env.KEEPER_PAID_ONLY);
     const scoped = keys.filter((k) => inScopeNow(k.key, k.target));
     for (const item of await recentReports(db, now() - 3600)) {
-      for (const { key, target } of matchVaults(item.classification.protocol, scoped, item.classification.label)) {
+      if (!urls.includes(item.sourceUrl)) continue;
+      for (const { key, target } of matchVaults(item.classification.protocol, scoped, item.classification.label, {chainId:env.CHAIN_ID,hash:item.hash,sourceUrl:item.sourceUrl,now:now(),approvals})) {
         if (await r.firedSince(key, now() - 86_400)) continue;
         const feed = feedSignal(item.classification, target, now(), item.hash);
         if (!feed) continue;
@@ -468,6 +479,7 @@ if ((run("api") || run("bot")) && bot) {
   // grammY refuses polling once a webhook handler exists, so polling mode never creates one.
   const hook = env.BOT_MODE === "webhook" ? webhookCallback(bot, "std/http") : null;
   const app = createApi({
+    watcherPolicy:{reportAttributionConfigured:Boolean(env.WATCHER_APPROVAL_FILE),diversityRequired:env.WATCHER_REQUIRE_DIVERSITY,profilesConfigured:Boolean(profiles)},
     research: createResearch(client, {chainId: env.CHAIN_ID, vaults: listed, now}),
     db,
     repo: r,
@@ -497,10 +509,7 @@ if ((run("api") || run("bot")) && bot) {
             adapter: env.ADAPTER_4626 as Address,
             alarmBook,
             reads: {
-              keyState: async (key) => {
-                const [known] = await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "state", args: [key] });
-                return { known, armable: known ? await client.readContract({ address: alarmBook, abi: alarmBookAbi, functionName: "armable", args: [key] }) : false };
-              },
+              keyState: (key) => armReadiness(client, alarmBook, key),
               positionId: (owner, vault) => client.readContract({ address: router, abi: routerAbi, functionName: "positionId", args: [owner, env.ADAPTER_4626 as Address, vault, 0n] }),
               isArmed: (posId) => client.readContract({ address: router, abi: routerAbi, functionName: "isArmed", args: [posId] }),
             },

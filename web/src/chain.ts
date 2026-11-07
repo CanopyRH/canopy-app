@@ -1,3 +1,4 @@
+import { cleanupAllowance } from "./allowanceCleanup";
 import { lookThrough } from "../../services/src/risk/lookthrough";
 import { explainExposure } from "../../services/src/copilot/explain";
 import { createPublicClient, http, maxUint256, parseAbi, type Address, type Hex } from "viem";
@@ -11,7 +12,7 @@ import { armOneStep, batchSupport, confirmCount, needed } from "./batch";
 import { revertText } from "./errors";
 import { stablePayout, RAW_PAYOUT } from "./stableExit";
 import { COPY } from "./copy/text";
-import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
+import { alarmBookAbi, approveTx, revokeTx, disarmTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
 
 const vaultAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -81,6 +82,7 @@ function make(c: Chain) {
 
   /** AlarmBook reads for the going-off check. The time is the chain's, so a wrong browser clock can't hide a recent firing. */
   const alarmIo: AlarmIo = {
+    drainReference: async (key) => {const s=await client.readContract({address:c.alarmBook!,abi:alarmBookAbi,functionName:"state",args:[key]});return {snapAt:s[2],snap:s[4],prevSnap:s[7]};},
     check: (key) => client.readContract({ address: c.alarmBook!, abi: alarmBookAbi, functionName: "check", args: [key] }),
     firedAt: (key) => client.readContract({ address: c.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => BigInt(s[1])),
     now: () => client.getBlock().then((b) => b.timestamp),
@@ -179,6 +181,19 @@ function make(c: Chain) {
     }, vault, keys);
   };
 
+  async function allowanceOf(owner:Address,vault:Address){
+    if(!c.vaults.some(v=>v.address.toLowerCase()===vault.toLowerCase()))throw new Error("Choose a listed vault");
+    return client.readContract({address:vault,abi:vaultAbi,functionName:"allowance",args:[owner,c.router!]});
+  }
+  async function disarmAndRevoke(s:Signer,vault:Address){
+    if(!live||!c.vaults.some(v=>v.address.toLowerCase()===vault.toLowerCase()))throw new Error("Choose a listed vault on a deployed network");
+    const state=await armState(s.account,vault);if(!state)throw new Error("Position could not be read");
+    const result=await cleanupAllowance({armed:async()=>state.armed,disarm:()=>send(s,disarmTx(c.router!,state.posId)),allowance:()=>allowanceOf(s.account,vault),revoke:()=>send(s,revokeTx(vault,c.router!))});
+    const after=await armState(s.account,vault);
+    if(!after || after.armed)throw new Error("Allowance revoked, but disarm could not be confirmed. Refresh Plan and controls before depositing again.");
+    return result;
+  }
+
   const disarmAll = (s: Signer) => send(s, disarmAllTx(c.router!));
 
   /** A plan is paid in this network's plan token to this network's payments address, and applies only to this network. */
@@ -189,7 +204,7 @@ function make(c: Chain) {
     const block = await client.getBlockNumber();
     return { block, lines: explainExposure(await lookThrough(client, vault, block)) };
   };
-  return { chain: c, client, live, alarmIo, scanWallet, riskCard, explainPosition, armState, presetViews, gatesBlock, payoutOptions, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm, armConfirms };
+  return { chain: c, client, live, alarmIo, scanWallet, riskCard, explainPosition, armState, presetViews, gatesBlock, payoutOptions, arm, exitNow, disarmAll, allowanceOf, disarmAndRevoke, payPlan, canBatch, armOneConfirm, armConfirms };
 }
 
 export type Net = ReturnType<typeof make>;

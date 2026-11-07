@@ -12,6 +12,7 @@ export const routerAbi = parseAbi([
   "function arm(ArmParams a) returns (bytes32)",
   "function exit(bytes32 posId, bytes32 alarmKey, uint256 amount) returns (uint256)",
   "function disarmAll()",
+  "function disarm(bytes32 posId)",
   "function positionId(address owner, address adapter, address target, uint256 tokenId) pure returns (bytes32)",
   "function isArmed(bytes32 posId) view returns (bool)",
 ]);
@@ -50,6 +51,13 @@ export function registerTx(book: Address, d: Detector): Tx {
 
 export function approveTx(vault: Address, router: Address): Tx {
   return { to: vault, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [router, maxUint256] }) };
+}
+
+export function revokeTx(vault:Address,router:Address):Tx {
+  return {to:vault,data:encodeFunctionData({abi:erc20Abi,functionName:"approve",args:[router,0n]})};
+}
+export function disarmTx(router:Address,posId:Hex):Tx {
+  return {to:router,data:encodeFunctionData({abi:routerAbi,functionName:"disarm",args:[posId]})};
 }
 
 /**

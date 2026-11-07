@@ -33,6 +33,7 @@ export interface ApiDeps {
   /** Alarms of the last day, newest first, a page at a time. */
   liveAlarms: (page: { limit: number; before?: { firedAt: number; key: string } }) => Promise<{ key: string; fired_at: number }[]>;
   watchers: Address[];
+  watcherPolicy?: {reportAttributionConfigured:boolean;diversityRequired:boolean;profilesConfigured:boolean};
   alarmBook: Address;
   chainId: number;
   now: () => number;

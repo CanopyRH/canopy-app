@@ -8,7 +8,7 @@
   "stableFeed": "0x8bEeE3503F6860D5dac4cE26b5eEe92982951c2e",
   "heartbeat": 90000,
   "adminExpiry": 0,
-  "timelockDelay": 0,
+  "timelockDelay": 604800,
   "watchers": [
     "0xWATCHER_1",
     "0xWATCHER_2",

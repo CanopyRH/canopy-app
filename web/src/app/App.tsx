@@ -1,3 +1,4 @@
+import {AllowanceControls} from "./AllowanceControls";
 import { useEffect, useId, useRef, useState, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUpRight, Bell, Check, CircleHelp, CreditCard, ExternalLink, Eye, LayoutGrid, Layers3, LockKeyhole, Search, ShieldCheck, Smartphone, TriangleAlert, Wallet, Waves, X } from "lucide-react";
@@ -162,7 +163,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
         <p className="cd-caption">{COPY.armHelp}</p>
         <div className="cd-alarm-editor">{(views ?? []).map(({ preset, status }) => {
           const on = picked.includes(preset.key);
-          return <label key={preset.key} className={`cd-alarm-option ${on ? "is-selected" : ""}`}><input type="checkbox" disabled={status !== "clear" || busy} checked={on} onChange={(e) => toggle(preset.key, e.target.checked)} /><span className="cd-checkbox-mark">{on && <Check size={12} strokeWidth={3} />}</span><span><strong>{preset.name}</strong><small>{status === "going-off" ? COPY.alarmTripped : status === "unreadable" ? COPY.alarmUnreadable : preset.note}</small></span>{preset.requires && <span className="cd-confirmation-tag">Watcher confirms</span>}</label>;
+          return <label key={preset.key} className={`cd-alarm-option ${on ? "is-selected" : ""}`}><input type="checkbox" disabled={status !== "clear" || busy} checked={on} onChange={(e) => toggle(preset.key, e.target.checked)} /><span className="cd-checkbox-mark">{on && <Check size={12} strokeWidth={3} />}</span><span><strong>{preset.name}</strong><small>{status === "going-off" ? COPY.alarmTripped : status === "unreadable" ? COPY.alarmUnreadable : status === "warming-up" ? "Drain alarm warming up. Two sampling periods must be recorded before it can be armed." : status === "stale" ? "Drain reference is stale. Checkpoint maintenance must resume before arming." : preset.note}</small></span>{preset.requires && <span className="cd-confirmation-tag">Watcher confirms</span>}</label>;
         })}{views === null && <p className="cd-caption">{COPY.reading}</p>}</div>
         {views !== null && <LevelPicker io={net.alarmIo} vault={row.vault.address} picked={picked} setPicked={setPicked} busy={busy} />}
         {(views ?? []).some((v) => v.status === "going-off") && <p className="cd-inline-note"><TriangleAlert size={15} />{row.state?.armed ? COPY.alarmExitArmed : COPY.alarmExitUnarmed}</p>}
@@ -399,6 +400,7 @@ export default function App() {
       {screen === "plan" && <>
         <div className="cd-page-heading"><div><span className="cd-eyebrow">PLAN AND CONTROLS</span><h1>{COPY.planScreen}</h1><p>{COPY.planScreenHelp}</p></div></div>
         <div className="cd-settings-grid">
+          <AllowanceControls key={chain.key} net={net} owner={owner} signer={signer} busy={busy} act={act}/>
           <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.planTitle}</h2><p className="cd-caption">{COPY.planHelp}</p></div><CreditCard size={19} /></div>{scope && <p className="cd-inline-note"><CircleHelp size={15} />{scope}</p>}<div className="cd-dialog-actions"><button className="cd-button cd-button-light" disabled={busy || !mine || !chain.planPayTo} onClick={() => pay(PLAN_AMOUNTS.months3)}>{COPY.plan3}</button><button className="cd-button cd-button-dark" disabled={busy || !mine || !chain.planPayTo} onClick={() => pay(PLAN_AMOUNTS.year)}>{COPY.plan12}</button></div>{!mine && <p className="cd-inline-note"><Wallet size={15} />{net.live ? COPY.connectToAct : COPY.notDeployed}</p>}</GlassCard>
           <GlassCard className="cd-settings-main"><div className="cd-card-top"><div><h2>{COPY.disarmButton}</h2><p className="cd-caption">{COPY.disarmHelp}</p></div><ShieldCheck size={19} /></div><div className="cd-dialog-actions"><button className="cd-button cd-button-dark" disabled={busy || !mine} onClick={() => setConfirmDisarm(true)}>{COPY.disarmButton}</button></div></GlassCard>
         </div>

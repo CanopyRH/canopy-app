@@ -97,7 +97,7 @@ function reader(chain: Chain, cfg: WhaleConfig = CFG, now = () => NOW) {
     },
   });
 }
-const rows = () => db.query<{ tx: string; block: string; alerted: boolean }>(`SELECT tx, block, alerted FROM whale_moves ORDER BY block, log_index`);
+const rows = () => db.query<{ tx: string; block: string; alerted: boolean }>(`SELECT tx, block::text AS block, alerted FROM whale_moves ORDER BY whale_moves.block, log_index`);
 
 describe("what counts as a whale move", () => {
   const dec = 6;

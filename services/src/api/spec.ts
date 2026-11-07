@@ -53,7 +53,7 @@ const disarmCalldataSchema = z.object({ chainId: z.number().int(), calls: z.arra
 const refusedSchema = z.object({
   error: z.string(),
   code: z.literal("keys_refused"),
-  keys: z.array(z.object({ key: bytes32Schema, reason: z.enum(["not_registered", "not_armable", "unreadable"]) })),
+  keys: z.array(z.object({ key: bytes32Schema, reason: z.enum(["not_registered", "not_armable", "unreadable", "warming-up", "stale"]) })),
 });
 
 type Param = { description: string; schema: z.ZodType; example?: string };

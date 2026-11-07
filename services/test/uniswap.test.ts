@@ -170,11 +170,11 @@ describe("admin batch: enable the Uniswap v3 adapter", () => {
     "function execute(address target, uint256 value, bytes data, bytes32 salt) payable returns (bytes)",
   ]);
 
-  test("with no delay, one batch schedules and executes setAdapter(adapter, true) through the Timelock", () => {
-    const files = enableAdapterFiles(d, s, ADAPTER);
+  test("on testnet with no delay, one batch schedules and executes setAdapter(adapter, true) through the Timelock", () => {
+    const files = enableAdapterFiles(d, { ...s, chainId:84532 }, ADAPTER);
     expect(files.map(([f]) => f)).toEqual(["enable-uniswap-v3-adapter.safe.json"]);
     const batch = files[0]![1];
-    expect(batch.chainId).toBe("4663");
+    expect(batch.chainId).toBe("84532");
     expect(batch.transactions.map((t) => t.to)).toEqual([TIMELOCK, TIMELOCK]);
     const [sched, exec] = batch.transactions.map((t) => decodeFunctionData({ abi: timelockAbi, data: t.data }));
     expect([sched!.functionName, exec!.functionName]).toEqual(["schedule", "execute"]);
@@ -188,9 +188,11 @@ describe("admin batch: enable the Uniswap v3 adapter", () => {
   });
 
   test("with a delay, schedule and execute are separate batches", () => {
-    const files = enableAdapterFiles(d, { ...s, timelockDelay: 3600 }, ADAPTER);
+    const files = enableAdapterFiles(d, { ...s, timelockDelay: 604800 }, ADAPTER);
     expect(files.map(([f]) => f)).toEqual(["enable-uniswap-v3-adapter-1-schedule.safe.json", "enable-uniswap-v3-adapter-2-execute-after-delay.safe.json"]);
   });
+
+  test("mainnet refuses immediate or short-delay adapter admission",()=>{for(const chainId of [4663,8453])for(const timelockDelay of [0,3600,604799])expect(()=>enableAdapterFiles(d,{...s,chainId,timelockDelay},ADAPTER)).toThrow("seven-day");});
 
   const fakeChain = (o: { router?: Address; positions?: Address; allowed?: boolean; code?: Hex } = {}) => ({
     getCode: async () => o.code ?? "0x60",

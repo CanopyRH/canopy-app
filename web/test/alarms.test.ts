@@ -16,6 +16,7 @@ const book = (tripped: Hex[] = [], fired: Record<Hex, bigint> = {}): AlarmIo => 
   check: async (k) => tripped.includes(k),
   firedAt: async (k) => fired[k] ?? 0n,
   now: async () => NOW,
+  drainReference: async () => ({snapAt: NOW, snap: 100n, prevSnap: 100n}),
 });
 
 describe("a key that is already going off", () => {
@@ -154,3 +155,5 @@ describe("DRAIN windows", () => {
     expect(registerTx(BOOK, quorum).to).toBe(BOOK);
   });
 });
+
+test("cold, stale and missing reference reads refuse the drain preset",async()=>{const p=byName('Vault drain + confirmation');expect(await presetStatus({...book(),drainReference:async()=>({snapAt:NOW,snap:100n,prevSnap:0n})},p)).toBe('warming-up');expect(await presetStatus({...book(),drainReference:async()=>({snapAt:NOW-3601n,snap:100n,prevSnap:100n})},p)).toBe('stale');expect(await presetStatus({...book(),drainReference:undefined},p)).toBe('unreadable');});

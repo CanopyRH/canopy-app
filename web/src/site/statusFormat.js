@@ -50,6 +50,8 @@ export function verdict(s, nowSec) {
   const l = Object.values(levels(s, nowSec));
   if (l.includes('bad')) return 'bad';
   if (l.includes('warn')) return 'warn';
+  const p=s.watchers?.policy;
+  if(p && (!p.reportAttributionConfigured || !p.diversityRequired || !p.profilesConfigured))return 'warn';
   const unknown = l.filter((x) => x === 'unknown').length;
   if (unknown === 0) return 'ok';
   return unknown >= l.length - 1 ? 'unknown' : 'warn';

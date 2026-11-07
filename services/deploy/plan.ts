@@ -32,7 +32,7 @@ export interface Settings {
   apiUrl?: string;
   /** Testnet only: admins may be plain wallets. Refused on mainnet. */
   allowEoaAdmin?: boolean;
-  /** Seconds each admin change waits in the Timelock. 0 (the default) applies a change as soon as the multisig signs. */
+  /** Actual deployed delay. Omitted historical records mean 0; new mainnet deploys must explicitly record at least 604800. */
   timelockDelay?: number;
   /** Testnet only: deploys a TestTimelock with this delay. Refused on mainnet. */
   testTimelockDelay?: number;

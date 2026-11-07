@@ -1,19 +1,50 @@
+import { z } from "zod";
 /**
  * Writes the Safe batch that enables the Uniswap v3 adapter on a live router: Timelock schedule + execute of
  * setAdapter(adapter, true). Holds no keys and sends nothing. With an RPC, it first checks the adapter on chain.
- * Usage: bun deploy/enable-adapter.ts <deployment.json> <adapter> <out dir> [rpc]
+ * Usage: bun deploy/enable-adapter.ts <deployment.json> <adapter> <out dir> [rpc] [review.json]
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createPublicClient, getAddress, http, parseAbi, type Address, type PublicClient } from "viem";
+import {
+  createPublicClient,
+  getAddress,
+  http,
+  keccak256,
+  parseAbi,
+  type Address,
+  type PublicClient,
+} from "viem";
 import { routerAbi } from "../src/chain/abi";
 import { BASE, ROBINHOOD } from "../src/chain/addresses";
-import { adminChangeFiles, delayOf, enableAdapterCall, type Deployment, type Settings } from "./plan";
+import {
+  MAINNETS,
+  adminChangeFiles,
+  delayOf,
+  enableAdapterCall,
+  type Deployment,
+  type Settings,
+} from "./plan";
 
+export const AdapterReview = z
+  .strictObject({
+    chainId: z.number().int().positive(),
+    adapter: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+    runtimeHash: z.string().regex(/^0x[0-9a-f]{64}$/),
+    reviewedAt: z.number().int().nonnegative().safe(),
+    expiresAt: z.number().int().positive().safe(),
+  })
+  .refine(
+    (r) =>
+      r.expiresAt > r.reviewedAt && r.expiresAt - r.reviewedAt <= 30 * 86400,
+  );
 export const ADAPTER_NAME = "UniswapV3Adapter";
 const SLUG = "enable-uniswap-v3-adapter";
 
-const POSITIONS: Record<number, Address> = { [BASE.chainId]: BASE.uniswapV3Positions, [ROBINHOOD.chainId]: ROBINHOOD.uniswapV3Positions };
+const POSITIONS: Record<number, Address> = {
+  [BASE.chainId]: BASE.uniswapV3Positions,
+  [ROBINHOOD.chainId]: ROBINHOOD.uniswapV3Positions,
+};
 
 const adapterAbi = parseAbi([
   "function ROUTER() view returns (address)",
@@ -22,35 +53,119 @@ const adapterAbi = parseAbi([
 ]);
 
 /** Problems with the deployed adapter, empty when it is safe to enable. */
-export async function checkAdapter(client: Pick<PublicClient, "getCode" | "readContract">, d: Deployment, chainId: number, adapter: Address): Promise<string[]> {
+export async function checkAdapter(
+  client: Pick<PublicClient, "getCode" | "readContract">,
+  d: Deployment,
+  chainId: number,
+  adapter: Address,
+): Promise<string[]> {
   const out: string[] = [];
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   const code = await client.getCode({ address: adapter });
   if (!code || code === "0x") return ["no contract at the adapter address"];
   const pinned = POSITIONS[chainId];
-  const router = await client.readContract({ address: adapter, abi: adapterAbi, functionName: "ROUTER" });
-  const positions = await client.readContract({ address: adapter, abi: adapterAbi, functionName: "POSITIONS" });
-  if (!same(router, d.router)) out.push(`adapter is wired to router ${router}, not ${d.router}`);
-  if (!pinned) out.push(`no Uniswap v3 position manager pinned for chain ${chainId}`);
-  else if (!same(positions, pinned)) out.push(`adapter uses position manager ${positions}, not ${pinned}`);
-  const [asset, isNft] = await client.readContract({ address: adapter, abi: adapterAbi, functionName: "positionAsset", args: [positions] });
-  if (!same(asset, positions) || !isNft) out.push("adapter does not report the position manager's NFTs");
-  if (await client.readContract({ address: d.router, abi: routerAbi, functionName: "adapterAllowed", args: [adapter] })) out.push("adapter is already enabled");
+  const router = await client.readContract({
+    address: adapter,
+    abi: adapterAbi,
+    functionName: "ROUTER",
+  });
+  const positions = await client.readContract({
+    address: adapter,
+    abi: adapterAbi,
+    functionName: "POSITIONS",
+  });
+  if (!same(router, d.router))
+    out.push(`adapter is wired to router ${router}, not ${d.router}`);
+  if (!pinned)
+    out.push(`no Uniswap v3 position manager pinned for chain ${chainId}`);
+  else if (!same(positions, pinned))
+    out.push(`adapter uses position manager ${positions}, not ${pinned}`);
+  const [asset, isNft] = await client.readContract({
+    address: adapter,
+    abi: adapterAbi,
+    functionName: "positionAsset",
+    args: [positions],
+  });
+  if (!same(asset, positions) || !isNft)
+    out.push("adapter does not report the position manager's NFTs");
+  if (
+    await client.readContract({
+      address: d.router,
+      abi: routerAbi,
+      functionName: "adapterAllowed",
+      args: [adapter],
+    })
+  )
+    out.push("adapter is already enabled");
   return out;
 }
 
-export function enableAdapterFiles(d: Deployment, s: Settings, adapter: Address) {
-  return adminChangeFiles(d.timelock, s.chainId, delayOf(s), SLUG, [enableAdapterCall(d.router, adapter, ADAPTER_NAME)]);
+export function enableAdapterFiles(
+  d: Deployment,
+  s: Settings,
+  adapter: Address,
+) {
+  if (MAINNETS.includes(s.chainId) && delayOf(s) < 7 * 86400)
+    throw new Error(
+      "Adapter admission requires an enforced seven-day timelock on mainnet. This deployment needs a separately reviewed migration.",
+    );
+  return adminChangeFiles(d.timelock, s.chainId, delayOf(s), SLUG, [
+    enableAdapterCall(d.router, adapter, ADAPTER_NAME),
+  ]);
 }
 
 if (import.meta.main) {
-  const [deployment, adapterArg, out, rpc] = process.argv.slice(2);
-  if (!deployment || !adapterArg || !out) throw new Error("usage: bun deploy/enable-adapter.ts <deployment.json> <adapter> <out dir> [rpc]");
-  const { settings, ...d } = JSON.parse(readFileSync(deployment, "utf8")) as Deployment & { settings: Settings };
+  const [deployment, adapterArg, out, rpc, reviewFile] = process.argv.slice(2);
+  if (!deployment || !adapterArg || !out)
+    throw new Error(
+      "usage: bun deploy/enable-adapter.ts <deployment.json> <adapter> <out dir> [rpc] [review.json]",
+    );
+  const { settings, ...d } = JSON.parse(
+    readFileSync(deployment, "utf8"),
+  ) as Deployment & { settings: Settings };
   const adapter = getAddress(adapterArg);
+  if (MAINNETS.includes(settings.chainId) && (!rpc || !reviewFile))
+    throw new Error(
+      "Mainnet adapter admission requires RPC verification and an operator-reviewed runtime hash file.",
+    );
   if (rpc) {
-    const problems = await checkAdapter(createPublicClient({ transport: http(rpc) }), d, settings.chainId, adapter);
-    if (problems.length) throw new Error(`refusing to write the batch:\n- ${problems.join("\n- ")}`);
+    const client = createPublicClient({
+      transport: http(rpc, { timeout: 5000, retryCount: 0 }),
+    });
+    if ((await client.getChainId()) !== settings.chainId)
+      throw new Error("Wrong RPC chain");
+    const actualDelay = await client.readContract({
+      address: d.timelock,
+      abi: parseAbi(["function DELAY() view returns(uint256)"]),
+      functionName: "DELAY",
+    });
+    if (actualDelay !== BigInt(delayOf(settings)))
+      throw new Error("Recorded and on-chain timelock delays differ");
+    if (MAINNETS.includes(settings.chainId) && actualDelay < 604800n)
+      throw new Error("On-chain adapter admission has no seven-day delay");
+    if (reviewFile) {
+      const review = AdapterReview.parse(
+        JSON.parse(readFileSync(reviewFile, "utf8")),
+      );
+      const now = Math.floor(Date.now() / 1000),
+        code = await client.getCode({ address: adapter });
+      if (
+        review.chainId !== settings.chainId ||
+        review.adapter.toLowerCase() !== adapter.toLowerCase() ||
+        review.reviewedAt > now ||
+        review.expiresAt <= now ||
+        !code ||
+        keccak256(code) !== review.runtimeHash
+      )
+        throw new Error(
+          "Adapter runtime does not match a current reviewed approval",
+        );
+    }
+    const problems = await checkAdapter(client, d, settings.chainId, adapter);
+    if (problems.length)
+      throw new Error(
+        `refusing to write the batch:\n- ${problems.join("\n- ")}`,
+      );
     console.log("adapter checks passed");
   } else {
     console.warn("no RPC given, so the adapter was not checked on chain");

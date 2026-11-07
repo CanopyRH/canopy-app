@@ -65,6 +65,7 @@ export function Board({s}) {
         {lv.checks==='bad'&&<p className="st-warn" role="status">{copy.checks.stale}</p>}
       </Card>
       <Card title={copy.watchers.title} about={copy.watchers.about}>
+        {s.watchers.policy&&<p className="st-empty">Feed confirmations require operator-reviewed report attribution. {s.watchers.policy.reportAttributionConfigured?'Attribution file configured.':'Attribution file is not configured; feed signing is disabled.'} {s.watchers.policy.diversityRequired?(s.watchers.policy.profilesConfigured?'Reviewed diversity profiles configured.':'Diversity profiles are missing; hosted quorum submission is disabled.'):'Diversity enforcement is disabled on this host.'} Configuration does not prove independent operators.</p>}
         {s.watchers.list.length===0?<p className="st-empty">{copy.watchers.none}</p>:<dl>
           {s.watchers.list.map((w)=><Row key={w.address} k={<code title={w.address}>{shortAddress(w.address)}</code>}>{when(now,w.lastAttestedAt,copy.watchers.never)}</Row>)}
         </dl>}

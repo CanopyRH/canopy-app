@@ -1,3 +1,4 @@
+import { attributedVaults, type ReportScope } from "./attribution";
 import { diverseQuorum, type Profiles } from "../watchnet/diversity";
 import { createHash } from "node:crypto";
 import { encodeFunctionData, recoverTypedDataAddress, type Address, type Hex } from "viem";
@@ -31,32 +32,10 @@ export async function ingestFeed(db: Db, classify: Classify, sourceUrl: string, 
 }
 
 const MAX_LABEL_TRIES = 5;
-const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-/**
- * Too common to identify a vault: token symbols, filler words, and the platforms every launch vault runs on. A report
- * that names only Morpho could be about any market on it, and a watcher alarm is too strong to sign on that alone.
- */
-const GENERIC = new Set(["usdc", "usd", "usdg", "usdt", "dai", "eth", "weth", "btc", "the", "vault", "vaults", "protocol", "finance", "financial", "labs", "dao", "prime", "high", "yield", "core", "v1", "v2", "morpho", "blue", "metamorpho"]);
-
-/** A vault as the watcher knows it: its card's name and, where known, its address, curator and asset symbol. */
+/** Exact targets are authorized by a reviewed content-hash/source/chain scope, never by the classifier. */
 export interface VaultNames { name: string; target?: string; curator?: string; asset?: string }
-
-/**
- * Vaults a report is about. It has to name the vault itself: a distinctive word of its name (which is how curators
- * brand their vaults), its address or its curator's address. A depeg report may instead name the vault's asset, which
- * a depeg of that asset concerns directly. A report that only names the platform matches nothing.
- */
-export function matchVaults<T extends VaultNames>(protocol: string, vaults: T[], label?: string): T[] {
-  const named = words(protocol);
-  const text = protocol.toLowerCase();
-  const byAddress = (a?: string) => !!a && /^0x[0-9a-f]{40}$/i.test(a) && text.includes(a.toLowerCase());
-  return vaults.filter(
-    (v) =>
-      words(v.name).some((n) => !GENERIC.has(n) && n.length >= 4 && named.some((w) => w === n || w.startsWith(n))) ||
-      byAddress(v.target) ||
-      byAddress(v.curator) ||
-      (label === "DEPEG_REPORT" && !!v.asset && named.includes(v.asset.toLowerCase())),
-  );
+export function matchVaults<T extends VaultNames>(_protocol:string,vaults:T[],label?:string,scope?:ReportScope):T[]{
+  return attributedVaults(vaults,label,scope);
 }
 
 /** Independent watchers must sign identical values, so the deadline comes from a shared 10-minute window. */
@@ -79,12 +58,13 @@ export async function maybeAttest(acct: PrivateKeyAccount, alarmBook: Address, c
 
 /** Labelled reports from the last hour. Rechecked every cycle, because the on-chain signal may arrive later. */
 export async function recentReports(db: Db, since: number) {
-  const rows = await db.query<{ sha256: string; label: string; protocol: string; confidence: number }>(
-    `SELECT sha256, label, protocol, confidence FROM feed_items WHERE at>$1 AND label IS NOT NULL`,
+  const rows = await db.query<{ sha256: string; source_url: string; label: string; protocol: string; confidence: number }>(
+    `SELECT sha256, source_url, label, protocol, confidence FROM feed_items WHERE at>$1 AND label IS NOT NULL`,
     [since],
   );
   return rows.map((x) => ({
     hash: x.sha256,
+    sourceUrl: x.source_url,
     classification: { label: x.label, protocol: x.protocol, confidence: Number(x.confidence) } as Classification,
   }));
 }

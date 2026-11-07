@@ -1,3 +1,4 @@
+import { armReadiness } from "../../services/src/risk/arm-readiness";
 import { lookThrough } from "../../services/src/risk/lookthrough";
 import { explainExposure } from "../../services/src/copilot/explain";
 import { createPublicClient, encodeAbiParameters, encodeFunctionData, formatUnits, getAddress, http, isAddress, keccak256, parseAbi, zeroAddress, type Abi, type Address, type Hex, type PublicClient } from "viem";
@@ -88,6 +89,7 @@ export function createCanopy(options: { chainId?: number; rpcUrl?: string; clien
   function alarmIo(at: Snapshot): AlarmIo {
     const state = (key: Hex) => read<readonly [boolean, bigint, ...unknown[]]>(at, book, alarmBookAbi, "state", [key]);
     return {
+      drainReference: async (key) => {const s=await state(key);return {snapAt:BigInt(s[2] as bigint),snap:BigInt(s[4] as bigint),prevSnap:BigInt(s[7] as bigint)};},
       check: (key) => read<boolean>(at, book, alarmBookAbi, "check", [key]),
       firedAt: async (key) => (await state(key))[1],
       now: async () => at.timestamp,
@@ -188,7 +190,7 @@ export function createCanopy(options: { chainId?: number; rpcUrl?: string; clien
     if (keys.length > 8) return fail("too_many_keys", "The existing and added alarms exceed the router's eight-key limit.");
     if (tighten && keys.length === previous.length) return fail("no_change", "These alarms are already armed.");
     if (tighten) for (const key of previous) {
-      if (!(await read<boolean>(at, book, alarmBookAbi, "armable", [key]))) return fail("alarm_not_clear", "An existing alarm is going off or cannot be rearmed. Use exit_now instead.");
+      if (!(await armReadiness(client, book, key, at.blockNumber)).armable) return fail("alarm_not_clear", "An existing alarm is going off or cannot be rearmed. Use exit_now instead.");
     }
     const wanted = new Set(selected.flatMap((v) => [v.key, ...(v.requires ?? []).map((r) => r.key)]));
     const steps: { tx: Tx; purpose: string }[] = [];

@@ -4,9 +4,9 @@
 
 # Canopy
 
-Canopy watches the ERC-4626 vaults you hold. When an alarm you chose fires, such as a share-price drop, a vault drain or an exploit that independent watchers confirm, a keeper exits your position and sends the vault's asset to your own wallet.
+Canopy watches the ERC-4626 vaults you hold. When an alarm you chose fires, such as a share-price drop, a vault drain or an exploit that approved watchers confirm, a keeper exits your position and sends the vault's asset to your own wallet.
 
-The exit contract has no "send to" field. Every exit pays the position owner and nobody else. A faulty keeper or a false report can, at worst, take you out early.
+The exit contract has no "send to" field. Every exit pays the position owner and nobody else. With an honest chosen adapter, a faulty keeper or false confirmation can cause an early exit. An adapter receives shares before unwinding, so newly allowed adapters require separate review.
 
 Canopy runs on **Robinhood Chain** (chain 4663). Base is planned next.
 
@@ -51,7 +51,7 @@ Ten new tools cover oracle inputs, control roles, shared exposure, idle-liquidit
   <img src=".github/assets/admin-limits.svg" alt="What the admin can't do: it can't change who gets paid, its router powers end on 2027-11-04, pausing stops new arming only, and every change needs 2 of 3 signers." width="100%">
 </p>
 
-- The admin can't move funds or change who gets paid: every payout goes to the position owner, and a position keeps its adapter.
+- A position keeps its adapter and the router pays its owner. Newly allowed adapters are trusted with shares from users who later select them; router payout checks do not make an arbitrary adapter safe.
 - It sets no swap feed or route. You choose every swap leg (the token, its price feed and staleness limit, its decimals and the Uniswap path, which must end in the stablecoin) when you arm, and the router stores those legs for your position and replaces them only when you arm again. The optional exit to stablecoin swaps with the legs you chose, and if the swap can't meet your minimum, the exit pays you the raw token instead. See [SECURITY.md](SECURITY.md) for every role and the risks accepted.
 - The router's admin powers end on **2027-11-04** (`ADMIN_EXPIRY`). After that, the router's settings can't change.
 - A separate guardian Safe can pause **new arming only**. Exits always stay open.
@@ -181,3 +181,9 @@ audit candidates, not live borrower or smart-account integrations. V4 is hookles
 without a production manager configuration. Stable routes remain empty until independently reviewed.
 Perp close planning and credit accounting are internal preparation, not live exchange execution or new fees.
 Read each component's README before integrating it. Existing owner exits remain available without these additions.
+
+## Operational hardening
+
+Read [the deployment and operations checklist](docs/operational-hardening.md) before updating services. Report attribution and hosted diversity enforcement now fail closed; configure reviewed approvals and genuinely separate operators before resuming feed confirmations. Listed drain references receive ongoing upkeep and the app shows warm-up/staleness. Owner controls can disarm a vault and revoke its allowance.
+
+Live v2 still has a zero-second Timelock, overlapping Safe owners and a BOTH component-check limitation. These contracts are immutable. The new seven-day deployment default and adapter-admission checks do not change live state. [SECURITY.md](SECURITY.md) distinguishes source mitigations from migration and signer-rotation work.
