@@ -20,6 +20,7 @@ export const ROUTES = [
   {path: '/alarms/record', note: 'Every alarm that fired and what happened next.'},
   {path: '/board', note: 'What is armed right now, in totals.'},
   {path: '/status', note: 'Whether Canopy is running right now.'},
+  {path: '/xray/{file}', note: 'A vault\'s X-ray card. {file} is the vault address for a share page, or the address plus .png, .svg or .json.'},
   {path: '/calldata/arm?vault=&keys=', note: 'Approve and arm calls, after every key is checked on-chain.'},
   {path: '/calldata/exit?vault=&owner=', note: 'The owner\'s Exit Now call.'},
   {path: '/calldata/disarm-all', note: 'The Disarm All call. For owners only.'},
