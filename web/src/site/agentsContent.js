@@ -12,7 +12,7 @@ export const RULES = [
 ];
 
 export const ROUTES = [
-  {path: '/vaults', note: 'The vaults Canopy covers.'},
+  {path: '/vaults', note: 'The vaults Canopy lists.'},
   {path: '/risk/{vault}', note: 'A vault\'s risk card, in plain words.'},
   {path: '/presets/{vault}', note: 'The alarm presets for a vault, with their keys.'},
   {path: '/alarms/live', note: 'Alarms that fired in the last day, newest first.'},

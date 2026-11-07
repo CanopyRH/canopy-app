@@ -78,7 +78,7 @@ const noContracts = { status: 503, description: "This deployment runs alerts onl
 export const ROUTES: RouteDef[] = [
   {
     method: "get", path: "/vaults", tag: "Reads", rateLimited: true,
-    summary: "List the vaults Canopy covers",
+    summary: "The vaults Canopy lists",
     description: "Every vault with a risk card that the deployment lists. A plain array.",
     ok: { contentType: "application/json", schema: z.array(vaultSchema), description: "The vaults." },
   },
