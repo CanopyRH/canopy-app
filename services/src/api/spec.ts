@@ -150,6 +150,17 @@ export const ROUTES: RouteDef[] = [
     ok: { contentType: "application/json", description: "The status." },
   },
   {
+    method: "get", path: "/whales", tag: "Reads", rateLimited: true,
+    summary: "Recent whale moves",
+    description: "Large deposits into and withdrawals from the listed vaults, newest first: by default at least $250,000 and 2% of the vault. The mover's wallet is shown shortened.",
+    query: {
+      vault: { description: "Only moves on this vault.", schema: addressSchema },
+      limit: { description: "Moves to return, 1 to 100. Default 20.", schema: z.number().int().min(1).max(100) },
+    },
+    ok: { contentType: "application/json", description: "A list of moves: vault, direction, amount in USD, share of the vault, idle liquidity, and the transaction." },
+    errors: [{ status: 400, description: "A malformed vault or limit.", schema: errorSchema }],
+  },
+  {
     method: "get", path: "/calldata/arm", tag: "Calldata", rateLimited: true,
     summary: "Calldata to arm a vault position",
     description:
