@@ -6,6 +6,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { webhookCallback } from "grammy";
 import { alarmBookAbi, erc20Abi, routerAbi, vaultAbi } from "./chain/abi";
 import { chainParts, ROBINHOOD, txUrl } from "./chain/addresses";
+import { isLevelKey } from "./api/levels";
 import { isPreset, Kind } from "./api/presets";
 import { createApi } from "./api/server";
 import { createResearch } from "./observatory";
@@ -29,8 +30,10 @@ import { cardText, readCard } from "./risk/card";
 import { migrate, postgres } from "./store/db";
 import { alarmsCursor, contractFence, routerCursor, SwitchRefused, switchContracts, switchText } from "./store/switch";
 import { repo } from "./store/repo";
+import { PLUGINS } from "./plugins";
 import { scrubConsole } from "./log";
 import { fetchFeed } from "./watcher/feeds";
+import { recordWatcherSet } from "./watcher/roster";
 import { quorumScope, quorumScopeNow } from "./watcher/scope";
 import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, recentReports } from "./watcher/watcher";
 
@@ -97,7 +100,7 @@ await migrate(db);
 // by mistake would index and act on the wrong contracts, even where CONTRACT_SWITCH is set.
 if (contracts) {
   try {
-    await requireV2(client, { router, alarmBook });
+    await requireV2(client, { router: env.ROUTER === undefined ? undefined : router, alarmBook });
   } catch (e) {
     if (!(e instanceof ContractVersionError)) throw e;
     console.error("contract version check failed:", e.message);
@@ -170,6 +173,7 @@ const keeper: KeeperDeps | null = contracts && env.KEEPER_PRIVATE_KEY
 
 /** Admin and guardian changes go to the operator chat. This only queues a row, so the indexer never waits on Telegram. */
 const adminAlert = async (e: AdminEvent) => {
+  await recordWatcherSet(db, e, now()); // the public Watchers page reads these
   if (env.OPS_CHAT_ID === undefined) return void console.warn("admin event", e.event, "(set OPS_CHAT_ID to be told)");
   await queueOps(r, adminAlertId(e), adminAlertText(env.CHAIN_ID, e), now());
 };
@@ -206,6 +210,14 @@ const reorgAlert = async (i: ReorgInfo) => {
   await queueOps(r, `reorg:${i.source}:${i.cursor}:${i.rewoundTo}`, deepReorgText(i), now());
 };
 
+// Feature plugins start their own loops (src/plugins/). They get the same pieces the core loops use.
+for (const p of PLUGINS) {
+  p.start?.({
+    client: client as never, db, repo: r, chainId: env.CHAIN_ID, now, run, contracts, listed, confirmations, every, fence,
+    onStuck: stuckAlert, onDeepReorg: reorgAlert, appUrl, queueAlert: (vault, text, tag, topic) => enqueueAlert(r, vault, text, now(), tag, topic),
+  });
+}
+
 if (run("indexer") && contracts) {
   every(2_000, "router", () =>
     syncLogs(client, r, {
@@ -241,7 +253,7 @@ if (run("indexer") && contracts) {
         if (keeper) await onFired(keeper, f.key, firedAt);
         const kind = await r.detectorKind(f.key);
         // Anyone can arm a key of their own on a real vault, so followers only hear about the vault's own presets.
-        const armed = (await r.vaultsFor(f.key)).filter((v) => isPreset(v as Address, f.key));
+        const armed = (await r.vaultsFor(f.key)).filter((v) => isPreset(v as Address, f.key) || (listed.includes(v.toLowerCase()) && isLevelKey(v as Address, f.key)));
         const once = (vault: string) => r.claimAlert(vault, `fired:${f.key}:${firedAt}`, now(), 2 * ALARM_TTL);
         for (const vault of armed) {
           if (!(await once(vault))) continue;
@@ -285,7 +297,7 @@ if (run("indexer") && contracts) {
   // Arms are applied at the tip, so exits stay fast. Each is checked against the chain once it is deep enough to be settled.
   every(5_000, "confirm arms", () => confirmArms(client, r, router, confirmations));
   // Alerts go out from their own loop, so a slow or rate-limited Telegram never holds up reading the next alarm.
-  if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text, topic) => notifyText(r, sendAlert, vault, text, topic), now));
   const opsChat = env.OPS_CHAT_ID;
   if (bot && opsChat !== undefined) every(1_000, "ops alerts", () => sendQueuedOps(r, (text) => sendOps(opsChat, text), now));
   if (env.PLAN_TOKEN && env.PLAN_PAY_ADDRESS) every(30_000, "payments", () =>
@@ -400,7 +412,7 @@ if (run("detector")) {
   // Done jobs, old alarms, signals, attestations, reports and vault readings only take space. Every operator runs a detector.
   every(3_600_000, "prune", () => r.prune(now()));
   // On a chain with no Canopy contracts the indexer role has nothing to do, so the scan's alerts go out from here.
-  if (!contracts) if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (!contracts && bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text, topic) => notifyText(r, sendAlert, vault, text, topic), now));
 }
 
 if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_KEY) {

@@ -19,7 +19,7 @@ export function Shell({page,children}) {
     <div id="content">{children}</div>
     <footer className="pg-footer">
       <nav aria-label="More">{FOOTER.map((l)=><Link key={l.label} href={l.href}>{l.label}</Link>)}</nav>
-      <p>Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not cover losses.</p>
+      <p>Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not pay for losses.</p>
       <small>© 2026 Canopy · DeFi auto-exit</small>
     </footer>
   </div>;

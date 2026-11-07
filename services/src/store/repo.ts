@@ -188,8 +188,19 @@ export const repo = (db: Db) => ({
   async isFollowed(target: string): Promise<boolean> {
     return (await db.query(`SELECT 1 FROM vault_follows WHERE target=$1 LIMIT 1`, [target])).length > 0;
   },
-  async followers(target: string): Promise<number[]> {
-    return (await db.query<{ chat_id: string }>(`SELECT chat_id FROM vault_follows WHERE target=$1`, [target])).map((x) => Number(x.chat_id));
+  /** Chats following a vault. With a topic, chats that muted that topic are left out. */
+  async followers(target: string, topic?: string): Promise<number[]> {
+    const rows = topic === undefined
+      ? await db.query<{ chat_id: string }>(`SELECT chat_id FROM vault_follows WHERE target=$1`, [target])
+      : await db.query<{ chat_id: string }>(`SELECT f.chat_id FROM vault_follows f WHERE f.target=$1 AND NOT EXISTS (SELECT 1 FROM chat_mutes m WHERE m.chat_id=f.chat_id AND m.topic=$2)`, [target, topic]);
+    return rows.map((x) => Number(x.chat_id));
+  },
+  async setMuted(chatId: number, topic: string, muted: boolean) {
+    if (muted) await db.query(`INSERT INTO chat_mutes (chat_id, topic) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [chatId, topic]);
+    else await db.query(`DELETE FROM chat_mutes WHERE chat_id=$1 AND topic=$2`, [chatId, topic]);
+  },
+  async isMuted(chatId: number, topic: string): Promise<boolean> {
+    return (await db.query(`SELECT 1 FROM chat_mutes WHERE chat_id=$1 AND topic=$2`, [chatId, topic])).length > 0;
   },
   async cursor(name: string): Promise<bigint | null> {
     const r = await db.query<{ block: string }>(`SELECT block FROM cursors WHERE name=$1`, [name]);

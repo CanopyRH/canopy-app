@@ -191,6 +191,14 @@ describe("copy", () => {
     expect(findBanned("Earn 8% APY, guaranteed")).toHaveLength(2);
     expect(findBanned("Funds go only to each owner's wallet")).toHaveLength(0);
   });
+  test("banned-words gate catches cover, premium and partner wording, and lets plain words through", () => {
+    for (const t of ["It does not cover losses", "A plan covers Base", "covered", "covering", "Pay a premium", "Premiums apply", "our partner", "Partners", "a partnership", "partnerships", "Cover"]) {
+      expect(findBanned(t)).toHaveLength(1);
+    }
+    for (const t of ["Recover your funds", "A recovery plan", "discover vaults", "Applies to Base only", "no business relationship", "department"]) {
+      expect(findBanned(t)).toEqual([]);
+    }
+  });
   test("alert copy is clean", () => {
     const text = [WELCOME, alarmAlert({ vaultName: "V", alarm: "share drop" }), alarmAlert({ vaultName: "V", alarm: "x", withdrawInRobinhoodApp: true })];
     for (const t of text) expect(findBanned(t)).toEqual([]);

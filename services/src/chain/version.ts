@@ -36,14 +36,15 @@ async function probe(client: Reader, address: Address, abi: typeof routerAbi | t
 
 /**
  * Reads MAX_SWAPS() on the router and REBASE_AFTER() on the AlarmBook. Throws ContractVersionError unless both answer.
+ * A service that has no router (an outside watcher, which only signs for the AlarmBook) leaves `router` out and is checked on the AlarmBook alone.
  * A node that gives no answer is tried again a few times first, because that says nothing about which contracts these are.
  */
-export async function requireV2(client: Reader, a: { router: string; alarmBook: string }, opts: { tries?: number; sleep?: (ms: number) => Promise<unknown> } = {}) {
+export async function requireV2(client: Reader, a: { router?: string; alarmBook: string }, opts: { tries?: number; sleep?: (ms: number) => Promise<unknown> } = {}) {
   const tries = opts.tries ?? 3, sleep = opts.sleep ?? ((ms: number) => Bun.sleep(ms));
   let last: ContractVersionError | undefined;
   for (let i = 0; i < tries; i++) {
     const [router, book] = await Promise.all([
-      probe(client, a.router as Address, routerAbi, "MAX_SWAPS"),
+      a.router === undefined ? "yes" : probe(client, a.router as Address, routerAbi, "MAX_SWAPS"),
       probe(client, a.alarmBook as Address, alarmBookAbi, "REBASE_AFTER"),
     ]);
     if (router === "yes" && book === "yes") return;
@@ -51,7 +52,7 @@ export async function requireV2(client: Reader, a: { router: string; alarmBook: 
     if (router === "no") no.push(`ROUTER ${a.router} does not answer MAX_SWAPS(), so it is not the v2 ExitRouter`);
     if (book === "no") no.push(`ALARM_BOOK ${a.alarmBook} does not answer REBASE_AFTER(), so it is not the v2 AlarmBook`);
     if (no.length > 0) throw new ContractVersionError(`${no.join("; ")}. A service must run on the v2 contracts.`, "not-v2");
-    last = new ContractVersionError(`could not read the version of ROUTER ${a.router} and ALARM_BOOK ${a.alarmBook}: the node gave no answer`, "unreadable");
+    last = new ContractVersionError(`could not read the version of ${a.router === undefined ? "" : `ROUTER ${a.router} and `}ALARM_BOOK ${a.alarmBook}: the node gave no answer`, "unreadable");
     if (i + 1 < tries) await sleep(2_000);
   }
   throw last!;

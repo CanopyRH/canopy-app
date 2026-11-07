@@ -5,6 +5,11 @@ services, the web app or the tooling unless it says otherwise.
 
 ## 2026-11-06
 
+- **Whale alerts.** "Know when whales run before you do." The indexer reads ERC-4626 deposits and withdrawals on the listed
+  vaults; one that is at least `WHALE_MIN_USD` (250,000) and `WHALE_MIN_PCT` (2%) of the vault tells its followers, with the
+  vault, amount, share of the vault, idle liquidity and a Blockscout link. `/whales` and `/whales off` in the bot,
+  `GET /whales`, and a panel on the risk card. Added as a plugin; the core changes are a plugin `start` hook, a topic on
+  queued alerts and a `chat_mutes` table.
 - **Web: "What Canopy can't do" page** (`limits.html`). Reads the router, Timelock and AlarmBook straight from the chain in
   the browser: the countdown to `ADMIN_EXPIRY`, what nobody can do (each tied to a line of the verified source), the adapters,
   guardian, arming pause, Timelock delay and proposer, and each watcher's start and end. A fact that can't be read is marked
@@ -21,7 +26,11 @@ services, the web app or the tooling unless it says otherwise.
     including a keeper High (attacker jobs in the listed fast lane) and the contract switch's races.
 - **Indexer:** survives chain reorgs (rewind, undo, re-check), and checks each log's block hash.
 - **API:** the read limit now applies on Railway (the caller is 2 entries from the end of X-Forwarded-For).
-
+- **Your own alarm levels.** The app lets you pick the "Vault loss" level: 0.5%, 1%, 2%, 5% or 10% under the share
+  price's high. A level is a plain SHARE_DROP key built like the preset, so the browser works out its key itself, and the
+  app's rules are unchanged: it never arms a key that is going off, fired in the last day or can't be read. The keeper
+  pokes, checkpoints and exits a paid position's level on a listed vault like a preset. There are only five level keys
+  per vault, and every limit on unlisted and unpaid keys is as it was. No contract changed.
 - **Second internal review.** The report is in [.audit-grade/2026-11-06](.audit-grade/2026-11-06/REPORT.md). Its fixes:
   - **Keeper.**
     - The exit queue keeps moving when an attacker fills it with jobs too big or too slow (A2-H1, A2-M1).

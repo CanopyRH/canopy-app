@@ -91,7 +91,7 @@ export const ROUTES: RouteDef[] = [
   },
   {
     method: "get", path: "/vaults", tag: "Reads", rateLimited: true,
-    summary: "List the vaults Canopy covers",
+    summary: "The vaults Canopy lists",
     description: "Every vault with a risk card that the deployment lists. A plain array.",
     ok: { contentType: "application/json", schema: z.array(vaultSchema), description: "The vaults." },
   },
@@ -161,6 +161,23 @@ export const ROUTES: RouteDef[] = [
     summary: "Is Canopy working right now",
     description: "Whether Canopy's services are running and keeping up with the chain. Only fields that are safe to show.",
     ok: { contentType: "application/json", description: "The status." },
+  },
+  {
+    method: "get", path: "/whales", tag: "Reads", rateLimited: true,
+    summary: "Recent whale moves",
+    description: "Large deposits into and withdrawals from the listed vaults, newest first: by default at least $250,000 and 2% of the vault. The mover's wallet is shown shortened.",
+    query: {
+      vault: { description: "Only moves on this vault.", schema: addressSchema },
+      limit: { description: "Moves to return, 1 to 100. Default 20.", schema: z.number().int().min(1).max(100) },
+    },
+    ok: { contentType: "application/json", description: "A list of moves: vault, direction, amount in USD, share of the vault, idle liquidity, and the transaction." },
+    errors: [{ status: 400, description: "A malformed vault or limit.", schema: errorSchema }],
+  },
+  {
+    method: "get", path: "/watchers", tag: "Reads", rateLimited: true,
+    summary: "The approved watchers",
+    description: "Every approved outside watcher: where its approval comes from, whether it is active, pending or expired, when it last signed, and how many of its signatures matched an alarm that fired. Up to 30 seconds old.",
+    ok: { contentType: "application/json", description: "The watcher roster." },
   },
   {
     method: "get", path: "/calldata/arm", tag: "Calldata", rateLimited: true,

@@ -9,6 +9,7 @@ import type { Classify } from "../engine/classifier";
 import type { Classification } from "../engine/llmClassify";
 import type { Db } from "../store/db";
 import { assembleQuorum, attestDomain, attestTypes, evidenceHash, signAttest } from "./attest";
+import { logAttestation } from "./roster";
 
 export interface Attestation { key: Hex; evidence: Hex; deadline: bigint; signer: Address; sig: Hex }
 
@@ -109,6 +110,7 @@ export async function acceptAttestation(db: Db, watchers: Address[], alarmBook: 
     `INSERT INTO attestations (key, evidence_hash, deadline, signer, sig) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
     [a.key, a.evidence, a.deadline.toString(), a.signer, a.sig],
   );
+  await logAttestation(db, a, now);
   return true;
 }
 

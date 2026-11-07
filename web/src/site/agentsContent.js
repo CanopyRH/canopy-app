@@ -14,7 +14,7 @@ export const RULES = [
 export const ROUTES = [
   {path:"/research",note:"Catalog of ten Research tools; four verify or calculate locally."},
   {path:"/research/{feature}",note:"Six bounded public-source readers: oracles, controls, concentration, liquidity, perps and funding. See the Research field guide for inputs and limits."},
-  {path: '/vaults', note: 'The vaults Canopy covers.'},
+  {path: '/vaults', note: 'The vaults Canopy lists.'},
   {path: '/risk/{vault}', note: 'A vault\'s risk card, in plain words.'},
   {path: '/presets/{vault}', note: 'The alarm presets for a vault, with their keys.'},
   {path: '/alarms/live', note: 'Alarms that fired in the last day, newest first.'},
@@ -22,6 +22,8 @@ export const ROUTES = [
   {path: '/alarms/record', note: 'Every alarm that fired and what happened next.'},
   {path: '/board', note: 'What is armed right now, in totals.'},
   {path: '/status', note: 'Whether Canopy is running right now.'},
+  {path: '/whales', note: 'Recent large deposits and withdrawals on the listed vaults.'},
+  {path: '/watchers', note: 'The approved outside watchers and how often their signatures matched a real alarm.'},
   {path: '/xray/{file}', note: 'A vault\'s X-ray card. {file} is the vault address for a share page, or the address plus .png, .svg or .json.'},
   {path: '/calldata/arm?vault=&keys=', note: 'Approve and arm calls, after every key is checked on-chain.'},
   {path: '/calldata/exit?vault=&owner=', note: 'The owner\'s Exit Now call.'},

@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS plans (wallet TEXT PRIMARY KEY, paid_until BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS plan_payments (tx TEXT, log_index INT, wallet TEXT NOT NULL, amount NUMERIC NOT NULL, credited BOOLEAN NOT NULL DEFAULT false, applied BOOLEAN NOT NULL DEFAULT false, at BIGINT NOT NULL, PRIMARY KEY (tx, log_index));
 CREATE TABLE IF NOT EXISTS vault_follows (chat_id BIGINT, target TEXT, PRIMARY KEY (chat_id, target));
+-- A chat that turned a kind of free alert off (a topic, such as "whales"). Alerts without a topic ignore this.
+CREATE TABLE IF NOT EXISTS chat_mutes (chat_id BIGINT, topic TEXT, PRIMARY KEY (chat_id, topic));
 CREATE TABLE IF NOT EXISTS positions (pos_id TEXT PRIMARY KEY, owner TEXT NOT NULL, adapter TEXT NOT NULL, target TEXT NOT NULL, token_id NUMERIC NOT NULL,
   harbour SMALLINT NOT NULL, max_slip_bps INT NOT NULL, epoch BIGINT NOT NULL, active BOOLEAN NOT NULL, armed_block BIGINT NOT NULL, terms_hash TEXT NOT NULL);
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS confirmed BOOLEAN NOT NULL DEFAULT true;

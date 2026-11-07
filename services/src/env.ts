@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { watcherProblems, withWatcherDefaults } from "./watcher/quickstart";
 
 const addr = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 
@@ -68,6 +69,8 @@ export const Env = z.object({
   for (const [k, v] of [["V1_ROUTER", e.ROUTER], ["V1_ALARM_BOOK", e.ALARM_BOOK]] as const) {
     if (e[k] && v && e[k]!.toLowerCase() === v.toLowerCase()) c.addIssue({ code: "custom", path: [k], message: "must be the v1 contract, not the one this service runs on" });
   }
+  // A watcher needs the AlarmBook and its own settings, not the router, adapter or plan payment. See watcher/quickstart.ts.
+  if (e.ROLE.every((r) => r === "watcher")) return void watcherProblems(e).forEach((p) => c.addIssue({ code: "custom", path: [p.path], message: p.message }));
   const need = (k: keyof typeof e, message: string) => {
     if (e[k] === undefined) c.addIssue({ code: "custom", path: [k], message });
   };
@@ -86,4 +89,4 @@ export const Env = z.object({
 export type Env = z.infer<typeof Env>;
 
 /** A blank line in an env file means "not set", not an empty value. */
-export const loadEnv = (raw: Record<string, string | undefined>) => Env.parse(Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== "")));
+export const loadEnv = (raw: Record<string, string | undefined>) => Env.parse(withWatcherDefaults(Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== ""))));

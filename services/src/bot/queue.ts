@@ -5,15 +5,16 @@ import type { Repo } from "../store/repo";
 export const ALERT_TRIES = 5;
 export const ALERT_RETRY_SEC = 30;
 
-export interface QueuedAlert { vault: string; text: string }
+export interface QueuedAlert { vault: string; text: string; topic?: string }
 
 /**
  * Queues one alert for a vault's followers. The same text for the same vault is only queued once, unless `tag` sets it
  * apart: a scan's "paused" alert reads the same each time, and a second pause next month is a new alert.
+ * A `topic` (such as "whales") lets a chat turn that kind of alert off; chats that did are skipped when it is sent.
  */
-export function queueAlert(r: Repo, vault: string, text: string, now: number, tag = "") {
+export function queueAlert(r: Repo, vault: string, text: string, now: number, tag = "", topic?: string) {
   const dedupe = `alert:${createHash("sha256").update(`${vault.toLowerCase()}\n${text}${tag ? `\n${tag}` : ""}`).digest("hex")}`;
-  return r.enqueue("alert", dedupe, { vault, text } satisfies QueuedAlert, now);
+  return r.enqueue("alert", dedupe, { vault, text, ...(topic ? { topic } : {}) } satisfies QueuedAlert, now);
 }
 
 /** Runs the due jobs of one kind. A failed send is retried later, and dropped after `tries`. */
@@ -31,8 +32,8 @@ async function drain(r: Repo, kind: string, tries: number, now: () => number, se
 }
 
 /** Sends queued alerts. Runs on its own timer, so the loop that reads alarms never waits on Telegram. */
-export function sendQueuedAlerts(r: Repo, send: (vault: string, text: string) => Promise<unknown>, now: () => number) {
-  return drain(r, "alert", ALERT_TRIES, now, (p) => send((p as QueuedAlert).vault, (p as QueuedAlert).text));
+export function sendQueuedAlerts(r: Repo, send: (vault: string, text: string, topic?: string) => Promise<unknown>, now: () => number) {
+  return drain(r, "alert", ALERT_TRIES, now, (p) => send((p as QueuedAlert).vault, (p as QueuedAlert).text, (p as QueuedAlert).topic));
 }
 
 /** Operator warnings get many more tries than follower alerts, about ten minutes' worth. */

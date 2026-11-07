@@ -38,7 +38,7 @@ export const PANIC_NO_VAULTS = "You aren't following any vaults yet, so there ar
 export const exitReply = (name: string) =>
   `Exit ${name}: tap the button, connect your wallet in the Canopy app, check the details and sign. Canopy never signs for you and never holds your keys. Funds go only to your wallet.`;
 export const EXIT_USAGE = "Send a vault address or name: /exit 0x... or /exit <vault name>. /panic shows buttons for every vault you follow.";
-export const exitNotFound = (q: string) => `No vault found for "${q.slice(0, 60)}". Send its address, or see the vaults we cover with /vaults.`;
+export const exitNotFound = (q: string) => `No vault found for "${q.slice(0, 60)}". Send its address, or see the vaults Canopy lists with /vaults.`;
 export const exitMany = "More than one vault matches. Pick the one you mean. Each button opens the Canopy app, where you sign in your own wallet.";
 
 /** Plain wording for a signal read from the chain. */
@@ -64,6 +64,6 @@ export function watchAlert(a: { vaultName: string; what: string; withdrawInRobin
 
 export const WELCOME = [
   "Canopy watches DeFi vaults and tells you when an alarm fires.",
-  "See the vaults we cover with /vaults, and follow one with /watch <vault address>. This needs no wallet connection.",
-  "Canopy does not promise any outcome and does not cover losses.",
+  "See the vaults we watch with /vaults, and follow one with /watch <vault address>. This needs no wallet connection.",
+  "Canopy does not promise any outcome and does not pay for losses.",
 ].join("\n");

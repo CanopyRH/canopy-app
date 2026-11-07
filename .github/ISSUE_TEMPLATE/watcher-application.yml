@@ -1,0 +1,71 @@
+name: Watcher application
+description: Ask to be added as an approved Canopy watcher. Read WATCHERS.md first.
+title: "Watcher application: <short label for your setup>"
+labels: ["watcher-application"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to run a watcher. [WATCHERS.md](https://github.com/CanopyRH/canopy-app/blob/main/WATCHERS.md) explains what a watcher does and what we expect.
+
+        **This issue is public.** Give a public address and a way to reach you that you are happy to post here. Don't paste a private key, a seed phrase, an API key, a legal name, a government ID, a home address or any account number. We will never ask for them.
+  - type: input
+    id: address
+    attributes:
+      label: Public watcher address
+      description: The address of a new key made only for this watcher (0x followed by 40 hex characters). Not the private key.
+      placeholder: "0xabab…"
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: How to reach you
+      description: A channel you are happy to make public, for example a team or project account on a chat service, or a mailbox made for this role. Say how fast you usually answer.
+    validations:
+      required: true
+  - type: textarea
+    id: infrastructure
+    attributes:
+      label: Infrastructure summary
+      description: |
+        Where and how it runs, in a few lines: hosting type and region, whether the three processes (watcher, indexer, detector) and Postgres share a host, which RPC provider and model provider you use, how you restart it and how you will notice it is down.
+    validations:
+      required: true
+  - type: textarea
+    id: signing-policy
+    attributes:
+      label: Signing policy
+      description: |
+        When will your watcher sign, and when won't it? Say whether you run the code as it is, whether anyone can sign by hand, how you review a signature you did not expect, and what you do if you think a signature was wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Feeds and settings
+      description: Confirm you use the feed and vault lists from deploy/services.env.example, or list any difference and why.
+    validations:
+      required: false
+  - type: textarea
+    id: running-since
+    attributes:
+      label: How long it has been running
+      description: Since when, and anything you noticed (errors, gaps, labels that surprised you).
+    validations:
+      required: false
+  - type: checkboxes
+    id: agreement
+    attributes:
+      label: Please confirm
+      options:
+        - label: The address above belongs to a new key used only for this watcher. It holds no funds and I have shared the private key with no one.
+          required: true
+        - label: I understand a watcher cannot move funds, and that one watcher cannot fire an alarm alone.
+          required: true
+        - label: I will sign only on real evidence, and will not change the decision code to sign sooner.
+          required: true
+        - label: I will tell the maintainers quickly if my key may be exposed or my watcher goes down for long.
+          required: true
+        - label: I understand I can be removed from the list by the admin Safe at any time.
+          required: true

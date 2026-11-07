@@ -224,10 +224,10 @@ describe("plans are per network", () => {
     expect(planScope(robinhood, offered(CHAINS))).toBeNull();
   });
 
-  test("with two, it says plainly that a plan covers one network", () => {
+  test("with two, it says plainly that a plan applies to one network", () => {
     const both = [robinhood, baseLive];
-    expect(planScope(baseLive, both)).toBe("Plans are per network. This plan is paid in USDC on Base and covers Base only. A plan on Robinhood Chain is paid for separately.");
-    expect(planScope(robinhood, both)).toBe("Plans are per network. This plan is paid in USDG on Robinhood Chain and covers Robinhood Chain only. A plan on Base is paid for separately.");
+    expect(planScope(baseLive, both)).toBe("Plans are per network. This plan is paid in USDC on Base and applies to Base only. A plan on Robinhood Chain is paid for separately.");
+    expect(planScope(robinhood, both)).toBe("Plans are per network. This plan is paid in USDG on Robinhood Chain and applies to Robinhood Chain only. A plan on Base is paid for separately.");
     expect(findBanned(planScope(baseLive, both)!)).toEqual([]);
   });
 

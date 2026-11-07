@@ -12,10 +12,14 @@ import { isBlocked, parseWallet, PLAN_AMOUNTS } from "../tx";
 import { linkStep, parseDeepLink, type DeepLink } from "../deeplink";
 import { LINK_COPY } from "../copy/exitlink";
 import ExitPreview from "./ExitPreview";
+import { LevelPicker } from "./LevelPicker";
 import { receiptLink } from "../receipt";
 import WalletsPanel from "./wallets/WalletsPanel";
 import type { Payout } from "../stableExit";
 import LpPanel from "./LpPanel";
+import RegionNotice from "./RegionNotice";
+import { regionNoticesFor } from "../region";
+import WhalePanel from "./whales/WhalePanel";
 
 declare global { interface Window { ethereum?: Eip1193 } }
 
@@ -139,7 +143,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${net.chain.chainName}`} onClose={onClose} wide>
     <div className="cd-position-dialog-summary"><div><span className="cd-asset-icon cd-asset-vault" aria-hidden="true"><Layers3 size={21} strokeWidth={1.5} /></span><div><strong>{usd(row.assets)} {row.vault.asset}</strong><span>Read from the chain just now</span></div></div><Status row={row} /></div>
     <div className="cd-dialog-tabs" role="tablist" aria-label="Position details">{([["alarms", COPY.alarmsTab], ["risk", COPY.riskTab]] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={tab === id ? "is-active" : ""}>{label}</button>)}</div>
-    {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3><a className="cd-button cd-button-light" href={`xray.html?vault=${row.vault.address.toLowerCase()}`} target="_blank" rel="noopener noreferrer">{COPY.shareXray}<ArrowUpRight size={15} /></a></div><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre><button className="cd-button cd-button-light" disabled={explaining} onClick={async () => { setExplaining(true); try { const e=await net.explainPosition(row.vault.address); setExplanation(e.lines.join("\n\n")); } catch { setExplanation("Underlying position facts could not be read. Try again later."); } finally { setExplaining(false); } }}>{explaining ? "Reading underlying positions…" : "Explain underlying positions"}</button>{explanation && <pre className="cd-risk-text" role="status">{explanation}</pre>}</div>}
+    {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3><a className="cd-button cd-button-light" href={`xray.html?vault=${row.vault.address.toLowerCase()}`} target="_blank" rel="noopener noreferrer">{COPY.shareXray}<ArrowUpRight size={15} /></a></div>{regionNoticesFor(row.vault).map((k) => <RegionNotice key={k} kind={k} />)}<pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre><button className="cd-button cd-button-light" disabled={explaining} onClick={async () => { setExplaining(true); try { const e=await net.explainPosition(row.vault.address); setExplanation(e.lines.join("\n\n")); } catch { setExplanation("Underlying position facts could not be read. Try again later."); } finally { setExplaining(false); } }}>{explaining ? "Reading underlying positions…" : "Explain underlying positions"}</button>{explanation && <pre className="cd-risk-text" role="status">{explanation}</pre>}<WhalePanel vault={row.vault.address} /></div>}
 
     {tab === "alarms" && <div className="cd-dialog-content">
       {!net.live && <p className="cd-inline-note"><CircleHelp size={15} />{COPY.notDeployed}</p>}
@@ -160,6 +164,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
           const on = picked.includes(preset.key);
           return <label key={preset.key} className={`cd-alarm-option ${on ? "is-selected" : ""}`}><input type="checkbox" disabled={status !== "clear" || busy} checked={on} onChange={(e) => toggle(preset.key, e.target.checked)} /><span className="cd-checkbox-mark">{on && <Check size={12} strokeWidth={3} />}</span><span><strong>{preset.name}</strong><small>{status === "going-off" ? COPY.alarmTripped : status === "unreadable" ? COPY.alarmUnreadable : preset.note}</small></span>{preset.requires && <span className="cd-confirmation-tag">Watcher confirms</span>}</label>;
         })}{views === null && <p className="cd-caption">{COPY.reading}</p>}</div>
+        {views !== null && <LevelPicker io={net.alarmIo} vault={row.vault.address} picked={picked} setPicked={setPicked} busy={busy} />}
         {(views ?? []).some((v) => v.status === "going-off") && <p className="cd-inline-note"><TriangleAlert size={15} />{row.state?.armed ? COPY.alarmExitArmed : COPY.alarmExitUnarmed}</p>}
         <details className="cd-advanced"><summary>Terms</summary><pre className="cd-risk-text">{TERMS}</pre></details>
         <label className="cd-terms"><input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} /> {COPY.termsAccept}</label>

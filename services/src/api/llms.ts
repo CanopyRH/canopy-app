@@ -26,7 +26,7 @@ export function buildLlmsTxt(o: LlmsOptions): string {
   return [
     "# Canopy",
     "",
-    "> Canopy is software that tries to exit a DeFi vault position when an alarm the owner chose fires. The owner arms a position, keepers watch the alarms, and an exit pays the owner's own wallet. It can fail, it promises no outcome and it does not cover losses.",
+    "> Canopy is software that tries to exit a DeFi vault position when an alarm the owner chose fires. The owner arms a position, keepers watch the alarms, and an exit pays the owner's own wallet. It can fail, it promises no outcome and it does not pay for losses.",
     "",
     "## Hard rules",
     "",
@@ -50,7 +50,7 @@ export function buildLlmsTxt(o: LlmsOptions): string {
     "",
     "- GET /research: catalog of ten Research tools",
     "- GET /research/{feature}: oracles, controls, concentration, liquidity, perps and funding source reads",
-    "- GET /vaults: the vaults Canopy covers",
+    "- GET /vaults: the vaults Canopy lists",
     "- GET /risk/{vault}: a vault's risk card",
     "- GET /presets/{vault}: the alarm presets and their keys",
     "- GET /alarms/live: alarms that fired in the last day",

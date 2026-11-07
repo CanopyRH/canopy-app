@@ -4,7 +4,8 @@ import { createPublicClient, http, maxUint256, parseAbi, type Address, type Hex 
 import { autoExit, type Chain, type Vault } from "./config";
 import { exitBlocked, gateAbi, type Read } from "./gates";
 import { sendTx, type Eip1193 } from "./wallet";
-import { keyOf, presetsFor, registrationOrder, type Preset } from "../../services/src/api/presets";
+import { keyOf, presetsFor, registrationOrder, type Detector, type Preset } from "../../services/src/api/presets";
+import { armableFor, registrationFor } from "./levels";
 import { notArmable, presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
 import { armOneStep, batchSupport, confirmCount, needed } from "./batch";
 import { revertText } from "./errors";
@@ -114,10 +115,10 @@ function make(c: Chain) {
     const payout = payoutChoice === "stable" ? await payoutOptions(vault) : RAW_PAYOUT;
     if (!payout) throw new Error("No reviewed stablecoin route is available for this position.");
     const paused = await answersPaused(vault);
-    const presets = presetsFor(vault, vault, { paused });
+    const presets = armableFor(vault, presetsFor(vault, vault, { paused })); // the presets and the five loss levels
     // Read again at the moment of arming: the list on screen may be minutes old. Nothing is sent if any key is going off.
     if (keys.some((k) => !presets.some((p) => p.key === k)) || (await refusedPresets(alarmIo, presets, keys)).length > 0) throw new Error(COPY.armRefused);
-    for (const d of registrationOrder(vault, vault, { paused }).filter((d) => needed(presets, keys, d))) {
+    for (const d of registrationFor(vault, registrationOrder(vault, vault, { paused })).filter((d) => needed(presets, keys, d))) {
       const known = await client.readContract({ address: c.alarmBook!, abi: alarmBookAbi, functionName: "state", args: [keyOf(d)] });
       if (!known[0]) await send(s, registerTx(c.alarmBook!, d));
     }
@@ -180,7 +181,7 @@ function make(c: Chain) {
 
   const disarmAll = (s: Signer) => send(s, disarmAllTx(c.router!));
 
-  /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
+  /** A plan is paid in this network's plan token to this network's payments address, and applies only to this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
   const explainPosition = async (vault: Address) => {

@@ -185,7 +185,7 @@
       { "name": "Uniswap", "status": "Planned update", "role": "LP position exits", "image": "assets/integrations/uniswap.svg", "imageAlt": "Uniswap logo" }
     ],
     "cta": { "label": "View launch scope", "href": "docs.html#how-it-works" },
-    "note": "Names identify the networks and protocols Canopy works with. They do not imply endorsement or partnership."
+    "note": "Names identify the networks and protocols Canopy works with. They do not imply endorsement or any business relationship."
   },
   "scenarios": {
     "id": "limits",
@@ -275,7 +275,7 @@
       },
       {
         "question": "Will every exit succeed?",
-        "answer": "No. A fully lent-out vault, a share gate, a pause or a bug can limit or stop a withdrawal, and false alarms can cause unneeded exits. Canopy withdraws what is liquid and keeps trying while the alarm is live. It promises no outcome and does not cover losses."
+        "answer": "No. A fully lent-out vault, a share gate, a pause or a bug can limit or stop a withdrawal, and false alarms can cause unneeded exits. Canopy withdraws what is liquid and keeps trying while the alarm is live. It promises no outcome and does not pay for losses."
       },
       {
         "question": "What do I pay, and can I revoke access?",
@@ -318,7 +318,7 @@
       { "label": "Telegram alerts", "href": "https://t.me/CanopyAlerts_Bot" }
     ],
     "copyright": "© 2026 Canopy",
-    "note": "Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not cover losses.",
+    "note": "Canopy is software. It tries to exit when your alarms fire. It promises no outcome and does not pay for losses.",
     "integrationNote": "Third-party names identify networks and protocols Canopy works with, not endorsements."
   }
 }

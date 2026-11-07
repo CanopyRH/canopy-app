@@ -85,7 +85,7 @@ test("wallet input is validated", () => {
 
 test("copy is clean and terms are not promises", () => {
   expect(findBanned(JSON.stringify(COPY))).toEqual([]);
-  expect(TERMS).toContain("does not cover losses");
+  expect(TERMS).toContain("does not pay for losses");
   expect(TERMS.length).toBeGreaterThan(50);
   expect(termsHash()).toMatch(/^0x[0-9a-f]{64}$/);
 });

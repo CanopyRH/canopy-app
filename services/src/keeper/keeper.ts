@@ -1,5 +1,6 @@
 import { decodeFunctionResult, encodeFunctionData, getAbiItem, toEventSelector, type Address, type Hex, type PublicClient } from "viem";
 import { alarmBookAbi, erc20Abi, multicall3Abi, positionManagerAbi, routerAbi, vaultAbi } from "../chain/abi";
+import { isOwnKey } from "../api/levels";
 import { isPreset, Kind } from "../api/presets";
 import { keeperShouldRun } from "../billing/prepaid";
 import type { Repo } from "../store/repo";
@@ -115,11 +116,11 @@ export interface KeeperDeps {
 
 /**
  * Whether an exit job gets a listed vault's treatment (the fast loop, the high gas cap, deallocations): the vault is
- * listed AND the alarm key is one of that vault's own presets. Arming is open to anyone, so a position on a listed vault
+ * listed AND the alarm key is one of that vault's own presets or its five published loss levels (isOwnKey). Arming is open to anyone, so a position on a listed vault
  * can carry keys registered on contracts of the owner's choosing; those jobs are the owner's own business, not the vault's.
  * With no listed set every vault is treated alike.
  */
-const isListedJob = (d: KeeperDeps, j: { target: Address; key: Hex }) => !d.listed?.size || (d.listed.has(j.target.toLowerCase()) && isPreset(j.target, j.key));
+const isListedJob = (d: KeeperDeps, j: { target: Address; key: Hex }) => !d.listed?.size || (d.listed.has(j.target.toLowerCase()) && isOwnKey(j.target, j.key));
 const exitGasCap = (d: KeeperDeps, j: ExitJob) => {
   const cap = isListedJob(d, j) ? MAX_TX_GAS : (d.unlistedExitGas ?? UNLISTED_EXIT_GAS);
   return j.swaps ? least(cap, SWAP_EXIT_GAS) : cap;
@@ -151,7 +152,7 @@ async function withBudget<T>(job: (signal: AbortSignal) => Promise<T>, ms: numbe
 
 export interface ExitJob {
   posId: Hex; key: Hex; owner: Address; target: Address; firedAt: number;
-  /** Whether `key` is one of `target`'s own presets, worked out when the job is queued. The queue orders listed jobs by it. */
+  /** Whether `key` is one of `target`'s own presets or loss levels, worked out when the job is queued. The queue orders listed jobs by it. */
   preset?: boolean;
   /** Whether the position has owner swap legs. Set from the database when the job runs, never stored: such an exit runs alone. */
   swaps?: boolean;
@@ -483,7 +484,8 @@ export async function checkpointKeys(d: KeeperDeps, keys: Hex[], max = MAX_CHECK
     const targets = await d.repo.detectorTargets(keys);
     const own = (k: Hex) => {
       const t = targets.get(k.toLowerCase());
-      return t !== undefined && d.listed!.has(t) && isPreset(t as Address, k);
+      // A listed vault's presets and its five alarm levels. Keys come from liveKeys, so they are already paid-only when the keeper is.
+      return t !== undefined && d.listed!.has(t) && isOwnKey(t as Address, k);
     };
     first = keys.filter(own);
     rest = keys.filter((k) => !own(k)).sort((a, b) => (CHECKPOINTED.get(a.toLowerCase()) ?? 0) - (CHECKPOINTED.get(b.toLowerCase()) ?? 0)).slice(0, max);
@@ -539,7 +541,7 @@ export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise
   let queued = 0;
   for (const p of await d.repo.armedWith(key)) {
     if (d.paidOnly && !keeperShouldRun(await d.repo.paidUntil(p.owner), d.now())) continue;
-    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt, tokenId: String(p.token_id), preset: isPreset(p.target as Address, key) };
+    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt, tokenId: String(p.token_id), preset: isOwnKey(p.target as Address, key) };
     await d.repo.enqueue("exit", `${key}:${firedAt}:${p.pos_id}`, job, d.now());
     queued++;
   }
