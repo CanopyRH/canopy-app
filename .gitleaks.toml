@@ -22,3 +22,9 @@ paths = ['''^services/test/push\.test\.ts$''', '''^web/test/alerts\.test\.ts$'''
 description = "A browser storage key name, not a secret."
 regexTarget = "line"
 regexes = ['''STORAGE_KEY = "canopy''']
+
+[[allowlists]]
+description = "Alarm keys are public on-chain identifiers: a Foundry test pins the five Vault loss level keys by name."
+paths = ['''^contracts/test/AlarmLevels\.t\.sol$''']
+regexTarget = "line"
+regexes = ['''bytes32 internal constant KEY_\d+ = 0x[0-9a-fA-F]{64};''']
