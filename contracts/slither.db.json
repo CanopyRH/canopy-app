@@ -159,5 +159,159 @@
     "impact": "Medium",
     "description": "ExitRouter._checkDrainHasQuorum(bytes32) (src/ExitRouter.sol#596-607) ignores return value by (ka,None,None,None,None,None) = IAlarmBookDetector(address(ALARMS)).detector(pa) (src/ExitRouter.sol#600)\n",
     "reason": "Accepted by design: arm needs only the kind of a key (and of a BOTH key, its two part keys) from the immutable AlarmBook's stored detectors, to refuse a DRAIN without a QUORUM partner and nested BOTH keys; the target, threshold and window play no part in arming."
+  },
+  {
+    "id": "f03ed290964acbb97283731157c12040ec58589641c561893bc971b1888c8ab8",
+    "check": "arbitrary-send-erc20",
+    "impact": "High",
+    "description": "BorrowGuard._fundAndRepay(uint256,uint256,uint256) (src/guards/BorrowGuard.sol#136-157) uses arbitrary from in transferFrom: SafeTransferLib.safeTransferFrom(token,OWNER,address(this),amount) (src/guards/BorrowGuard.sol#142)\n",
+    "reason": "Intentional capped pull from immutable OWNER only, to this guard, after owner arming and allowance. Keeper needs a selected live alarm. Budget is finite and all collateral destinations are OWNER. Tests cover wrong caller/alarm, missing allowance, budget exhaustion and owner-only payouts. This candidate remains undeployed pending external audit."
+  },
+  {
+    "id": "cd2a6fb1f8391c69e1db1c2c7aa629a909439f1eada0d5449bce401ecca1d67a",
+    "check": "erc20-interface",
+    "impact": "Medium",
+    "description": "INonfungiblePositionManager (src/interfaces/IUniswapV3.sol#6-52) has incorrect ERC20 function interface:INonfungiblePositionManager.transferFrom(address,address,uint256) (src/interfaces/IUniswapV3.sol#47)\n",
+    "reason": "False positive: this is an ERC-721 PositionManager transferFrom, which intentionally returns no boolean. It is not an ERC-20 interface."
+  },
+  {
+    "id": "e59ad56191090503c7d029d438fa6171913eeebf5546371fc3a0d94d1c6ab3b7",
+    "check": "erc20-interface",
+    "impact": "Medium",
+    "description": "IV4Positions (src/adapters/UniswapV4Adapter.sol#7-19) has incorrect ERC20 function interface:IV4Positions.transferFrom(address,address,uint256) (src/adapters/UniswapV4Adapter.sol#18)\n",
+    "reason": "False positive: this is an ERC-721 PositionManager transferFrom, which intentionally returns no boolean. It is not an ERC-20 interface."
+  },
+  {
+    "id": "08361cfab7d2632c5f41753777e49f70d9b4a16e2e6eacb834b47d77f8097717",
+    "check": "incorrect-equality",
+    "impact": "Medium",
+    "description": "VaultLiquidityReader.value() (src/readers/RiskReaders.sol#74-79) uses a dangerous strict equality:\n\t- shares == 0 (src/readers/RiskReaders.sol#76)\n",
+    "reason": "Intentional zero-share boundary: an empty position has full coverage and must not divide by zero. A nonzero balance follows bounded mulDiv. Reader is view-only; the empty-owner case is tested."
+  },
+  {
+    "id": "1bbf8bc0771f6b05d02ab0ad08166a05d9ad905a8ee7a4e9a4bfbc488b65ed8a",
+    "check": "incorrect-equality",
+    "impact": "Medium",
+    "description": "RiskReader.latestRoundData() (src/readers/RiskReaders.sol#18-23) uses a dangerous strict equality:\n\t- v == 0 || v > uint256(type()(int256).max) (src/readers/RiskReaders.sol#20)\n",
+    "reason": "Intentional validation: AlarmBook PRICE_BELOW requires a positive answer. Rejecting zero prevents an invalid derived observation from being mislabeled clear. This performs no state changes or transfer."
+  },
+  {
+    "id": "14aefa0bd2312c44e68f907f39d94b1c5f657fdf73182a46e27563228c5a1e11",
+    "check": "reentrancy-no-eth",
+    "impact": "Medium",
+    "description": "Reentrancy in BorrowGuard.repay(uint256,bytes32) (src/guards/BorrowGuard.sol#89-126):\n\tExternal calls:\n\t- MORPHO.accrueInterest(_params) (src/guards/BorrowGuard.sol#104)\n\t- (paid,shares) = _fundAndRepay(amount,debt,p.borrowShares) (src/guards/BorrowGuard.sol#113)\n\t\t- SafeTransferLib.safeTransferFrom(token,OWNER,address(this),amount) (src/guards/BorrowGuard.sol#142)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x23b872dd,from,to,amount)) (src/lib/SafeTransferLib.sol#50)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- ! SafeTransferLib.tryApprove(token,address(MORPHO),0) || ! SafeTransferLib.tryApprove(token,address(MORPHO),amount) (src/guards/BorrowGuard.sol#145-146)\n\t\t- ! SafeTransferLib.tryApprove(token,address(MORPHO),0) (src/guards/BorrowGuard.sol#156)\n\t\t- (paid,shares) = MORPHO.repay(_params,0,borrowShares,OWNER,) (src/guards/BorrowGuard.sol#148-149)\n\t\t- (paid,shares) = MORPHO.repay(_params,amount,0,OWNER,) (src/guards/BorrowGuard.sol#148-149)\n\t- MORPHO.withdrawCollateral(_params,withdrawAmount,OWNER,OWNER) (src/guards/BorrowGuard.sol#118-122)\n\tState variables written after the call(s):\n\t- active = false (src/guards/BorrowGuard.sol#124)\n\tBorrowGuard.active (src/guards/BorrowGuard.sol#22) can be used in cross function reentrancies:\n\t- BorrowGuard.active (src/guards/BorrowGuard.sol#22)\n",
+    "reason": "Accepted with guard: repay, arm and disarm are all nonReentrant. Callback reads may see intermediate values but cannot spend, rearm or disarm. The dependency reentry regression verifies the callback is blocked and the budget is spent once. External audit is still required before activation."
+  },
+  {
+    "id": "a483beed29e14f7ddb13a95ab49ec743ebedbfa49b618a5eccbb71212cef2d08",
+    "check": "reentrancy-no-eth",
+    "impact": "Medium",
+    "description": "Reentrancy in BorrowGuard.repay(uint256,bytes32) (src/guards/BorrowGuard.sol#89-126):\n\tExternal calls:\n\t- MORPHO.accrueInterest(_params) (src/guards/BorrowGuard.sol#104)\n\tState variables written after the call(s):\n\t- remainingBudget -= amount (src/guards/BorrowGuard.sol#111)\n\tBorrowGuard.remainingBudget (src/guards/BorrowGuard.sol#19) can be used in cross function reentrancies:\n\t- BorrowGuard.remainingBudget (src/guards/BorrowGuard.sol#19)\n",
+    "reason": "Accepted with guard: repay, arm and disarm are all nonReentrant. Callback reads may see intermediate values but cannot spend, rearm or disarm. The dependency reentry regression verifies the callback is blocked and the budget is spent once. External audit is still required before activation."
+  },
+  {
+    "id": "1c38df579aea69b8c5119b0b50a359f9f0d362ab7cbd569c1c6435468fff6167",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "UniswapV4Adapter._pool(address,uint256) (src/adapters/UniswapV4Adapter.sol#41-46) ignores return value by (p,None) = POSITIONS.getPoolAndPositionInfo(tokenId) (src/adapters/UniswapV4Adapter.sol#43)\n",
+    "reason": "The packed tick-range PositionInfo is not used: this adapter removes the entire reported liquidity. The PoolKey is checked for ordered currencies, positive tick spacing and no hook. Zero minima and atomic settlement limitations are explicit."
+  },
+  {
+    "id": "24be28cfc1164447f2e4a3a5a641ebe0c6439a3b771f2fbca993fe3134862b12",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "UniswapV3Adapter.unwind(address,uint256) (src/adapters/UniswapV3Adapter.sol#47-68) ignores return value by POSITIONS.decreaseLiquidity(INonfungiblePositionManager.DecreaseLiquidityParams({tokenId:tokenId,liquidity:liquidity,amount0Min:0,amount1Min:0,deadline:block.timestamp})) (src/adapters/UniswapV3Adapter.sol#51-59)\n",
+    "reason": "Reported manager amounts are not trusted for payout accounting. ExitRouter measures actual token balance deltas; the adapter collects to ROUTER and returns the NFT. Collection failures retain owed tokens in the NFT. Unit tests cover both tokens and partial collection; the RH fork exercises native manager calls."
+  },
+  {
+    "id": "3fc9f51a029c4e6cc864775435d641f4fe3d9bd276edb5a8a262050fd47c33aa",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "CanopyArmPolicy.tighten(address,ExitRouter.ArmParams) (src/agents/CanopyArmPolicy.sol#66-91) ignores return value by (owner,None,None,None,harbour,slip,None,None,None,None,None) = ROUTER.positions(id) (src/agents/CanopyArmPolicy.sol#70)\n",
+    "reason": "Only owner, harbour and slippage are needed from this tuple. Position identity is independently derived from account/adapter/target/tokenId, isArmed checks activity and epoch, keysOf and swapsOf are compared separately at execution. Other tuple fields do not authorize an action."
+  },
+  {
+    "id": "430713b1893acff6983bd1df338bd7c21a2c558c438c5beb3b52126a45f6d8bd",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "FeedHealthReader.value() (src/readers/RiskReaders.sol#45-57) ignores return value by (round,answer,None,updated,answered) = FEED.latestRoundData() (src/readers/RiskReaders.sol#46)\n",
+    "reason": "startedAt is deliberately unused. Freshness is based on updatedAt; answeredInRound, round ID, positivity, future timestamps and optional advisory pause are checked. A derived current health observation does not reuse the feed timestamp as its own freshness."
+  },
+  {
+    "id": "99140a71712b67a944dcdc7ce3f571258f55e2a3fa410971c6b5849e0a1f07d6",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "UniswapV3Adapter._collect(uint256,uint128,uint128) (src/adapters/UniswapV3Adapter.sol#72-86) ignores return value by POSITIONS.collect(INonfungiblePositionManager.CollectParams({tokenId:tokenId,recipient:ROUTER,amount0Max:max0,amount1Max:max1})) (src/adapters/UniswapV3Adapter.sol#74-85)\n",
+    "reason": "Reported manager amounts are not trusted for payout accounting. ExitRouter measures actual token balance deltas; the adapter collects to ROUTER and returns the NFT. Collection failures retain owed tokens in the NFT. Unit tests cover both tokens and partial collection; the RH fork exercises native manager calls."
+  },
+  {
+    "id": "c656c94a9a9f3b639f48ab1c5514d457d35f11db1e4873f9b1a4421e7174e57e",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "CanopyArmPolicy.exit(address,bytes32) (src/agents/CanopyArmPolicy.sol#93-98) ignores return value by (owner,None,None,None,None,None,None,None,None,None,None) = ROUTER.positions(id) (src/agents/CanopyArmPolicy.sol#95)\n",
+    "reason": "Exit needs only the stored owner: the real router handles position details and execution, including a previously disarmed owner exit. Account equality is required before the single router call."
+  },
+  {
+    "id": "f86dbccf8115fbbf8830ffd82b1b6dad71613f38c362e96978e29ba64b1ebff0",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "CanopyArmPolicy._execute(address,bytes) (src/agents/CanopyArmPolicy.sol#100-102) ignores return value by ICanopyAccount(account).executeFromExecutor(bytes32(0),abi.encodePacked(address(ROUTER),uint256(0),data)) (src/agents/CanopyArmPolicy.sol#101)\n",
+    "reason": "ERC-7579 single/default mode requires the account to revert on failed execution. Returned per-call bytes contain no permission or payout information used by this module. A real-account compatibility review is required; fixture tests run against the actual ExitRouter and bubble reverts."
+  },
+  {
+    "id": "68ec330c73be5474e94663fa452946981e66fcd98d5ce9ef8767966f34e4f7b2",
+    "check": "incorrect-equality",
+    "impact": "Medium",
+    "description": "MorphoV2ForceExitAdapter.unwind(address,uint256) (src/adapters/MorphoV2ForceExitAdapter.sol#60-90) uses a dangerous strict equality:\n\t- amount == 0 (src/adapters/MorphoV2ForceExitAdapter.sol#76)\n",
+    "reason": "Zero is a fail-closed boundary on the computed deallocation amount, not an equality target that an external transfer can break. Zero cannot produce a usable redemption."
+  },
+  {
+    "id": "b4c94a420b91a202ecd2a35b8a91101fcf1bae56096ac8ce0b10a09e0a9866fe",
+    "check": "incorrect-equality",
+    "impact": "Medium",
+    "description": "MorphoV2ForceExitAdapter.unwind(address,uint256) (src/adapters/MorphoV2ForceExitAdapter.sol#60-90) uses a dangerous strict equality:\n\t- paid < FullMath.mulDiv(expected,10000 - MAX_PENALTY_BPS,10000) || paid == 0 (src/adapters/MorphoV2ForceExitAdapter.sol#87)\n",
+    "reason": "The zero-output check deliberately rejects a redemption that moves no assets, including when the rounded minimum is zero. Output is measured from actual router balance delta."
+  },
+  {
+    "id": "678938cd59d6534ec9f7d205f3c7b52acb9c865f7bae07a260432b6e9df8514d",
+    "check": "reentrancy-no-eth",
+    "impact": "Medium",
+    "description": "Reentrancy in OperatorBond.deposit(uint256) (src/watchnet/OperatorBond.sol#93-106):\n\tExternal calls:\n\t- TOKEN.safeTransferFrom(msg.sender,address(this),amount) (src/watchnet/OperatorBond.sol#101)\n\tState variables written after the call(s):\n\t- s.amount += amount (src/watchnet/OperatorBond.sol#104)\n\tOperatorBond.stakes (src/watchnet/OperatorBond.sol#43) can be used in cross function reentrancies:\n\t- OperatorBond.eligible(address) (src/watchnet/OperatorBond.sol#108-111)\n\t- OperatorBond.stakes (src/watchnet/OperatorBond.sol#43)\n",
+    "reason": "Every stake-mutating entry point is nonReentrant. The amount is credited only after exact token receipt. A callback reading eligible or stakes observes the prior funded amount, never an unbacked increase. Reviewed non-rebasing token required."
+  },
+  {
+    "id": "bff02ca97d87f280c522cd72faaecc9aa95e6bcf6cfd2ac425a398b7b36ca6c0",
+    "check": "reentrancy-no-eth",
+    "impact": "Medium",
+    "description": "Reentrancy in BorrowGuard.repay(uint256,bytes32) (src/guards/BorrowGuard.sol#89-126):\n\tExternal calls:\n\t- MORPHO.accrueInterest(_params) (src/guards/BorrowGuard.sol#104)\n\t- (paid,shares) = _fundAndRepay(amount,debt,p.borrowShares) (src/guards/BorrowGuard.sol#113)\n\t\t- SafeTransferLib.safeTransferFrom(token,OWNER,address(this),amount) (src/guards/BorrowGuard.sol#142)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x095ea7b3,spender,amount)) (src/lib/SafeTransferLib.sol#59)\n\t\t- (ok,ret) = token.call(abi.encodeWithSelector(0x23b872dd,from,to,amount)) (src/lib/SafeTransferLib.sol#50)\n\t\t- ! SafeTransferLib.tryApprove(token,address(MORPHO),0) || ! SafeTransferLib.tryApprove(token,address(MORPHO),amount) (src/guards/BorrowGuard.sol#145-146)\n\t\t- ! SafeTransferLib.tryApprove(token,address(MORPHO),0) (src/guards/BorrowGuard.sol#156)\n\t\t- (paid,shares) = MORPHO.repay(_params,0,borrowShares,OWNER,) (src/guards/BorrowGuard.sol#148-149)\n\t\t- (paid,shares) = MORPHO.repay(_params,amount,0,OWNER,) (src/guards/BorrowGuard.sol#148-149)\n\t- MORPHO.withdrawCollateral(_params,withdrawAmount,OWNER,OWNER) (src/guards/BorrowGuard.sol#118-122)\n\tState variables written after the call(s):\n\t- active = false (src/guards/BorrowGuard.sol#124)\n\tBorrowGuard.active (src/guards/BorrowGuard.sol#22) can be used in cross function reentrancies:\n\t- BorrowGuard.active (src/guards/BorrowGuard.sol#22)\n",
+    "reason": "BorrowGuard repayment and policy mutations are nonReentrant; its budget is reduced inside repayment before optional collateral withdrawal. The public active getter is read-only and cannot cause another repayment. Existing boundary tests cover owner-only collateral and capped debt repayment; external audit remains pending."
+  },
+  {
+    "id": "4f66c04bfc52774d635247cc7729a038a094bf5b64f069dfcafee50721c8243a",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "V3TwapDeviationReader.value() (src/readers/PriceDeviationReaders.sol#95-114) ignores return value by (ticks,None) = POOL.observe(secondsAgo) (src/readers/PriceDeviationReaders.sol#98)\n",
+    "reason": "TWAP uses tick cumulatives only. Seconds-per-liquidity is not needed for geometric mean tick calculation and is not claimed as a liquidity quality test. Both tick observations and their shape are checked; DEX signal requires quorum."
+  },
+  {
+    "id": "6b52652c17b1f3bc16b92c9df9924f5967593598794e67d92d827102290d4456",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "PriceDeviationReader._price(IAggregatorV3,uint32) (src/readers/PriceDeviationReaders.sol#32-40) ignores return value by (round,answer,None,updated,answered) = feed.latestRoundData() (src/readers/PriceDeviationReaders.sol#33)\n",
+    "reason": "startedAt is not the freshness timestamp. The reader checks updatedAt, positive answer, answeredInRound, future time, heartbeat and decimals. The unused round-start timestamp supplies no additional feed freshness guarantee."
+  },
+  {
+    "id": "ac28ee4872263dcc1f517fea65cc1ea46c7830c461430696f12cff2a64c5fd2c",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "MorphoV2ForceExitAdapter.unwind(address,uint256) (src/adapters/MorphoV2ForceExitAdapter.sol#60-90) ignores return value by IERC4626(VAULT).redeem(shares - burned,ROUTER,address(this)) (src/adapters/MorphoV2ForceExitAdapter.sol#84)\n",
+    "reason": "The redeem return is not trusted: actual router token balance increase must be positive and meet the penalty-adjusted minimum. This checks the payout instead of a vault-reported amount."
+  },
+  {
+    "id": "aff8a9e6e469b73252933f40510e82b2b3a8a4b8a35404e172a4b6ec730ea939",
+    "check": "unused-return",
+    "impact": "Medium",
+    "description": "MorphoV2ForceExitAdapter.unwind(address,uint256) (src/adapters/MorphoV2ForceExitAdapter.sol#60-90) ignores return value by IERC4626(VAULT).redeem(shares,ROUTER,address(this)) (src/adapters/MorphoV2ForceExitAdapter.sol#66-68)\n",
+    "reason": "The normal redeem return is deliberately ignored. The final actual router token balance increase is checked against the configured payout floor, and zero payout reverts."
   }
 ]

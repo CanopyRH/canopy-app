@@ -1,5 +1,5 @@
 import { decodeFunctionResult, encodeFunctionData, getAbiItem, toEventSelector, type Address, type Hex, type PublicClient } from "viem";
-import { alarmBookAbi, erc20Abi, multicall3Abi, routerAbi, vaultAbi } from "../chain/abi";
+import { alarmBookAbi, erc20Abi, multicall3Abi, positionManagerAbi, routerAbi, vaultAbi } from "../chain/abi";
 import { isPreset, Kind } from "../api/presets";
 import { keeperShouldRun } from "../billing/prepaid";
 import type { Repo } from "../store/repo";
@@ -155,7 +155,11 @@ export interface ExitJob {
   preset?: boolean;
   /** Whether the position has owner swap legs. Set from the database when the job runs, never stored: such an exit runs alone. */
   swaps?: boolean;
+  /** Decimal NFT id; absent or zero for ERC-20 positions. */
+  tokenId?: string;
 }
+
+export const isNftJob = (j: ExitJob) => j.tokenId !== undefined && BigInt(j.tokenId) !== 0n;
 
 type DueJob = { id: string; payload: unknown; attempts: number };
 type SimResult = { status: string; data: Hex; gasUsed: bigint; logs?: readonly unknown[] };
@@ -535,7 +539,7 @@ export async function onFired(d: KeeperDeps, key: Hex, firedAt: number): Promise
   let queued = 0;
   for (const p of await d.repo.armedWith(key)) {
     if (d.paidOnly && !keeperShouldRun(await d.repo.paidUntil(p.owner), d.now())) continue;
-    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt, preset: isPreset(p.target as Address, key) };
+    const job: ExitJob = { posId: p.pos_id as Hex, key, owner: p.owner as Address, target: p.target as Address, firedAt, tokenId: String(p.token_id), preset: isPreset(p.target as Address, key) };
     await d.repo.enqueue("exit", `${key}:${firedAt}:${p.pos_id}`, job, d.now());
     queued++;
   }
@@ -571,6 +575,7 @@ export type ExitOutcome = "done" | "retry" | "refused" | "stalled";
  */
 export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): Promise<ExitOutcome> {
   if (d.now() > j.firedAt + ALARM_TTL) return "done";
+  if (isNftJob(j)) return runNftExit(d, j, signal);
   const shares = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "balanceOf", args: [j.owner] });
   const allowed = await d.client.readContract({ address: j.target, abi: erc20Abi, functionName: "allowance", args: [j.owner, d.router] });
   const total = shares < allowed ? shares : allowed;
@@ -612,6 +617,64 @@ export async function runExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): 
   const after = left < room ? left : room;
   if (after === 0n) return "done";
   return after < total ? "retry" : "stalled";
+}
+
+/**
+ * What an LP NFT still holds that the router can move, or null when the job is finished: the owner sold, moved or
+ * burned it, revoked the router, or nothing is left in it. An exit spends a single-token approval, so an exit that
+ * paid only one token (the other refused to move) also ends here, with the rest still owed inside the owner's NFT.
+ */
+export async function nftLeft(d: KeeperDeps, j: ExitJob): Promise<{ token0: Address; token1: Address } | null> {
+  const id = BigInt(j.tokenId!);
+  const read = <T>(functionName: string, args: readonly unknown[]) =>
+    d.client.readContract({ address: j.target, abi: positionManagerAbi, functionName, args, gas: 200_000n } as never) as Promise<T>;
+  // Read failures retry; a timeout is not evidence that an NFT burned.
+  const holder = await read<Address>("ownerOf", [id]);
+  if (holder.toLowerCase() !== j.owner.toLowerCase()) return null;
+  const [approved, all] = await Promise.all([read<Address>("getApproved", [id]), read<boolean>("isApprovedForAll", [holder, d.router])]);
+  if (!all && approved.toLowerCase() !== d.router.toLowerCase()) return null;
+  const p = await read<readonly [bigint, Address, Address, Address, number, number, number, bigint, bigint, bigint, bigint, bigint]>("positions", [id]);
+  if (p[7] === 0n && p[10] === 0n && p[11] === 0n) return null;
+  return { token0: p[2], token1: p[3] };
+}
+
+/**
+ * Exits one LP NFT. It is all or nothing, so there is no sizing. The gate watches both pool tokens and the
+ * stablecoin, which a stablecoin harbour swaps into: the owner must gain, and neither the router nor this keeper may.
+ */
+export async function runNftExit(d: KeeperDeps, j: ExitJob, signal?: AbortSignal): Promise<ExitOutcome> {
+  const left = await nftLeft(d, j);
+  if (!left) return "done";
+  const stable = (await d.client.readContract({ address: d.router, abi: routerAbi, functionName: "STABLE" })) as Address;
+  const tokens = [...new Set([left.token0, left.token1, stable].map((t) => t.toLowerCase() as Address))];
+  const watch = [j.owner, d.router, d.account];
+  const reads = tokens.flatMap((t) => watch.map((w) => ({ ...balanceCall(t, w), gas: 200_000n })));
+  const exitCall = { to: d.router, data: encodeFunctionData({ abi: routerAbi, functionName: "exit", args: [j.posId, j.key, 0n] }) };
+  const fees = await d.fees?.();
+  const { results } = await d.client.simulateCalls({ account: d.account, calls: [...reads, { ...exitCall, gas: exitGasCap(d, j), ...fees }, ...reads] as never });
+  const sim = results as readonly SimResult[];
+  if (sim.length !== reads.length * 2 + 1 || sim.some((r) => r.status !== "success")) {
+    await d.repo.bump("gate_reject");
+    return "retry";
+  }
+  const bal = (i: number) => {
+    const r = sim[i]!;
+    return r.status === "success" ? decodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", data: r.data }) : 0n;
+  };
+  const after = reads.length + 1;
+  // Balance of watcher `w` for every token, from the reads starting at `base`.
+  const of = (base: number, w: number) => tokens.map((_, t) => bal(base + t * watch.length + w));
+  const keeperMoved = of(0, 2).some((b, t) => b !== of(after, 2)[t]);
+  const ok = sim[reads.length]?.status === "success" && !keeperMoved && judge(of(0, 0), of(after, 0), of(0, 1), of(after, 1), tokens).ok;
+  if (!ok) {
+    await d.repo.bump("gate_reject");
+    return "retry";
+  }
+  const used = sim[reads.length]!.gasUsed;
+  if (used === undefined || used > exitGasCap(d, j)) return "refused";
+  signal?.throwIfAborted();
+  await d.send({ ...exitCall, gas: least(limitFromSim(used) + EXIT_SWAP_HEADROOM, MAX_TX_GAS) });
+  return (await nftLeft(d, j)) ? "retry" : "done";
 }
 
 /**
@@ -659,7 +722,7 @@ async function exitable(d: KeeperDeps, jobs: ExitJob[]): Promise<bigint[]> {
 export async function runBundle(d: KeeperDeps, due: DueJob[], signal?: AbortSignal): Promise<DueJob[]> {
   const live = d.now();
   // An exit with owner swap legs runs token code the owner chose, so it never shares a transaction; the caller sends it alone.
-  const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL && !(x.payload as ExitJob).swaps);
+  const open = due.filter((x) => live <= (x.payload as ExitJob).firedAt + ALARM_TTL && !(x.payload as ExitJob).swaps && !isNftJob(x.payload as ExitJob));
   const totals = await exitable(d, open.map((x) => x.payload as ExitJob));
   const jobs = open.flatMap((job, i) => (totals[i]! > 0n ? [{ job, j: job.payload as ExitJob, amount: totals[i]! }] : []));
   const skipped = due.filter((x) => !jobs.some((y) => y.job.id === x.id));
@@ -751,7 +814,7 @@ export async function drainExits(d: KeeperDeps, scope: "all" | "listed" | "unlis
   for (const job of due) {
     const j = job.payload as ExitJob;
     // An exit that runs the owner's swap legs never shares a transaction.
-    if (j.swaps) {
+    if (j.swaps || isNftJob(j)) {
       single.push(job);
       continue;
     }

@@ -46,6 +46,10 @@ jobs:
           TEST_DATABASE_URL: postgres://canopy@127.0.0.1:5432/postgres
       - run: bun test && bunx tsc --noEmit
         working-directory: web
+      - run: bun install --frozen-lockfile && bun test && bunx tsc --noEmit && bun run build
+        working-directory: sdk
+      - run: bun install --frozen-lockfile && bun test && bunx tsc --noEmit
+        working-directory: mcp
       - run: bun tools/banned-words.ts
       - name: The service image starts
         run: |
@@ -138,7 +142,7 @@ jobs:
           echo "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b  osv-scanner" | sha256sum -c -
           chmod +x osv-scanner
           code=0
-          ./osv-scanner scan source --config=osv-scanner.toml --lockfile=services/bun.lock --lockfile=web/bun.lock --format json --output-file osv-results.json || code=$?
+          ./osv-scanner scan source --config=osv-scanner.toml --lockfile=services/bun.lock --lockfile=web/bun.lock --lockfile=sdk/bun.lock --lockfile=mcp/bun.lock --format json --output-file osv-results.json || code=$?
           rm osv-scanner
           # Exit 1 means advisories were found, which the next steps judge. Anything else is the scan itself failing.
           test "$code" -le 1

@@ -8,8 +8,8 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeFunctionData, type Address, type Hex } from "viem";
-import { alarmBookAbi } from "../src/chain/abi";
+import { encodeFunctionData, keccak256, stringToHex, parseAbi, type Address, type Hex } from "viem";
+import { alarmBookAbi, routerAbi } from "../src/chain/abi";
 import { registrationOrder } from "../src/api/presets";
 
 export interface Settings {
@@ -85,6 +85,36 @@ const safeBatch = (chainId: number, name: string, description: string, transacti
 export function planFiles(d: Deployment, s: Settings): [string, ReturnType<typeof safeBatch>][] {
   return [["1-register-alarms.safe.json", safeBatch(s.chainId, "Canopy: register alarm presets", `${s.vaults.length} vaults`, presetBatch(d, s.vaults, s))]];
 }
+
+/**
+ * Safe batch files for one admin change after launch, such as enabling a new adapter. With no delay, schedule and execute go in one batch.
+ */
+const timelockAbi = parseAbi([
+  "function schedule(address target,uint256 value,bytes data,bytes32 salt) returns (bytes32)",
+  "function execute(address target,uint256 value,bytes data,bytes32 salt) payable returns (bytes)",
+]);
+const salt = (label: string) => keccak256(stringToHex(`Canopy: ${label}`));
+
+export function adminChangeFiles(timelock: Address, chainId: number, delay: number, slug: string, calls: { target: Address; data: Hex; label: string }[]): [string, ReturnType<typeof safeBatch>][] {
+  const wrap = (fn: "schedule" | "execute"): Call[] =>
+    calls.map((c) => ({
+      to: timelock,
+      value: "0",
+      data: encodeFunctionData({ abi: timelockAbi, functionName: fn, args: [c.target, 0n, c.data, salt(c.label)] }),
+    }));
+  const labels = calls.map((c) => c.label).join("; ");
+  if (delay === 0) return [[`${slug}.safe.json`, safeBatch(chainId, `Canopy: ${labels}`, labels, [...wrap("schedule"), ...wrap("execute")])]];
+  return [
+    [`${slug}-1-schedule.safe.json`, safeBatch(chainId, `Canopy: schedule ${labels}`, labels, wrap("schedule"))],
+    [`${slug}-2-execute-after-delay.safe.json`, safeBatch(chainId, `Canopy: execute ${labels}`, `Only valid ${delay} seconds after the schedule batch.`, wrap("execute"))],
+  ];
+}
+
+export const enableAdapterCall = (router: Address, adapter: Address, name: string) => ({
+  target: router,
+  label: `enable ${name}`,
+  data: encodeFunctionData({ abi: routerAbi, functionName: "setAdapter", args: [adapter, true] }),
+});
 
 export function writePlan(d: Deployment, s: Settings, out: string) {
   mkdirSync(out, { recursive: true });

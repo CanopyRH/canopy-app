@@ -8,6 +8,7 @@ export const BASE = {
   swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481",
   multicall3: "0xcA11bde05977b3631167028862bE2a173976CA11",
   morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+  uniswapV3Positions: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1", // NonfungiblePositionManager
 } as const satisfies Record<string, Address | number>;
 
 export const ROBINHOOD = {
@@ -18,6 +19,8 @@ export const ROBINHOOD = {
   swapRouter: "0xCaf681a66D020601342297493863E78C959E5cb2",
   morpho: "0x9D53d5E3bd5E8d4Cbfa6DB1ca238AEA02E651010",
   steakhouseVault: "0xBeEff033F34C046626B8D0A041844C5d1A5409dd",
+  // Uniswap v3 NonfungiblePositionManager. Base's bytecode apart from its immutables, and its pools match the canonical init code hash.
+  uniswapV3Positions: "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
   multicall3: "0xcA11bde05977b3631167028862bE2a173976CA11",
 } as const satisfies Record<string, Address | number>;
 

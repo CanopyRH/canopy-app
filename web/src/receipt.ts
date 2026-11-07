@@ -1,6 +1,7 @@
 import { createPublicClient, formatUnits, http, isHex, parseAbi, parseEventLogs, type Address, type Hex, type Log, type PublicClient } from "viem";
 import { CHAINS, CONFIG, type Chain } from "./config";
 import { Kind, presetsFor } from "../../services/src/api/presets";
+import { routerAbi } from "../../services/src/chain/abi.generated";
 
 /** Everything on an exit receipt comes from the chain. Nothing here calls Canopy's API, so a receipt works while Canopy is down. */
 
@@ -10,7 +11,6 @@ export const routerEvents = parseAbi([
   "event Owed(address indexed owner, address indexed token, uint256 amount)",
 ]);
 const readAbi = parseAbi([
-  "function positions(bytes32) view returns (address owner, uint64 armedAt, uint64 epoch, bool active, uint8 harbour, uint16 maxSlipBps, uint64 swapConfig, address adapter, address target, address asset, bool isNft, uint256 tokenId)",
   "function detector(bytes32) view returns ((uint8 kind, address target, uint256 threshold, uint32 window, bytes32 a, bytes32 b))",
   "function state(bytes32) view returns (bool exists, uint64 firedAt, uint64 snapAt, uint256 baseline, uint256 snap)",
   "event Fired(bytes32 indexed key, uint8 kind, address indexed target, address by, bytes32 evidence)",
@@ -161,8 +161,8 @@ export async function loadReceipt(hash: Hex, chain: Chain = CONFIG, client: Publ
   try {
     const block = await client.getBlock({ blockNumber: rc.blockNumber });
     const blockTime = Number(block.timestamp);
-    const pos = await client.readContract({ address: router, abi: readAbi, functionName: "positions", args: [exit.posId] }).catch(() => null);
-    const vault = pos ? (pos[8] as Address) : null;
+    const pos = await client.readContract({ address: router, abi: routerAbi, functionName: "positions", args: [exit.posId], blockNumber: rc.blockNumber }).catch(() => null);
+    const vault = pos ? pos[7] : null;
     const zero = /^0x0+$/.test(exit.alarmKey);
     let alarm: Receipt["alarm"] = null, firedAt: number | null = null;
     if (exit.viaAlarm && !zero) {
@@ -174,7 +174,7 @@ export async function loadReceipt(hash: Hex, chain: Chain = CONFIG, client: Publ
       if (st && Number(st[1]) > 0 && Number(st[1]) <= blockTime) firedAt = Number(st[1]);
       else {
         // The alarm fired again after this exit, so the stored time is newer. Find the fire that came before it.
-        const logs = await client.getLogs({ address: book, event: readAbi[3], args: { key: exit.alarmKey }, fromBlock: rc.blockNumber > 10_000_000n ? rc.blockNumber - 10_000_000n : 0n, toBlock: rc.blockNumber }).catch(() => []);
+        const logs = await client.getLogs({ address: book, event: readAbi[2], args: { key: exit.alarmKey }, fromBlock: rc.blockNumber > 10_000_000n ? rc.blockNumber - 10_000_000n : 0n, toBlock: rc.blockNumber }).catch(() => []);
         const last = logs[logs.length - 1];
         if (last) firedAt = Number((await client.getBlock({ blockNumber: last.blockNumber })).timestamp);
       }

@@ -39,6 +39,14 @@ export const vaultV2Abi = parseAbi([
   "function forceDeallocate(address adapter, bytes data, uint256 assets, address onBehalf) returns (uint256)",
 ]);
 
+/** Uniswap v3 NonfungiblePositionManager: what the keeper reads before it exits an LP position. */
+export const positionManagerAbi = parseAbi([
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function getApproved(uint256 tokenId) view returns (address)",
+  "function isApprovedForAll(address owner, address operator) view returns (bool)",
+  "function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
+]);
+
 export const multicall3Abi = parseAbi([
   "struct Call3 { address target; bool allowFailure; bytes callData; }",
   "struct Result { bool success; bytes returnData; }",

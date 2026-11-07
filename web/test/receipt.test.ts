@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import type { Log } from "viem";
-import { alarmName, decodeExits, formatAmount, formatDelay, parseFragment, receiptLink } from "../src/receipt";
+import { decodeFunctionResult, encodeFunctionResult, type Abi, type Log, type PublicClient } from "viem";
+import { alarmName, decodeExits, formatAmount, formatDelay, loadReceipt, parseFragment, receiptLink } from "../src/receipt";
 import { CONFIG, type Chain } from "../src/config";
+import { routerAbi } from "../../services/src/chain/abi.generated";
 
 // The router's own logs from a real exit on Robinhood Chain (4663): block 106382397, 2 seconds after the alarm fired.
 // Transaction 0x7aa786941a8fa88ee8937cdff9ce93a273025c1bd6dd7b80cc2d3758c9c8598f
@@ -16,6 +17,31 @@ const EXITED = real(79,
   "0x000000000000000000000000ca11bde05977b3631167028862be2a173976ca1179f6490339aabff151385ed17d342c8e34ca12919ca7bcfc606063fac6519d660000000000000000000000000000000000000000000000000000000000000001");
 // An ERC-20 Transfer from the same transaction. It is not the router's and must be ignored.
 const TRANSFER = real(77, ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "0x" + "00".repeat(32), "0x" + "00".repeat(32)], "0x" + "00".repeat(32), "0x5fc5360d0400a0fd4f2af552add042d716f1d168");
+
+test("loads v2's eleven-field position at the receipt block, without the retired swapConfig field", async () => {
+  const vault = CONFIG.vaults[0]!.address;
+  let readBlock: bigint | undefined;
+  const client = {
+    getTransactionReceipt: async () => ({ status: "success", logs: [PAID, EXITED], blockNumber: 107737900n }),
+    getBlock: async () => ({ timestamp: 1_000_000n }),
+    readContract: async (p: { abi: Abi; functionName: string; blockNumber?: bigint }) => {
+      if (p.functionName === "positions") {
+        readBlock = p.blockNumber;
+        const data = encodeFunctionResult({ abi: routerAbi, functionName: "positions", result: ["0xabababababababababababababababababababab", 1n, 0n, true, 0, 0, CONFIG.adapter!, vault, CONFIG.planToken, false, 0n] });
+        return decodeFunctionResult({ abi: p.abi, functionName: "positions", data });
+      }
+      if (p.functionName === "detector") return { kind: 5 };
+      if (p.functionName === "state") return [true, 999_998n];
+      if (p.functionName === "symbol") return "USDG";
+      if (p.functionName === "decimals") return 6;
+      throw new Error("Unexpected read");
+    },
+  } as unknown as PublicClient;
+  const receipt = await loadReceipt(EXITED.transactionHash!, CONFIG, client);
+  expect(receipt.vault?.toLowerCase()).toBe(vault.toLowerCase());
+  expect(receipt.vaultName).toBe(CONFIG.vaults[0]!.name);
+  expect(readBlock).toBe(107737900n);
+});
 
 test("decodes the real exit: alarm, position and what was paid", () => {
   const [one, ...rest] = decodeExits([TRANSFER, PAID, EXITED], ROUTER);

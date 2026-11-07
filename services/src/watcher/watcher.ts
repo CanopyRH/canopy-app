@@ -1,3 +1,4 @@
+import { diverseQuorum, type Profiles } from "../watchnet/diversity";
 import { createHash } from "node:crypto";
 import { encodeFunctionData, recoverTypedDataAddress, type Address, type Hex } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
@@ -112,12 +113,12 @@ export async function acceptAttestation(db: Db, watchers: Address[], alarmBook: 
 }
 
 /** fireByQuorum calldata once k approved signatures agree on the same evidence and deadline. */
-export async function quorumCall(db: Db, a: { key: Hex; evidence: Hex; deadline: bigint }, k: number, alarmBook: Address) {
+export async function quorumCall(db: Db, a: { key: Hex; evidence: Hex; deadline: bigint }, k: number, alarmBook: Address, profiles?: Profiles) {
   const rows = await db.query<{ signer: Address; sig: Hex }>(
     `SELECT signer, sig FROM attestations WHERE key=$1 AND evidence_hash=$2 AND deadline=$3`,
     [a.key, a.evidence, a.deadline.toString()],
   );
-  const q = assembleQuorum(rows, k);
+  const q = profiles ? diverseQuorum(rows, k, profiles) : assembleQuorum(rows, k);
   if (!q) return null;
   return {
     to: alarmBook,

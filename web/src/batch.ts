@@ -4,6 +4,7 @@ import { notArmable, refusedPresets, type AlarmIo } from "./alarms";
 import { COPY } from "./copy/text";
 import { BATCH_COPY } from "./copy/batch";
 import { approveTx, armTx, type Tx } from "./tx";
+import { type Payout } from "./stableExit";
 import { ensureChain, type Eip1193, type Network } from "./wallet";
 
 /**
@@ -42,6 +43,8 @@ export interface PlanDeps {
   book: Address;
   router: Address;
   adapter: Address;
+  /** Owner-reviewed payout, shared with the stepwise flow. Defaults to raw. */
+  payout?: Payout;
   /** This vault's presets and the detectors they need, dependencies first, worked out the same way the step-by-step flow does (the Paused alarm only where the vault answers paused()). */
   presets: Preset[];
   order: Detector[];
@@ -58,7 +61,7 @@ export interface PlanDeps {
  * that was never registered, so a key that needs registering cannot be checked before it is, and a register inside the same
  * batch would be sent before anyone could look. So a batch is only built when every needed key is already registered and the
  * contract calls every key and every part of a combined alarm armable. Then it is the approval (if needed) and the arm call,
- * with the same arm tuple as the step-by-step flow (the raw harbour, no swap legs). A key the contract refuses throws here,
+ * with the same arm tuple as the step-by-step flow (including the owner-reviewed payout, defaulting to raw). A key the contract refuses throws here,
  * before the wallet is asked, as it would in the step-by-step flow after registration.
  */
 export async function armPlan(d: PlanDeps, vault: Address, keys: Hex[]): Promise<Tx[] | null> {
@@ -69,7 +72,7 @@ export async function armPlan(d: PlanDeps, vault: Address, keys: Hex[]): Promise
   if ((await notArmable(d.armable, askedKeys(d.presets, keys))).length > 0) throw new Error(COPY.armRefused);
   const txs: Tx[] = [];
   if ((await d.allowance()) < maxUint256 / 2n) txs.push(approveTx(vault, d.router));
-  txs.push(armTx(d.router, d.adapter, vault, keys));
+  txs.push(armTx(d.router, d.adapter, vault, keys, d.payout));
   return txs;
 }
 

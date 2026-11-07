@@ -1,0 +1,4 @@
+[install]
+exact = true
+saveTextLockfile = true
+minimumReleaseAge = 1209600

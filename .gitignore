@@ -21,4 +21,11 @@ web/public/wc.css
 .DS_Store
 contracts/broadcast/**/dry-run/
 *.recovery.lock
+sdk/dist/
 web/src/site/pages.gen.js
+Video/**/work/
+Video/**/*.mp4
+Video/**/*.wav
+Video/**/*.png
+Video/**/*.jpg
+Video/**/*.zip

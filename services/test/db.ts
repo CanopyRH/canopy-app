@@ -17,6 +17,10 @@ export async function freshDb(): Promise<Db> {
   const db: Db = {
     query: async (s, p = []) => (await pg.query(s, p as never[])).rows as never,
     exec: async (s) => void (await pg.exec(s)),
+    transaction: (fn) => pg.transaction((tx) => fn({
+      query: async (s, p = []) => (await tx.query(s, p as never[])).rows as never,
+      exec: async (s) => void (await tx.exec(s)),
+    })),
   };
   await migrate(db);
   return db;

@@ -294,7 +294,7 @@ describe("settings", () => {
   test("a normal deployment can't start with a contract missing", () => {
     const r = Env.safeParse(base);
     expect(r.success).toBe(false);
-    expect(r.error?.issues.map((i) => i.path[0])).toEqual(["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"]);
+    expect(r.error?.issues.map((i) => i.path[0]).sort()).toEqual(["ROUTER", "ALARM_BOOK", "ADAPTER_4626", "PLAN_PAY_ADDRESS", "PLAN_TOKEN"].sort());
   });
 
   const contracts = { ROUTER: V, ALARM_BOOK: V, ADAPTER_4626: V };
@@ -329,6 +329,8 @@ describe("settings", () => {
     expect(Env.safeParse({ ...base, ALERTS_ONLY: "true", ROLE: "keeper,miner" }).success).toBe(false);
     expect(Env.safeParse({ ...base, ALERTS_ONLY: "true", ROLE: " , " }).success).toBe(false);
   });
+
+
 });
 
 describe("keeper sending", () => {

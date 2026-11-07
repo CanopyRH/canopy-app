@@ -165,3 +165,15 @@ Report a vulnerability privately through this repository's **Security** tab ("Re
 See [NOTICE](NOTICE) for third-party material.
 
 Canopy is software. It doesn't promise any outcome and doesn't cover losses.
+
+## Prepared expansion
+
+The SDK and local MCP tools return owner-reviewed unsigned transactions. The app adds LP discovery,
+reviewed stable payout choices and bounded underlying-position facts. The independent watcher kit is
+in `watcher-node/`; outside signers still require Timelock approval.
+
+New adapters/readers have no configured activation by default. BorrowGuard and CanopyArmPolicy are
+audit candidates, not live borrower or smart-account integrations. V4 is hookless-only preparation,
+without a production manager configuration. Stable routes remain empty until independently reviewed.
+Perp close planning and credit accounting are internal preparation, not live exchange execution or new fees.
+Read each component's README before integrating it. Existing owner exits remain available without these additions.

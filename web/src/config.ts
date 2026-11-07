@@ -1,4 +1,6 @@
 import type { Address } from "viem";
+import type { ReaderConfig } from "../../services/src/api/readerPresets";
+import type { ReviewedRoute } from "./stableExit";
 
 import { COPY } from "./copy/text";
 import deployment from "./deployment.json";
@@ -28,12 +30,18 @@ export interface Chain {
   // Reown project ID. It is public by design; with none set, the app offers browser wallets only.
   walletConnectProjectId: string | null;
   vaults: Vault[];
+  /** Disabled until repository-reviewed feed/path presets are provided. */
+  stableRoutes?: ReviewedRoute[];
+  /** LP scanning works with the manager alone; arming also needs a deployed, enabled adapter. */
+  lp?: { positionManager: Address; adapter: Address | null; alarms?: ReaderConfig[] };
 }
 
 /** Robinhood Chain defaults. mainnet.json holds its launch addresses. */
 const ROBINHOOD_DEFAULTS: Chain = {
   key: "robinhood",
   chainId: 4663,
+  lp: { positionManager: "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3", adapter: null },
+  stableRoutes: [],
   chainHex: "0x1237",
   chainName: "Robinhood Chain",
   rpcUrl: "https://rpc.mainnet.chain.robinhood.com",
@@ -61,6 +69,8 @@ const ROBINHOOD_DEFAULTS: Chain = {
 const BASE_DEFAULTS: Chain = {
   key: "base",
   chainId: 8453,
+  lp: { positionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1", adapter: null },
+  stableRoutes: [],
   chainHex: "0x2105",
   chainName: "Base",
   rpcUrl: "https://mainnet.base.org",

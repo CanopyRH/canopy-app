@@ -8,10 +8,12 @@ public issue for it. Include what you found, how to reproduce it, and what it af
 
 ## Scope
 
-- The contracts in `contracts/src`. v1 is deployed on Robinhood Chain (4663), with its source tagged `v1-deployed`;
-  addresses are in the README. v2 (this branch) is not deployed yet.
+- The contracts in `contracts/src`: v2 is live on Robinhood Chain (4663) at block 107737863.
+  v1 is retired, with its source tagged `v1-deployed`; deployment records are in `contracts/broadcast/`.
 - The services in `services/`: the keeper, indexer, detectors, watchers, API and Telegram bot.
 - The web app in `web/`.
+- The keyless SDK in `sdk/` and local MCP server in `mcp/`. They read the chain and prepare unsigned transactions;
+  they cannot sign or submit them. Their `tighten` check is a proposal-time check, not an on-chain permission policy.
 
 The deployed contracts can't be upgraded, so a contract bug is fixed by deploying new contracts that people choose to
 move to, never by changing the ones in use. v2 is that new deployment, live since 2026-11-06 at block 107737863: it closes the contract findings of the two

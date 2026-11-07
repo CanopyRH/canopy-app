@@ -2,6 +2,7 @@ import { encodeFunctionData, getAddress, isAddress, keccak256, maxUint256, parse
 import { Kind, type Detector } from "../../services/src/api/presets";
 import { TERMS } from "./copy/text";
 import sanctioned from "./sanctioned.json";
+import { RAW_PAYOUT, type Payout } from "./stableExit";
 
 /** Every transaction is built here, in the browser. The server never sees or supplies calldata. */
 
@@ -52,16 +53,15 @@ export function approveTx(vault: Address, router: Address): Tx {
 }
 
 /**
- * Vault positions are paid out as the vault pays them: the raw harbour, no slippage setting and no swap legs. The router
- * refuses legs on the raw harbour, so the list is always empty. The app does not offer the stablecoin harbour.
+ * Raw asset is the default. The app may supply repository-reviewed stablecoin legs after showing them to the owner.
  */
-export function armTx(router: Address, adapter: Address, vault: Address, keys: Hex[]): Tx {
+export function armTx(router: Address, adapter: Address, vault: Address, keys: Hex[], payout: Payout = RAW_PAYOUT): Tx {
   return {
     to: router,
     data: encodeFunctionData({
       abi: routerAbi,
       functionName: "arm",
-      args: [{ adapter, target: vault, tokenId: 0n, harbour: 0, maxSlipBps: 0, termsHash: termsHash(), keys, swaps: [] }],
+      args: [{ adapter, target: vault, tokenId: 0n, ...payout, termsHash: termsHash(), keys }],
     }),
   };
 }

@@ -1,3 +1,6 @@
+import { scanPool } from "./detectors/lp";
+import { Profiles } from "./watchnet/diversity";
+import { archiveEvidence } from "./watchnet/evidence";
 import { createPublicClient, createWalletClient, fallback, getAbiItem, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { webhookCallback } from "grammy";
@@ -32,6 +35,7 @@ import { acceptAttestation, ingestFeed, matchVaults, maybeAttest, quorumCall, re
 
 scrubConsole();
 const env = loadEnv(process.env);
+const profiles = env.WATCHER_PROFILE_FILE ? Profiles.parse(await Bun.file(env.WATCHER_PROFILE_FILE).json()) : undefined;
 const now = () => Math.floor(Date.now() / 1000);
 const transport = fallback([http(env.RPC_URL), http(env.RPC_URL_BACKUP)]);
 const client = createPublicClient({ transport, pollingInterval: 500 });
@@ -310,7 +314,7 @@ async function tryQuorum(key: Hex, evidence: Hex, deadline: bigint) {
   firing.add(key);
   try {
     await fence?.();
-    const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook);
+    const call = await quorumCall(db, { key, evidence, deadline }, env.QUORUM, alarmBook, profiles);
     if (!call) return;
     // Firing costs gas, so it's spent only on alarms in scope: a listed vault's preset, or one a position armed.
     if (!(await inScope(key, await r.detectorTarget(key)))) return;
@@ -360,7 +364,7 @@ if (run("keeper") && keeper) {
 
 /** Vaults people are in or follow that aren't on the app's supported list. Anyone can add to these. */
 const otherVaults = async () => {
-  const rows = await db.query<{ target: string }>(`SELECT DISTINCT target FROM positions UNION SELECT DISTINCT target FROM vault_follows`);
+  const rows = await db.query<{ target: string }>(`SELECT DISTINCT target FROM positions WHERE token_id = 0 UNION SELECT DISTINCT target FROM vault_follows`);
   return [...new Set(rows.map((x) => x.target.toLowerCase()))].filter((t) => !listed.includes(t));
 };
 
@@ -381,13 +385,21 @@ if (run("detector")) {
     }
   });
   // Listed vaults are scanned in a loop of their own: their signals feed the watchers, and anyone can follow any contract.
-  const scans = { client, repo: r, now, vaultName, withdrawInRobinhoodApp: onRobinhood, queue: (vault: string, text: string, tag: string) => enqueueAlert(r, vault, text, now(), tag) };
+  const scans = { client, repo: r, now, vaultName, withdrawInRobinhoodApp: onRobinhood, queue: (vault: string, text: string, tag: string) => bot ? enqueueAlert(r, vault, text, now(), tag) : Promise.resolve() };
   every(60_000, "scans", () => scanAll(scans, listed));
+  const pools = [...new Set(env.LP_POOLS.split(",").map(p=>p.trim()).filter(Boolean))];
+  if (pools.length) every(60_000, "LP reserves", async () => {
+    await fence?.();
+    for (const pool of pools) {
+      try { await withinMs(scanPool(client,db,r,pool as Address),SCAN_BUDGET_MS,"LP scan"); }
+      catch { console.warn("LP reserve scan unavailable",pool); }
+    }
+  });
   every(60_000, "scans followed", async () => scanAll(scans, await otherVaults()));
   // Done jobs, old alarms, signals, attestations, reports and vault readings only take space. Every operator runs a detector.
   every(3_600_000, "prune", () => r.prune(now()));
   // On a chain with no Canopy contracts the indexer role has nothing to do, so the scan's alerts go out from here.
-  if (!contracts) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
+  if (!contracts) if (bot) every(1_000, "alerts", () => sendQueuedAlerts(r, (vault, text) => notifyText(r, sendAlert, vault, text), now));
 }
 
 if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_KEY) {
@@ -417,6 +429,7 @@ if (run("watcher") && contracts && env.WATCHER_PRIVATE_KEY && env.ANTHROPIC_API_
         const soft = (await r.recentSignals(target, now() - 3600)) as Signal[];
         const a = await maybeAttest(account, alarmBook, env.CHAIN_ID, key, [...soft, feed], now());
         if (!a) continue;
+        if (env.WATCHER_EVIDENCE_DIR) await archiveEvidence(env.WATCHER_EVIDENCE_DIR, a, env.CHAIN_ID, alarmBook, [...soft, feed], now());
         await acceptAttestation(db, watchers, alarmBook, env.CHAIN_ID, a, now());
         const body = JSON.stringify({ ...a, deadline: a.deadline.toString() });
         await Promise.allSettled(peers.map((p) => fetch(`${p}/watcher/attest`, { method: "POST", body, signal: AbortSignal.timeout(5_000) })));

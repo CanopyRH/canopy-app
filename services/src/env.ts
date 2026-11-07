@@ -42,8 +42,11 @@ export const Env = z.object({
   QUORUM: z.coerce.number().default(2),
   WATCHER_PRIVATE_KEY: z.string().optional(),
   WATCHERS: z.string().default(""), // comma-separated approved watcher addresses
+  WATCHER_PROFILE_FILE: z.string().min(1).optional(), // locally reviewed operator/model/source identities; strict diversity when set
+  WATCHER_EVIDENCE_DIR: z.string().min(1).optional(), // archive a bundle before publishing each signature
   WATCHER_PEERS: z.string().default(""), // comma-separated peer API URLs for attestation gossip
   FEED_URLS: z.string().default(""), // comma-separated allowlisted public sources
+  LP_POOLS: z.string().default("").refine(v=>v===""||v.split(",").every(a=>/^0x[0-9a-fA-F]{40}$/.test(a.trim())), "Use comma-separated reviewed pool addresses"),
   CARD_VAULTS: z.string().default(""), // comma-separated vaults that always get a risk card
   ANTHROPIC_API_KEY: z.string().optional(), // classification only
   ANTHROPIC_BASE_URL: z.url().optional(), // a compatible service such as PPQ; off means Anthropic directly

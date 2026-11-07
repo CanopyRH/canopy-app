@@ -14,11 +14,13 @@ import { LINK_COPY } from "../copy/exitlink";
 import ExitPreview from "./ExitPreview";
 import { receiptLink } from "../receipt";
 import WalletsPanel from "./wallets/WalletsPanel";
+import type { Payout } from "../stableExit";
+import LpPanel from "./LpPanel";
 
 declare global { interface Window { ethereum?: Eip1193 } }
 
 type Row = Position & { state: { posId: Hex; armed: boolean } | null };
-type Screen = "overview" | "positions" | "plan";
+type Screen = "overview" | "positions" | "lp" | "plan";
 type Note = { text: string; error?: boolean; link?: string };
 
 /** Networks with no contracts are left out. With only one left, the header shows its name and no switch, as before Base. */
@@ -95,11 +97,16 @@ function Allocation({ rows }: { rows: Row[] }) {
 function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: { net: Net; row: Row; owner: Address; signer: Signer | null; busy: boolean; note: Note | null; onClose: () => void; act: (fn: () => Promise<Note>) => void }) {
   const [tab, setTab] = useState<"alarms" | "risk">("alarms");
   const [risk, setRisk] = useState<string | null | undefined>(undefined);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const [views, setViews] = useState<PresetView[] | null>(null);
   const [picked, setPicked] = useState<Hex[]>([]);
   const [accepted, setAccepted] = useState(false);
   const [gated, setGated] = useState(false);
+  const [payout, setPayout] = useState<Payout | null>(null);
+  const [stable, setStable] = useState(false);
   const [confirms, setConfirms] = useState<number | null>(null);
+
   const mine = net.live && signer !== null && same(signer.account, owner);
   useEffect(() => {
     // Counted for the alarms picked: one that still needs registering means separate steps, even in a wallet that can batch.
@@ -114,10 +121,12 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
     if (!mine) return;
     void net.presetViews(row.vault.address).then(setViews);
     void net.gatesBlock(row.vault.address, owner).then(setGated);
+    void net.payoutOptions(row.vault.address).then(setPayout).catch(() => setPayout(null));
   }, [net, mine, row.vault.address, owner]);
   const toggle = (key: Hex, on: boolean) => setPicked((p) => (on ? [...p, key] : p.filter((k) => k !== key)));
   const armIt = () => act(async () => {
-    await net.armOneConfirm(signer!, row.vault.address, picked);
+    await net.armOneConfirm(signer!, row.vault.address, picked, stable ? "stable" : "raw");
+
     onClose();
     return { text: COPY.armedDone };
   });
@@ -130,12 +139,21 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   return <Modal title={row.vault.name} eyebrow={`ERC-4626 · ${net.chain.chainName}`} onClose={onClose} wide>
     <div className="cd-position-dialog-summary"><div><span className="cd-asset-icon cd-asset-vault" aria-hidden="true"><Layers3 size={21} strokeWidth={1.5} /></span><div><strong>{usd(row.assets)} {row.vault.asset}</strong><span>Read from the chain just now</span></div></div><Status row={row} /></div>
     <div className="cd-dialog-tabs" role="tablist" aria-label="Position details">{([["alarms", COPY.alarmsTab], ["risk", COPY.riskTab]] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={tab === id ? "is-active" : ""}>{label}</button>)}</div>
-    {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3><a className="cd-button cd-button-light" href={`xray.html?vault=${row.vault.address.toLowerCase()}`} target="_blank" rel="noopener noreferrer">{COPY.shareXray}<ArrowUpRight size={15} /></a></div><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre></div>}
+    {tab === "risk" && <div className="cd-dialog-content"><div className="cd-risk-heading"><h3>What can change this position?</h3><a className="cd-button cd-button-light" href={`xray.html?vault=${row.vault.address.toLowerCase()}`} target="_blank" rel="noopener noreferrer">{COPY.shareXray}<ArrowUpRight size={15} /></a></div><pre className="cd-risk-text">{risk === undefined ? COPY.reading : risk ?? COPY.noRisk}</pre><button className="cd-button cd-button-light" disabled={explaining} onClick={async () => { setExplaining(true); try { const e=await net.explainPosition(row.vault.address); setExplanation(e.lines.join("\n\n")); } catch { setExplanation("Underlying position facts could not be read. Try again later."); } finally { setExplaining(false); } }}>{explaining ? "Reading underlying positions…" : "Explain underlying positions"}</button>{explanation && <pre className="cd-risk-text" role="status">{explanation}</pre>}</div>}
+
     {tab === "alarms" && <div className="cd-dialog-content">
       {!net.live && <p className="cd-inline-note"><CircleHelp size={15} />{COPY.notDeployed}</p>}
       {net.live && !mine && <p className="cd-inline-note"><Wallet size={15} />{COPY.connectToAct}</p>}
       {mine && gated && <p className="cd-inline-note"><TriangleAlert size={15} />{COPY.gateBlocked}</p>}
       {mine && !gated && <>
+        <div className="cd-payout-choice"><h3>When you exit</h3>
+          <label><input type="radio" name="payout" checked={!stable} onChange={() => setStable(false)} disabled={busy} /> Receive the vault's asset</label>
+          <label><input type="radio" name="payout" checked={stable} onChange={() => setStable(true)} disabled={busy || !payout} /> Receive {net.chain.planTokenSymbol}</label>
+          {!payout && <p className="cd-caption">Stable conversion needs a reviewed route for this asset.</p>}
+          {stable && payout && <div className="cd-route-review"><p>{payout.swaps.length ? "Review the swap legs before signing. The price limit is at most 1% below the oracle. If a swap cannot execute, you receive the raw token." : `This vault already pays ${net.chain.planTokenSymbol}. No swap is needed.`}</p>
+            {payout.swaps.map((leg) => <dl key={leg.token}><dt>Token</dt><dd>{leg.token}</dd><dt>Price feed</dt><dd>{leg.feed}</dd><dt>Maximum feed age</dt><dd>{leg.heartbeat} seconds</dd><dt>Route</dt><dd>{leg.path}</dd></dl>)}
+          </div>}
+        </div>
         <div className="cd-section-heading"><h3>{COPY.armTitle}</h3><span>{picked.length} selected</span></div>
         <p className="cd-caption">{COPY.armHelp}</p>
         <div className="cd-alarm-editor">{(views ?? []).map(({ preset, status }) => {
@@ -157,7 +175,7 @@ function PositionDialog({ net, row, owner, signer, busy, note, onClose, act }: {
   </Modal>;
 }
 
-const NAV = [{ id: "overview", label: "Overview", icon: LayoutGrid }, { id: "positions", label: "Positions", icon: Layers3 }, { id: "plan", label: "Plan and controls", short: "Plan", icon: CreditCard }] as const;
+const NAV = [{ id: "overview", label: "Overview", icon: LayoutGrid }, { id: "positions", label: "Positions", icon: Layers3 }, { id: "lp", label: "LP positions", icon: Waves }, { id: "plan", label: "Plan and controls", short: "Plan", icon: CreditCard }] as const;
 function Dock({ active, onNavigate }: { active: Screen; onNavigate: (s: Screen) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const items = () => ref.current?.querySelectorAll<HTMLElement>(".cd-dock-item") ?? [];
@@ -372,6 +390,7 @@ export default function App() {
         <WalletsPanel net={net} connected={signer?.account ?? null} onOpen={(a) => (setInput(a), void scan(a), scrollTo({ top: 0 }))} />
         <div className="cd-info-strip"><TriangleAlert size={19} /><div><strong>A plan is only as useful as its limits.</strong><p>A fully lent-out vault or a share gate can delay or stop an exit. Read each risk card before arming.</p></div></div>
       </>}
+      {screen === "lp" && <LpPanel key={chain.key} chain={chain} signer={signer} />}
       {screen === "plan" && <>
         <div className="cd-page-heading"><div><span className="cd-eyebrow">PLAN AND CONTROLS</span><h1>{COPY.planScreen}</h1><p>{COPY.planScreenHelp}</p></div></div>
         <div className="cd-settings-grid">

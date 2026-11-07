@@ -291,3 +291,11 @@ describe("confirmCount: what the alarm dialog says before arming", () => {
     expect(BATCH_COPY.confirms(3)).toBe("3 confirmations in your wallet");
   });
 });
+
+test("batch preserves the owner-reviewed stable harbour and slippage", async () => {
+  const payout = {harbour: 1 as const, maxSlipBps: 75, swaps: []};
+  const planned = (await armPlan(deps({payout}), V, KEYS))!;
+  expect(planned.at(-1)).toEqual(armTx(ROUTER, ADAPTER, V, KEYS, payout));
+  const decoded = decodeFunctionData({abi: routerAbi, data: planned.at(-1)!.data});
+  expect(decoded.args![0]).toMatchObject({harbour:1, maxSlipBps:75});
+});

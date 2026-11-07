@@ -1,3 +1,5 @@
+import { lookThrough } from "../../services/src/risk/lookthrough";
+import { explainExposure } from "../../services/src/copilot/explain";
 import { createPublicClient, http, maxUint256, parseAbi, type Address, type Hex } from "viem";
 import { autoExit, type Chain, type Vault } from "./config";
 import { exitBlocked, gateAbi, type Read } from "./gates";
@@ -6,6 +8,7 @@ import { keyOf, presetsFor, registrationOrder, type Preset } from "../../service
 import { notArmable, presetStatus, refusedPresets, type AlarmIo, type AlarmStatus } from "./alarms";
 import { armOneStep, batchSupport, confirmCount, needed } from "./batch";
 import { revertText } from "./errors";
+import { stablePayout, RAW_PAYOUT } from "./stableExit";
 import { COPY } from "./copy/text";
 import { alarmBookAbi, approveTx, armTx, disarmAllTx, exitTx, planTx, registerTx, routerAbi, type Tx } from "./tx";
 
@@ -13,6 +16,7 @@ const vaultAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function convertToAssets(uint256) view returns (uint256)",
   "function allowance(address,address) view returns (uint256)",
+  "function asset() view returns (address)",
 ]);
 
 const pausedAbi = parseAbi(["function paused() view returns (bool)"]);
@@ -101,7 +105,14 @@ function make(c: Chain) {
   }
 
   /** Registers any missing alarms, approves the shares if needed, then arms. Each step is its own wallet signature. */
-  async function arm(s: Signer, vault: Address, keys: Hex[]) {
+  async function payoutOptions(vault: Address) {
+    const asset = await client.readContract({ address: vault, abi: vaultAbi, functionName: "asset" });
+    return stablePayout(c, [asset]);
+  }
+
+  async function arm(s: Signer, vault: Address, keys: Hex[], payoutChoice: "raw" | "stable" = "raw") {
+    const payout = payoutChoice === "stable" ? await payoutOptions(vault) : RAW_PAYOUT;
+    if (!payout) throw new Error("No reviewed stablecoin route is available for this position.");
     const paused = await answersPaused(vault);
     const presets = presetsFor(vault, vault, { paused });
     // Read again at the moment of arming: the list on screen may be minutes old. Nothing is sent if any key is going off.
@@ -117,7 +128,7 @@ function make(c: Chain) {
     // The parts of a chosen preset are asked too: the router only asks about the keys it arms.
     const asked = [...new Set(presets.filter((p) => keys.includes(p.key)).flatMap((p) => [p.key, ...(p.requires ?? []).map((q) => q.key)]))];
     if ((await notArmable(armable, asked)).length > 0) throw new Error(COPY.armRefused);
-    const tx = armTx(c.router!, c.adapter!, vault, keys);
+    const tx = armTx(c.router!, c.adapter!, vault, keys, payout);
     // Run it once without sending, so a refusal reads in plain words and not as a wallet's raw error.
     await client.call({ account: s.account, to: tx.to, data: tx.data }).catch((e) => {
       const known = revertText(e);
@@ -150,18 +161,20 @@ function make(c: Chain) {
   }
 
   /** Arms in one wallet confirmation when the wallet supports it, and with arm()'s steps when it doesn't. */
-  const armOneConfirm = async (s: Signer, vault: Address, keys: Hex[]) => {
+  const armOneConfirm = async (s: Signer, vault: Address, keys: Hex[], payoutChoice: "raw" | "stable" = "raw") => {
+    const payout = payoutChoice === "stable" ? await payoutOptions(vault) : RAW_PAYOUT;
+    if (!payout) throw new Error("No reviewed stablecoin route is available for this position.");
     const paused = await answersPaused(vault);
     return armOneStep({
       provider: s.provider, account: s.account, network: c, onConfirm: s.onConfirm,
       plan: {
-        io: alarmIo, book: c.alarmBook!, router: c.router!, adapter: c.adapter!,
+        io: alarmIo, book: c.alarmBook!, router: c.router!, adapter: c.adapter!, payout,
         presets: presetsFor(vault, vault, { paused }), order: registrationOrder(vault, vault, { paused }),
         isRegistered: (key) => alarmIo.known!(key),
         armable: (key) => alarmIo.armable!(key),
         allowance: () => client.readContract({ address: vault, abi: vaultAbi, functionName: "allowance", args: [s.account, c.router!] }),
       },
-      stepwise: () => arm(s, vault, keys),
+      stepwise: () => arm(s, vault, keys, payoutChoice),
     }, vault, keys);
   };
 
@@ -170,7 +183,12 @@ function make(c: Chain) {
   /** A plan is paid in this network's plan token to this network's payments address, and covers only this network. */
   const payPlan = (s: Signer, amount: bigint) => send(s, planTx(c.planToken, c.planPayTo!, amount));
 
-  return { chain: c, client, live, alarmIo, scanWallet, riskCard, armState, presetViews, gatesBlock, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm, armConfirms };
+  const explainPosition = async (vault: Address) => {
+    if (await client.getChainId() !== c.chainId) throw new Error("Wrong RPC network");
+    const block = await client.getBlockNumber();
+    return { block, lines: explainExposure(await lookThrough(client, vault, block)) };
+  };
+  return { chain: c, client, live, alarmIo, scanWallet, riskCard, explainPosition, armState, presetViews, gatesBlock, payoutOptions, arm, exitNow, disarmAll, payPlan, canBatch, armOneConfirm, armConfirms };
 }
 
 export type Net = ReturnType<typeof make>;
