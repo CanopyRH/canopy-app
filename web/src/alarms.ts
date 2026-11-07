@@ -1,3 +1,5 @@
+import { drainReadiness, type DrainReference } from "../../services/src/risk/drain-reference";
+import { Kind } from "../../services/src/api/presets";
 import type { Hex } from "viem";
 import type { Preset } from "../../services/src/api/presets";
 
@@ -11,6 +13,7 @@ export const REFIRE_SECONDS = 86_400n;
 
 /** The chain reads the decision needs, so it can be tested without a chain. */
 export interface AlarmIo {
+  drainReference?: (key: Hex) => Promise<DrainReference>;
   /** AlarmBook.check(key): would a poke fire this key right now? */
   check: (key: Hex) => Promise<boolean>;
   /** The key's last firing time in seconds, from AlarmBook.state(key). Zero when it never fired. */
@@ -27,7 +30,7 @@ export interface AlarmIo {
 }
 
 /** clear: safe to offer. going-off: tripped now or fired in the last 24 hours. unreadable: Canopy could not tell. */
-export type AlarmStatus = "clear" | "going-off" | "unreadable";
+export type AlarmStatus = "clear" | "going-off" | "unreadable" | "warming-up" | "stale";
 
 export async function keyStatus(io: AlarmIo, key: Hex): Promise<AlarmStatus> {
   try {
@@ -56,7 +59,13 @@ export async function notArmable(armable: (key: Hex) => Promise<boolean>, keys: 
 export async function presetStatus(io: AlarmIo, preset: Preset): Promise<AlarmStatus> {
   const keys = [preset.key, ...(preset.requires ?? []).map((p) => p.key)];
   const all = await Promise.all(keys.map((k) => keyStatus(io, k)));
-  return all.includes("going-off") ? "going-off" : all.includes("unreadable") ? "unreadable" : "clear";
+  if(all.includes("going-off"))return "going-off";
+  if(all.includes("unreadable"))return "unreadable";
+  for(const p of [preset,...preset.requires??[]])if(p.detector.kind===Kind.DRAIN){
+    if(!io.drainReference)return "unreadable";
+    try{const status=drainReadiness(await io.drainReference(p.key),p.detector.window,await io.now());if(status!=="ready")return status;}catch{return "unreadable";}
+  }
+  return "clear";
 }
 
 /** The chosen presets that must not be armed, with the reason for each. */

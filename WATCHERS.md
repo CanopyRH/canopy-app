@@ -82,8 +82,7 @@ docker build -t canopy-services services
 
 ### 3. Fill in two env files
 
-Copy [deploy/watcher.env.example](deploy/watcher.env.example) to `watcher.env` and `chain.env` (the file explains
-which block goes where), then fill them in. The watcher process needs only these, and nothing else:
+Copy [deploy/watcher.env.example](deploy/watcher.env.example) to `watcher.env` and [deploy/services.env.example](deploy/services.env.example) to `chain.env`, then fill them in. Mount the reviewed approval file read-only into the signer container; its configured path must exist inside that container. The watcher process needs only these, and nothing else:
 
 | Setting | What to put |
 | --- | --- |
@@ -97,6 +96,8 @@ which block goes where), then fill them in. The watcher process needs only these
 | `WATCHERS` | The approved watcher addresses, yours included. Ask in your application for the current list |
 | `WATCHER_PEERS` | API addresses to post your signatures to, with no trailing slash. The API in `web/src/mainnet.json` is one |
 | `FEED_URLS` | The feed list from `deploy/services.env.example`. Use the same list as everyone else (see the note below) |
+| `WATCHER_APPROVAL_FILE` | Protected local JSON of manually reviewed report hashes, sources, chains and exact vault addresses. Unset or empty approvals disable feed signing; see [the hardening runbook](docs/operational-hardening.md) |
+| `WATCHER_REQUIRE_DIVERSITY` | Keep `true` for hosts submitting quorums; configure `WATCHER_PROFILE_FILE` with reviewed operator/model/source profiles |
 | `CARD_VAULTS` | The vault list from `deploy/services.env.example` |
 
 A watcher does **not** need Telegram settings, a public URL, a second RPC endpoint (`RPC_URL_BACKUP` follows
@@ -110,10 +111,7 @@ The `indexer` and `detector` processes have not been slimmed down. They take the
 `deploy/out/4663/deployment.json`, `START_BLOCK`, and a Telegram token and webhook secret. Use a throwaway token from
 BotFather (Telegram's bot-making bot) and any random 16-character secret. Nobody follows a vault in your database, so they never send a message.
 
-**Use the same feeds as the others.** Watchers sign a hash of the alarm key and of the reports behind it. If your feed
-list differs, your hash differs and your signature won't combine with theirs. Your model can differ, but a label that
-disagrees with the others will mean you don't sign when they do, or the other way round. That is how independent
-confirmation is meant to work.
+**Matching evidence is not independent verification.** Signatures combine when they bind the same alarm key and exact report hashes. Operators must independently review the source, chain and affected addresses before approving that evidence, using genuinely separate operators, model families and primary sources. Sharing an unverified feed/model pipeline across several keys is not independent confirmation. The local profile policy cannot prove the profile labels are true. The report approval tool and safe rollout steps are in [the operational hardening runbook](docs/operational-hardening.md).
 
 ### 4. Start the four containers
 
@@ -122,7 +120,7 @@ docker network create canopy-watcher
 docker run -d --name watcher-db --network canopy-watcher -e POSTGRES_PASSWORD=choose-one -v watcher-db:/var/lib/postgresql/data postgres:18.6
 docker run -d --name watcher-indexer  --network canopy-watcher --restart unless-stopped --env-file chain.env -e ROLE=indexer  canopy-services
 docker run -d --name watcher-detector --network canopy-watcher --restart unless-stopped --env-file chain.env -e ROLE=detector canopy-services
-docker run -d --name watcher-signer   --network canopy-watcher --restart unless-stopped --env-file watcher.env canopy-services
+docker run -d --name watcher-signer   --network canopy-watcher --restart unless-stopped --env-file watcher.env -v "$PWD/report-approvals.json:/run/canopy/report-approvals.json:ro" canopy-services
 ```
 
 Use the same database in both env files (the example uses the host name `watcher-db` on the Docker network). The

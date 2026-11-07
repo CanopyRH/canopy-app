@@ -100,10 +100,10 @@ describe("watcher", () => {
     expect(await ingestFeed(db, c, "u", "text", 2)).toBeNull();
     expect(calls).toBe(1);
   });
-  test("reports match vaults by name, and short names match nothing", () => {
+  test("report names alone never authorize a vault", () => {
     const v = [{ name: "Steakhouse USDC" }, { name: "Gauntlet USDC Prime" }];
-    expect(matchVaults("Steakhouse", v)).toEqual([v[0]!]);
-    expect(matchVaults("gauntlet", v)).toEqual([v[1]!]);
+    expect(matchVaults("Steakhouse", v)).toEqual([]);
+    expect(matchVaults("gauntlet", v)).toEqual([]);
     expect(matchVaults("x", v)).toEqual([]);
     expect(matchVaults("Unknown Protocol", v)).toEqual([]);
   });

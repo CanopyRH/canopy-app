@@ -114,4 +114,4 @@ export function verdict(p: Preview, asset: string): { text: string; tone: Tone }
 }
 
 export const liquidityText = (l: Liquidity) => (l === "full" ? PREVIEW.liquidityFull : l === "partial" ? PREVIEW.liquidityPartial : PREVIEW.liquidityNone);
-export const statusText = (s: AlarmStatus) => (s === "clear" ? PREVIEW.clear : s === "going-off" ? PREVIEW.goingOff : PREVIEW.unreadable);
+export const statusText = (s: AlarmStatus) => (s === "clear" ? PREVIEW.clear : s === "going-off" ? PREVIEW.goingOff : s === "warming-up" ? "Drain warming up" : s === "stale" ? "Drain reference stale" : PREVIEW.unreadable);

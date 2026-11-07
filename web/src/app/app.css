@@ -64,3 +64,5 @@ a.cd-brand{color:inherit;text-decoration:none}
 .cd-region-notice{display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;padding:10px 12px;border:1px solid rgba(120,120,128,.28);border-radius:10px;background:rgba(120,120,128,.08);font-size:13px;line-height:1.45}
 .cd-region-notice svg{flex:none;margin-top:2px;opacity:.7}
 .cd-region-notice p{margin:0}
+
+.cd-allowance-controls select{display:block;width:100%;max-width:100%;margin:8px 0;padding:10px;border:1px solid #d4d4d8;border-radius:10px;background:#ffffff88;color:inherit}.cd-allowance-controls .cd-caption{overflow-wrap:anywhere}.cd-allowance-controls .cd-terms{align-items:flex-start}.cd-allowance-controls .cd-button{margin-top:16px;white-space:normal}

@@ -43,6 +43,8 @@ export const Env = z.object({
   QUORUM: z.coerce.number().default(2),
   WATCHER_PRIVATE_KEY: z.string().optional(),
   WATCHERS: z.string().default(""), // comma-separated approved watcher addresses
+  WATCHER_APPROVAL_FILE: z.string().min(1).optional(), // trusted report attribution; absent means no feed attestations
+  WATCHER_REQUIRE_DIVERSITY: z.stringbool().default(true), // keeper policy only; not a contract rule
   WATCHER_PROFILE_FILE: z.string().min(1).optional(), // locally reviewed operator/model/source identities; strict diversity when set
   WATCHER_EVIDENCE_DIR: z.string().min(1).optional(), // archive a bundle before publishing each signature
   WATCHER_PEERS: z.string().default(""), // comma-separated peer API URLs for attestation gossip

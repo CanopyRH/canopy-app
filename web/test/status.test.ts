@@ -126,3 +126,5 @@ describe("status page rendering", () => {
     expect(html).not.toContain(`>${key}<`);
   });
 });
+
+test("missing watcher attribution or diversity cannot show an all-normal verdict",()=>{const s=good();for(const policy of [{reportAttributionConfigured:false,diversityRequired:true,profilesConfigured:true},{reportAttributionConfigured:true,diversityRequired:false,profilesConfigured:true},{reportAttributionConfigured:true,diversityRequired:true,profilesConfigured:false}])expect(verdict({...s,watchers:{...s.watchers,policy}},NOW)).toBe('warn');});

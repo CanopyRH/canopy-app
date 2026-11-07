@@ -100,7 +100,7 @@ export async function buildStatus(d: ApiDeps) {
       oldestQueuedSec: queue?.oldest ? Math.max(0, now - Number(queue.oldest)) : 0,
     },
     indexer: { lagBlocks, state: (lagBlocks === null ? "unknown" : lagBlocks <= maxLag ? "ok" : "behind") as IndexerState },
-    watchers: { approved: watchers.length, list: watchers },
+    watchers: { approved: watchers.length, list: watchers, policy:d.watcherPolicy??null },
     alarmChecks: { lastCheckedAt: checked?.at ? Number(checked.at) : null },
     history,
     alarmFirings: {

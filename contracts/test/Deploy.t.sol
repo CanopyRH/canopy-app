@@ -14,6 +14,25 @@ interface TestVm {
 
 contract ContractAdmin {}
 
+contract OwnersMock {
+    address[] internal owners;
+    uint256 internal threshold;
+
+    constructor(address a, address b, uint256 t) {
+        owners.push(a);
+        owners.push(b);
+        threshold = t;
+    }
+
+    function getOwners() external view returns (address[] memory) {
+        return owners;
+    }
+
+    function getThreshold() external view returns (uint256) {
+        return threshold;
+    }
+}
+
 contract DeployTest {
     TestVm internal constant vm = TestVm(address(uint160(uint256(keccak256("hevm cheat code")))));
     Deploy internal script;
@@ -150,6 +169,29 @@ contract DeployTest {
         c.allowEoaAdmin = true;
         vm.chainId(4663);
         vm.expectRevert(abi.encodeWithSelector(Deploy.AdminMustBeContract.selector, "guardian"));
+        script.validate(c);
+    }
+
+    function test_mainnetGovernanceGuards() public {
+        vm.chainId(4663);
+        Deploy.Config memory c = _cfg();
+        vm.expectRevert(Deploy.AdminDelayTooShort.selector);
+        script.deploy(c);
+        c.timelockDelay = 7 days;
+        c.proposer = address(new OwnersMock(address(11), address(12), 2));
+        c.guardian = address(new OwnersMock(address(21), address(22), 2));
+        script.validate(c);
+        c.guardian = address(new OwnersMock(address(11), address(22), 2));
+        vm.expectRevert(Deploy.SharedAdminOwners.selector);
+        script.validate(c);
+        c.guardian = address(new OwnersMock(address(21), address(22), 1));
+        vm.expectRevert(Deploy.BadAdminThreshold.selector);
+        script.validate(c);
+        c.guardian = address(new OwnersMock(address(21), address(21), 2));
+        vm.expectRevert(Deploy.BadAdminThreshold.selector);
+        script.validate(c);
+        c.guardian = address(new OwnersMock(address(0), address(22), 2));
+        vm.expectRevert(Deploy.BadAdminThreshold.selector);
         script.validate(c);
     }
 

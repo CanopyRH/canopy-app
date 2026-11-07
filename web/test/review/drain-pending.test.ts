@@ -74,6 +74,7 @@ afterAll(() => anvil?.kill());
 
 /** What the app reads before it offers a preset, without the contract's own answer (the reviewed code). */
 const plainIo: AlarmIo = {
+  drainReference: async key => {const s=await client.readContract({address:book,abi:alarmBookAbi,functionName:"state",args:[key]});return {snapAt:BigInt(s[2]),snap:BigInt(s[4]),prevSnap:BigInt(s[7])};},
   check: (key) => client.readContract({ address: book, abi: alarmBookAbi, functionName: "check", args: [key] }),
   firedAt: (key) => client.readContract({ address: book, abi: alarmBookAbi, functionName: "state", args: [key] }).then((s) => BigInt(s[1])),
   now: () => client.getBlock().then((b) => b.timestamp),
@@ -95,8 +96,8 @@ describe.skipIf(!ready)("V3-S05: a pending DRAIN drop blocks the preset that dep
     for (const d of registrationOrder(vault, vault).filter((d) => needed.has(keyOf(d)))) {
       await send(book, encodeFunctionData({ abi: bookAbi, functionName: "register", args: [d] }));
     }
-    // Before any drop, the preset is clear.
-    expect(await presetStatus(io, drainBoth)).toBe("clear");
+    // Cold references must not be offered as ready.
+    expect(await presetStatus(io, drainBoth)).toBe("warming-up");
 
     // The keeper samples once a period. A DRAIN reference is live after two rolls (it trips below the lower of the last
     // two period lows), so sample two periods. Then 40% of the vault's assets leave.
@@ -104,6 +105,7 @@ describe.skipIf(!ready)("V3-S05: a pending DRAIN drop blocks the preset that dep
     await send(book, encodeFunctionData({ abi: bookAbi, functionName: "checkpoint", args: [drain.key] }));
     await warp(1_801);
     await send(book, encodeFunctionData({ abi: bookAbi, functionName: "checkpoint", args: [drain.key] }));
+    expect(await presetStatus(io, drainBoth)).toBe("clear");
     await send(vault, encodeFunctionData({ abi: mockAbi, functionName: "setPrice", args: [600_000n] }));
     // A poke sees the drop and records it: Pending, not fired.
     await send(book, encodeFunctionData({ abi: bookAbi, functionName: "poke", args: [drain.key] }));

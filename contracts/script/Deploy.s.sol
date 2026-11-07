@@ -7,6 +7,11 @@ import {ERC4626Adapter} from "../src/adapters/ERC4626Adapter.sol";
 import {Timelock} from "../src/Timelock.sol";
 import {IAggregatorV3, IERC20} from "../src/interfaces/IExternal.sol";
 
+interface AdminOwners {
+    function getOwners() external view returns (address[] memory);
+    function getThreshold() external view returns (uint256);
+}
+
 interface DeployVm {
     function envAddress(string calldata) external view returns (address);
     function envAddress(string calldata, string calldata) external view returns (address[] memory);
@@ -24,7 +29,7 @@ interface DeployVm {
 /// (env WATCHERS, a comma-separated list) are active from deployment, and the ERC-4626 adapter is allowed in the
 /// router's constructor. The adapter is deployed first, pointing at the router's address predicted from the deployer's
 /// nonce, and `check` proves the prediction and every other wiring fact.
-/// TIMELOCK_DELAY defaults to 0, so admin changes take effect as soon as the multisig signs them.
+/// TIMELOCK_DELAY defaults to seven days; mainnet requires at least seven days and disjoint admin/guardian owners.
 contract Deploy {
     DeployVm internal constant vm = DeployVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
@@ -68,6 +73,9 @@ contract Deploy {
     error BadStable();
     error BadFeed();
     error BadHeartbeat();
+    error AdminDelayTooShort();
+    error SharedAdminOwners();
+    error BadAdminThreshold();
     error BadWatchers();
     error WiringFailed(string what);
 
@@ -81,7 +89,7 @@ contract Deploy {
             guardian: vm.envAddress("GUARDIAN_MULTISIG"),
             heartbeat: uint32(vm.envUint("STABLE_FEED_HEARTBEAT")),
             adminExpiry: vm.envUint("ADMIN_EXPIRY"),
-            timelockDelay: vm.envOr("TIMELOCK_DELAY", uint256(0)),
+            timelockDelay: vm.envOr("TIMELOCK_DELAY", uint256(7 days)),
             allowEoaAdmin: vm.envOr("ALLOW_EOA_ADMIN", false),
             watchers: vm.envAddress("WATCHERS", ",")
         });
@@ -100,6 +108,30 @@ contract Deploy {
         bool strict = isMainnet() || !c.allowEoaAdmin;
         if (strict && c.proposer.code.length == 0) revert AdminMustBeContract("proposer");
         if (strict && c.guardian.code.length == 0) revert AdminMustBeContract("guardian");
+
+        if (isMainnet()) {
+            if (c.timelockDelay < 7 days) revert AdminDelayTooShort();
+            address[] memory a = AdminOwners(c.proposer).getOwners();
+            address[] memory g = AdminOwners(c.guardian).getOwners();
+            uint256 at = AdminOwners(c.proposer).getThreshold();
+            uint256 gt = AdminOwners(c.guardian).getThreshold();
+            if (a.length > 32 || g.length > 32 || at < 2 || gt < 2 || at > a.length || gt > g.length) revert BadAdminThreshold();
+            for (uint256 i; i < a.length; ++i) {
+                if (a[i] == address(0)) revert BadAdminThreshold();
+                for (uint256 j; j < i; ++j) {
+                    if (a[i] == a[j]) revert BadAdminThreshold();
+                }
+                for (uint256 j; j < g.length; ++j) {
+                    if (a[i] == g[j]) revert SharedAdminOwners();
+                }
+            }
+            for (uint256 i; i < g.length; ++i) {
+                if (g[i] == address(0)) revert BadAdminThreshold();
+                for (uint256 j; j < i; ++j) {
+                    if (g[i] == g[j]) revert BadAdminThreshold();
+                }
+            }
+        }
 
         if (c.stable.code.length == 0) revert NoCode("stable");
         if (c.weth.code.length == 0) revert NoCode("weth");
@@ -143,6 +175,7 @@ contract Deploy {
     /// @dev Four creations in a row from one account: Timelock, AlarmBook, the adapter (pointing at the router's predicted
     /// address), then the router, which allows the adapter in its constructor.
     function deploy(Config memory c) public returns (Deployed memory d) {
+        validate(c);
         address from = deployer();
         uint256 nonce = vm.getNonce(from);
         address predictedRouter = vm.computeCreateAddress(from, nonce + 3);
@@ -168,7 +201,9 @@ contract Deploy {
     }
 
     function check(Config memory c, Deployed memory d) public view {
-        if (d.timelock.PROPOSER() != c.proposer || d.timelock.DELAY() != c.timelockDelay) revert WiringFailed("timelock");
+        if (d.timelock.PROPOSER() != c.proposer || d.timelock.DELAY() != c.timelockDelay) {
+            revert WiringFailed("timelock");
+        }
         if (d.book.ADMIN() != address(d.timelock)) revert WiringFailed("book admin");
         if (d.router.ADMIN() != address(d.timelock)) revert WiringFailed("router admin");
         if (d.router.guardian() != c.guardian) revert WiringFailed("guardian");
@@ -195,7 +230,9 @@ contract Deploy {
         for (uint256 i; i < c.watchers.length; ++i) {
             address w = c.watchers[i];
             if (!d.book.isWatcher(w)) revert WiringFailed("watcher not active");
-            if (d.book.watcherUntil(w) != block.timestamp + d.book.MAX_WATCHER_TERM()) revert WiringFailed("watcher term");
+            if (d.book.watcherUntil(w) != block.timestamp + d.book.MAX_WATCHER_TERM()) {
+                revert WiringFailed("watcher term");
+            }
         }
     }
 }

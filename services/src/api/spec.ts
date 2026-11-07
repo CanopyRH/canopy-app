@@ -53,7 +53,7 @@ const disarmCalldataSchema = z.object({ chainId: z.number().int(), calls: z.arra
 const refusedSchema = z.object({
   error: z.string(),
   code: z.literal("keys_refused"),
-  keys: z.array(z.object({ key: bytes32Schema, reason: z.enum(["not_registered", "not_armable", "unreadable"]) })),
+  keys: z.array(z.object({ key: bytes32Schema, reason: z.enum(["not_registered", "not_armable", "unreadable", "warming-up", "stale"]) })),
 });
 
 type Param = { description: string; schema: z.ZodType; example?: string };
@@ -76,6 +76,19 @@ const vaultParam: Param = { description: "The vault's contract address.", schema
 const noContracts = { status: 503, description: "This deployment runs alerts only and has no Canopy contracts.", schema: errorSchema };
 
 export const ROUTES: RouteDef[] = [
+  {
+    method:"get",path:"/research",tag:"Reads",rateLimited:true,summary:"List ten Canopy research tools",
+    description:"Six bounded live readers and four private, local analysis tools. No signing or execution.",
+    ok:{contentType:"application/json",schema:z.object({version:z.literal(1),features:z.array(z.object({id:z.string(),title:z.string(),mode:z.enum(["live","local"]),summary:z.string()}))}),description:"Research tool catalog."},
+  },
+  {
+    method:"get",path:"/research/:feature",tag:"Reads",rateLimited:true,summary:"Read a bounded research report",
+    description:"oracles, controls, concentration and liquidity require a listed vault. liquidity optionally accepts owner. perps accepts owner and account together or neither. funding accepts no parameters. Duplicate and unrelated parameters are rejected. Two concurrent readers; public results cached ten seconds, owner reads never cached. No wallet lists are stored.",
+    params:{feature:{description:"A live research feature.",schema:z.enum(["oracles","controls","concentration","liquidity","perps","funding"])}},
+    query:{vault:{description:"Listed vault for chain reports.",schema:addressSchema},owner:{description:"Optional owner for liquidity or perps.",schema:addressSchema},account:{description:"RH Lighter account index; requires owner.",schema:z.string().regex(/^\d{1,15}$/)}},
+    ok:{contentType:"application/json",schema:z.object({version:z.literal(1),feature:z.string(),chainId:z.number().int(),observedAt:z.record(z.string(),z.unknown()),data:z.record(z.string(),z.unknown()),limitations:z.array(z.string())}),description:"Observed facts, provenance and explicit limitations. Integer amounts are decimal strings."},
+    errors:[{status:400,description:"Invalid query.",schema:errorSchema},{status:404,description:"Unknown or local-only feature.",schema:errorSchema},{status:502,description:"Source unavailable, wrong chain, stale head, reorganization or unlisted vault.",schema:errorSchema},{status:503,description:"Reads are busy or not configured.",schema:errorSchema}],
+  },
   {
     method: "get", path: "/vaults", tag: "Reads", rateLimited: true,
     summary: "The vaults Canopy lists",

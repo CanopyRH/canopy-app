@@ -12,6 +12,8 @@ export const RULES = [
 ];
 
 export const ROUTES = [
+  {path:"/research",note:"Catalog of ten Research tools; four verify or calculate locally."},
+  {path:"/research/{feature}",note:"Six bounded public-source readers: oracles, controls, concentration, liquidity, perps and funding. See the Research field guide for inputs and limits."},
   {path: '/vaults', note: 'The vaults Canopy lists.'},
   {path: '/risk/{vault}', note: 'A vault\'s risk card, in plain words.'},
   {path: '/presets/{vault}', note: 'The alarm presets for a vault, with their keys.'},

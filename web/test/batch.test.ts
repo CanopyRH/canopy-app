@@ -23,6 +23,7 @@ const clear = (tripped: Hex[] = [], fired: Record<Hex, bigint> = {}): AlarmIo =>
   check: async (k) => tripped.includes(k),
   firedAt: async (k) => fired[k] ?? 0n,
   now: async () => NOW,
+  drainReference: async () => ({snapAt: NOW, snap: 100n, prevSnap: 100n}),
 });
 /** By default every alarm is registered and the contract calls every key armable: the only case that batches. */
 const deps = (o: Partial<PlanDeps> = {}): PlanDeps => ({

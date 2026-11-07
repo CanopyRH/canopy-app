@@ -1,9 +1,3 @@
-// A listed vault's "Exploit confirmed" alarm, signed by both watchers with no exploit on that vault. It took two parts:
-// - the on-chain half: capital parked in the vault for over half an hour, then withdrawn, read as a 37% drain against
-//   the hour's median, which the parked capital set;
-// - the report half: any report labelled about "Morpho" matched every vault, because every launch vault runs on Morpho.
-// Now the drain is measured against the lower of the hour's median and the day before it, and a report has to name the
-// vault, its curator or (for a depeg) its asset. A real drain named in a report is still signed.
 // Real code throughout: scanVault, matchVaults, feedSignal, maybeAttest, acceptAttestation.
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Address, Hex } from "viem";
@@ -60,7 +54,7 @@ async function scan(minutes: number, at: (minute: number) => bigint = () => tota
 }
 
 /** Runs a report through both watchers the way the feed loop does, and returns whether the alarm is ready to fire. */
-async function bothWatchers(report: Classification) {
+async function bothWatchers(report: Classification, approved = false) {
   const keys = await db.query<{ key: Hex; target: Hex; name: string; curator: string; asset: string }>(
     `SELECT d.key, d.target, COALESCE(c.numbers->>'name', '') AS name, COALESCE(c.numbers->>'curator', '') AS curator, COALESCE(c.numbers->>'assetSymbol', '') AS asset
      FROM detectors d LEFT JOIN risk_cards c ON c.target=d.target WHERE d.kind=5`);
@@ -68,7 +62,7 @@ async function bothWatchers(report: Classification) {
   const scoped = [];
   for (const k of keys) if (await inScope(k.key, k.target)) scoped.push(k);
   const soft = (await r.recentSignals(v, now - 3600)) as Signal[];
-  for (const { key, target } of matchVaults(report.protocol, scoped, report.label)) {
+  for (const { key, target } of matchVaults(report.protocol, scoped, report.label, approved ? {chainId:4663,hash:"a".repeat(64),sourceUrl:"https://reports.example/item",now,approvals:{version:1,reports:[{chainId:4663,sha256:"a".repeat(64),sourceUrl:"https://reports.example/item",targets:[v],reviewedAt:now-1,expiresAt:now+100}]}} : undefined)) {
     for (const w of [wA, wB]) {
       const feed = feedSignal(report, target, now, "report-hash")!;
       const a = await maybeAttest(w, BOOK, 4663, key, [...soft, feed], now);
@@ -95,16 +89,16 @@ describe("a staged exploit confirmation", () => {
     expect(await bothWatchers({ label: "EXPLOIT_CONFIRMED", protocol: "Morpho Blue", confidence: 0.9 })).toEqual([]);
   });
 
-  test("a real drain named in a report is still signed by both watchers", async () => {
+  test("a real drain with reviewed report attribution is still signed by both watchers", async () => {
     await scan(180);
     await scan(2, (m) => (m === 0 ? 10n * M : 5n * M));
-    expect(await bothWatchers({ label: "EXPLOIT_CONFIRMED", protocol: "Steakhouse", confidence: 0.9 })).toEqual([quorum.key]);
+    expect(await bothWatchers({ label: "EXPLOIT_CONFIRMED", protocol: "Steakhouse", confidence: 0.9 }, true)).toEqual([quorum.key]);
   });
 
-  test("a report may name the curator's address, or for a depeg the vault's asset", async () => {
+  test("curator addresses and depeg asset names cannot authorize exploit signatures", async () => {
     const vaults = [{ name: "Steakhouse USDG", target: v, curator: CURATOR, asset: "USDG" }, { name: "Gauntlet USDC", target: "0x" + "d".repeat(40), curator: "", asset: "USDC" }];
-    expect(matchVaults(`curator ${CURATOR}`, vaults, "EXPLOIT_CONFIRMED").map((x) => x.name)).toEqual(["Steakhouse USDG"]);
-    expect(matchVaults("USDG", vaults, "DEPEG_REPORT").map((x) => x.name)).toEqual(["Steakhouse USDG"]);
+    expect(matchVaults(`curator ${CURATOR}`, vaults, "EXPLOIT_CONFIRMED").map((x) => x.name)).toEqual([]);
+    expect(matchVaults("USDG", vaults, "DEPEG_REPORT").map((x) => x.name)).toEqual([]);
     expect(matchVaults("USDG", vaults, "EXPLOIT_CONFIRMED")).toEqual([]);
     expect(matchVaults("Morpho", vaults, "DEPEG_REPORT")).toEqual([]);
   });

@@ -682,16 +682,16 @@ describe("watcher resilience", () => {
     for (const p of ["USDC", "USD", "eth", "the", "Prime", ""]) expect(names(p)).toEqual([]);
   });
 
-  test("real ways of naming a protocol still match", () => {
-    expect(names("Spark Protocol")).toEqual(["Spark USDC"]);
-    expect(names("SparkLend")).toEqual(["Spark USDC"]);
-    expect(names("Steakhouse Financial")).toEqual(["Steakhouse USDC"]);
-    expect(names("Gauntlet USDC Prime")).toEqual(["Gauntlet USDC Prime"]);
+  test("brand names without reviewed chain and target attribution are refused", () => {
+    expect(names("Spark Protocol")).toEqual([]);
+    expect(names("SparkLend")).toEqual([]);
+    expect(names("Steakhouse Financial")).toEqual([]);
+    expect(names("Gauntlet USDC Prime")).toEqual([]);
   });
 
-  test("a report that only names the platform concerns no vault: it has to name the vault, curator or asset", () => {
+  test("platform and brand text cannot grant attribution", () => {
     expect(names("Morpho Blue")).toEqual([]);
-    expect(names("Morpho Steakhouse")).toEqual(["Steakhouse USDC"]);
+    expect(names("Morpho Steakhouse")).toEqual([]);
   });
 
   test("a high-s signature copy is refused, so it can't shut out the real one", () => {

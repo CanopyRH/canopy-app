@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "release": "Canopy Research: ten new product features",
+  "checkedAtUTC": "2026-11-07T02:52:22.594330+00:00",
+  "tests": {
+    "services": {
+      "passed": 696,
+      "skipped": 3,
+      "failed": 0,
+      "typecheck": "passed"
+    },
+    "web": {
+      "passed": 288,
+      "skipped": 0,
+      "failed": 0,
+      "typecheck": "passed"
+    },
+    "sdk": {
+      "passed": 14,
+      "skipped": 0,
+      "failed": 0,
+      "typecheck": "passed"
+    },
+    "mcp": {
+      "passed": 6,
+      "skipped": 0,
+      "failed": 0,
+      "typecheck": "passed"
+    }
+  },
+  "totalPassed": 1004,
+  "typechecks": "services, web, sdk and mcp passed",
+  "builds": {
+    "staticWeb": "passed",
+    "sdk": "passed; built bundle imported in Node"
+  },
+  "liveSmoke": {
+    "network": "Robinhood Chain 4663 and RH Lighter public sources",
+    "oracles": "passed",
+    "controls": "passed",
+    "concentration": "passed",
+    "liquidity": "passed",
+    "perps": "passed",
+    "funding": "passed",
+    "ownerPositions": "unit-tested with account ownership checks; no private owner data used for live smoke"
+  },
+  "browser": {
+    "desktop": "1440 x 1100",
+    "mobile": "390 x 844; no horizontal document overflow",
+    "allTenWorkflows": "passed",
+    "apiUnavailable": "explicit error passed",
+    "heartbeatReplay": "rejected",
+    "calendarDownload": "passed",
+    "fileComparison": "passed",
+    "monitorStartStop": "passed",
+    "pageErrors": 0,
+    "sourceData": "Actual public smoke reports replayed through the browser API route; public sources were exercised separately."
+  },
+  "media": {
+    "count": 10,
+    "resolution": "1920 x 1080",
+    "fps": 60,
+    "totalSeconds": 377,
+    "fullDecode": "all passed",
+    "captions": "English embedded and SRT",
+    "visualQA": "All 30 product scenes inspected",
+    "sound": "Original dubstep synthesis with local narration",
+    "integratedLUFSRange": [
+      -16.2,
+      -16.1
+    ],
+    "truePeakMaxDBFS": -1.4
+  },
+  "privacy": {
+    "identity": "canopy-dev <dev@canopy.invalid>",
+    "publication": "Existing developer mirror handoff; no personal-account push",
+    "sourceScan": "Exact allowlist export and gitleaks",
+    "staticAndMediaScan": "gitleaks and local identity scan passed"
+  },
+  "deployment": {
+    "status": "prepared, not deployed by this release task",
+    "contractChanges": false,
+    "transactionsSent": 0,
+    "publicCommitLinks": "Pending mirror; exact local feature commits supplied in the handoff",
+    "postsSent": 0
+  }
+}

@@ -10,6 +10,7 @@ import { acceptAttestation } from "../watcher/watcher";
 import { PLUGINS, type Plugin } from "../plugins";
 import { sameSecret } from "./secret";
 import type { CalldataChain } from "./calldata";
+import type { ResearchProvider } from "../observatory";
 import { DEFAULT_RATE_LIMIT, bucketOf, clientIp, rateLimit, type RateLimit } from "./ratelimit";
 
 const AttestBody = z.strictObject({
@@ -25,12 +26,14 @@ const MAX_BODY = 64 * 1024;
 export const ALARMS_PAGE = 1_000;
 
 export interface ApiDeps {
+  research?: ResearchProvider;
   db: Db;
   repo: Repo;
   vaults: () => Promise<{ address: Address; name: string; chainId: number; asset: string }[]>;
   /** Alarms of the last day, newest first, a page at a time. */
   liveAlarms: (page: { limit: number; before?: { firedAt: number; key: string } }) => Promise<{ key: string; fired_at: number }[]>;
   watchers: Address[];
+  watcherPolicy?: {reportAttributionConfigured:boolean;diversityRequired:boolean;profilesConfigured:boolean};
   alarmBook: Address;
   chainId: number;
   now: () => number;
